@@ -2,32 +2,204 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
-}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
-  }
+:root {
+  /* Base surfaces */
+  --bg:              #09090B;
+  --surface-1:       #0F0F12;
+  --surface-2:       #16161A;
+  --surface-3:       #1C1C22;
+
+  /* Borders */
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-strong:   rgba(255, 255, 255, 0.14);
+
+  /* Text */
+  --text-primary:    #F4F4F5;
+  --text-secondary:  #A1A1AA;
+  --text-muted:      #52525B;
+
+  /* Accent — electric indigo */
+  --accent:          #6366F1;
+  --accent-hover:    #4F46E5;
+  --accent-bg:       rgba(99, 102, 241, 0.12);
+  --accent-border:   rgba(99, 102, 241, 0.3);
+  --accent-text:     #A5B4FC;
+
+  /* Semantic */
+  --success:         #22C55E;
+  --success-bg:      rgba(34, 197, 94, 0.1);
+  --warning:         #F59E0B;
+  --warning-bg:      rgba(245, 158, 11, 0.1);
+  --danger:          #EF4444;
+  --danger-bg:       rgba(239, 68, 68, 0.1);
+
+  /* Competitor status colors */
+  --status-active:      #22C55E;
+  --status-monitoring:  #F59E0B;
+  --status-archived:    #71717A;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, sans-serif;
+  --font-display: 'DM Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius:    8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* Typography scale */
+.text-display {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+h3 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.text-base {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.text-sm {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.text-xs {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.text-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* TipTap Editor Styles */
+.ProseMirror {
+  outline: none;
+  min-height: 250px;
+}
+.ProseMirror p {
+  margin-bottom: 1em;
+  line-height: 1.6;
+  font-size: 14px;
+}
+.ProseMirror h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  color: var(--text-primary);
+}
+.ProseMirror h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 1.2em;
+  margin-bottom: 0.4em;
+  color: var(--text-primary);
+}
+.ProseMirror h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.3em;
+  color: var(--accent-text);
+}
+.ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+.ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+.ProseMirror li {
+  margin-bottom: 0.25rem;
+}
+.ProseMirror blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1rem;
+  font-style: italic;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+.ProseMirror hr {
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}
+.ProseMirror a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Glassmorphism styling helpers */
+.glass-panel {
+  background: rgba(22, 22, 26, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+}
+
+/* Micro-animations */
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
   }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.97);
+  }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 2s infinite ease-in-out;
 }

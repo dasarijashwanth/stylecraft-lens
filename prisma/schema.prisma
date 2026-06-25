@@ -1,0 +1,190 @@
+// schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users & Orgs ────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  clerkId       String    @unique
+  email         String    @unique
+  name          String?
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  orgId         String?
+  org           Org?      @relation(fields: [orgId], references: [id])
+  role          UserRole  @default(MEMBER)
+  projects      Project[]
+  analyses      Analysis[]
+}
+
+model Org {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  plan        Plan      @default(FREE)
+  createdAt   DateTime  @default(now())
+  users       User[]
+  competitors Competitor[]
+  projects    Project[]
+  analyses    Analysis[]
+  reports     Report[]
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum Plan {
+  FREE
+  PRO
+  AGENCY
+  ENTERPRISE
+}
+
+// ─── Competitors ─────────────────────────────────────────────────
+
+model Competitor {
+  id          String           @id @default(cuid())
+  orgId       String
+  org         Org              @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name        String
+  website     String?
+  description String?
+  status      CompetitorStatus @default(ACTIVE)
+  tags        String[]
+  logoUrl     String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  analyses    CompetitorAnalysis[]
+  notes       Note[]
+  projects    ProjectCompetitor[]
+}
+
+enum CompetitorStatus {
+  ACTIVE
+  MONITORING
+  ARCHIVED
+}
+
+// ─── Projects ────────────────────────────────────────────────────
+
+model Project {
+  id           String    @id @default(cuid())
+  orgId        String
+  org          Org       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  name         String
+  industry     String
+  targetMarket String
+  productName  String
+  description  String
+  category     String?
+  companyContext String?
+  motorTech    String?
+  keyDiff      String?
+  pricePoint   String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  analyses     Analysis[]
+  competitors  ProjectCompetitor[]
+  reports      Report[]
+}
+
+model ProjectCompetitor {
+  projectId    String
+  competitorId String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  @@id([projectId, competitorId])
+}
+
+// ─── Analyses ────────────────────────────────────────────────────
+
+model Analysis {
+  id          String         @id @default(cuid())
+  orgId       String
+  org         Org            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  projectId   String?
+  project     Project?       @relation(fields: [projectId], references: [id])
+  status      AnalysisStatus @default(PENDING)
+  phase       Int            @default(0)
+  phase1Result Json?
+  phase2Result Json?
+  phase3Result Json?
+  errorMessage String?
+  durationMs  Int?
+  createdAt   DateTime       @default(now())
+  completedAt DateTime?
+  competitors CompetitorAnalysis[]
+}
+
+enum AnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+model CompetitorAnalysis {
+  id              String     @id @default(cuid())
+  analysisId      String
+  analysis        Analysis   @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  competitorId    String?
+  competitor      Competitor? @relation(fields: [competitorId], references: [id])
+  name            String
+  tier            String
+  threatScore     Int
+  category        String
+  tags            String[]
+  insight         String?
+  pricePoint      String?
+  standoutFeature String?
+}
+
+// ─── Reports ─────────────────────────────────────────────────────
+
+model Report {
+  id          String       @id @default(cuid())
+  orgId       String
+  org         Org          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?     @relation(fields: [projectId], references: [id])
+  title       String
+  content     Json
+  status      ReportStatus @default(DRAFT)
+  fileUrl     String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+enum ReportStatus {
+  DRAFT
+  IN_REVIEW
+  READY
+  EXPORTED
+}
+
+// ─── Notes ───────────────────────────────────────────────────────
+
+model Note {
+  id           String     @id @default(cuid())
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  content      String
+  createdAt    DateTime   @default(now())
+}
