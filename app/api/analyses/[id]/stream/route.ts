@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
 import { analysisEvents } from "@/lib/analysisEngine";
@@ -40,21 +39,35 @@ export async function GET(
 
       // If it is already finished, stream past completion events immediately and close
       if (currentAnalysis.status === "COMPLETE") {
+        const p1 = currentAnalysis.phase1Result || {};
+        const p2 = currentAnalysis.phase2Result || {};
+        const p3 = currentAnalysis.phase3Result || {};
+        const searches = (p1.web_searches_performed || 0) + (p2.web_searches_performed || 0) + (p3.web_searches_performed || 0);
+
         if (currentAnalysis.phase1Result) {
-          sendEvent({ type: "phase_complete", phase: 1, result: currentAnalysis.phase1Result });
+          sendEvent({ type: "phase_complete", phase: 1, result: p1, total_searches: searches });
         }
         if (currentAnalysis.phase2Result) {
-          sendEvent({ type: "phase_complete", phase: 2, result: currentAnalysis.phase2Result });
+          sendEvent({ type: "phase_complete", phase: 2, result: p2, total_searches: searches });
         }
         if (currentAnalysis.phase3Result) {
-          sendEvent({ type: "phase_complete", phase: 3, result: currentAnalysis.phase3Result });
+          sendEvent({ type: "phase_complete", phase: 3, result: p3, total_searches: searches });
         }
+        
         sendEvent({
           type: "analysis_complete",
-          phase: 4,
-          message: "Analysis already completed",
-          result: { duration: currentAnalysis.durationMs || 0, analysisId }
+          phase: 3,
+          label: "Synthesizing market analysis & strategic recommendations",
+          total_searches: searches,
+          duration_ms: currentAnalysis.durationMs || 0,
+          result: {
+            phase1: p1,
+            phase2: p2,
+            phase3: p3,
+            totalSearches: searches
+          }
         });
+        
         try { controller.close(); } catch (e) {}
         return;
       } else if (currentAnalysis.status === "FAILED") {
@@ -64,14 +77,19 @@ export async function GET(
       }
 
       // Stream already completed phases first for a reconnecting client
-      if (currentAnalysis.phase >= 1 && currentAnalysis.phase1Result) {
-        sendEvent({ type: "phase_complete", phase: 1, result: currentAnalysis.phase1Result });
+      const p1 = currentAnalysis.phase1Result;
+      const p2 = currentAnalysis.phase2Result;
+      const p3 = currentAnalysis.phase3Result;
+      const searches = (p1?.web_searches_performed || 0) + (p2?.web_searches_performed || 0) + (p3?.web_searches_performed || 0);
+
+      if (currentAnalysis.phase >= 1 && p1) {
+        sendEvent({ type: "phase_complete", phase: 1, result: p1, total_searches: searches });
       }
-      if (currentAnalysis.phase >= 2 && currentAnalysis.phase2Result) {
-        sendEvent({ type: "phase_complete", phase: 2, result: currentAnalysis.phase2Result });
+      if (currentAnalysis.phase >= 2 && p2) {
+        sendEvent({ type: "phase_complete", phase: 2, result: p2, total_searches: searches });
       }
-      if (currentAnalysis.phase >= 3 && currentAnalysis.phase3Result) {
-        sendEvent({ type: "phase_complete", phase: 3, result: currentAnalysis.phase3Result });
+      if (currentAnalysis.phase >= 3 && p3) {
+        sendEvent({ type: "phase_complete", phase: 3, result: p3, total_searches: searches });
       }
 
       // Define listener for background events
