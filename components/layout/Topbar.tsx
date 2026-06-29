@@ -11,9 +11,11 @@ import {
   Target,
   FolderOpen,
   FileText,
-  User
+  User,
+  ArrowLeft
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { Breadcrumb } from "./Breadcrumb";
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -22,37 +24,18 @@ interface TopbarProps {
 
 export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user } = useAuth();
-  
   const [notifications, setNotifications] = useState([
     { id: 1, text: "Apex Clipper Analysis completed", time: "5 min ago", read: false },
     { id: 2, text: "Wahl Professional details updated", time: "2 hours ago", read: true },
   ]);
   const [showNotifications, setShowNotifications] = useState(false);
 
-  // Generate dynamic title and breadcrumbs
-  const getBreadcrumbs = () => {
-    const segments = pathname.split("/").filter(Boolean);
-    if (segments.length === 0) return { title: "Overview", crumbs: [] };
+  // Show back button when more than 2 levels deep
+  const depth = pathname.split("/").filter(Boolean).length;
+  const showBack = depth > 2;
 
-    // Capitalize helper
-    const format = (str: string) => {
-      if (str === "id" || str.startsWith("an_") || str.startsWith("comp_") || str.startsWith("proj_") || str.startsWith("rep_")) {
-        return "Detail";
-      }
-      return str.charAt(0).toUpperCase() + str.slice(1).replace(/-/g, " ");
-    };
-
-    const title = format(segments[segments.length - 1]);
-    const crumbs = segments.slice(0, -1).map((segment, index) => {
-      const href = "/" + segments.slice(0, index + 1).join("/");
-      return { label: format(segment), href };
-    });
-
-    return { title, crumbs };
-  };
-
-  const { title, crumbs } = getBreadcrumbs();
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
@@ -66,20 +49,19 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
           <Menu className="w-5 h-5" />
         </button>
 
-        <div className="hidden sm:flex items-center gap-1.5 text-xs text-text-muted font-medium">
-          <span className="hover:text-text-secondary cursor-pointer">Dashboard</span>
-          {crumbs.map((crumb) => (
-            <div key={crumb.href} className="flex items-center gap-1.5">
-              <ChevronRight className="w-3.5 h-3.5" />
-              <span className="hover:text-text-secondary cursor-pointer">{crumb.label}</span>
-            </div>
-          ))}
-          <ChevronRight className="w-3.5 h-3.5" />
-          <span className="text-accent-text">{title}</span>
+        {showBack && (
+          <button
+            onClick={() => router.back()}
+            className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors"
+            aria-label="Go back"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+        )}
+
+        <div className="hidden sm:block">
+          <Breadcrumb />
         </div>
-        <h1 className="text-base font-bold text-text-primary sm:hidden">
-          {title}
-        </h1>
       </div>
 
       {/* Center: Search Trigger Button */}

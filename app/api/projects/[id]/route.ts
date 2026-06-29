@@ -102,6 +102,10 @@ export async function PATCH(
     if (body.motorTech !== undefined) updateData.motorTech = body.motorTech || null;
     if (body.keyDiff !== undefined) updateData.keyDiff = body.keyDiff || null;
     if (body.pricePoint !== undefined) updateData.pricePoint = body.pricePoint || null;
+    if (body.savedDefaults !== undefined) updateData.savedDefaults = body.savedDefaults;
+    if (body.latestAnalysisId !== undefined) updateData.latestAnalysisId = body.latestAnalysisId;
+    if (body.latestReportId !== undefined) updateData.latestReportId = body.latestReportId;
+    if (body.lastUsedAt !== undefined) updateData.lastUsedAt = body.lastUsedAt;
     
     try {
       // 1. Try PostgreSQL

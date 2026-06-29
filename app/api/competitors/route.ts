@@ -3,12 +3,106 @@ import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
 import { AddCompetitorSchema } from "@/lib/validations";
+import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 
 export async function GET(request: Request) {
   try {
     const session = await getAuthSession();
     const { searchParams } = new URL(request.url);
+    const source = searchParams.get("source") || "manual";
     
+    if (source === "analysis") {
+      if (isSupabaseConfigured) {
+        const { data, error } = await supabaseAdmin
+          .from("analysis_competitors")
+          .select("*, analyses(created_at, project_id, projects(name))")
+          .eq("user_id", session.userId)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+        return NextResponse.json({ competitors: data || [] });
+      } else {
+        // Fallback: Query completed analyses from Prisma / memoryDb and extract competitors
+        let analyses = [];
+        try {
+          analyses = await prisma.analysis.findMany({
+            where: { userId: session.userId, status: "COMPLETE" },
+            include: { project: true },
+            orderBy: { createdAt: "desc" }
+          });
+        } catch (dbErr) {
+          analyses = memoryDb.analyses.filter(a => a.userId === session.userId && a.status === "COMPLETE");
+        }
+
+        const analysisCompetitors = [];
+        for (const a of analyses) {
+          const p1 = (a.phase1Result as any) || {};
+          const p2 = (a.phase2Result as any) || {};
+          const projectName = (a as any).project?.name || null;
+          
+          const p1Comps = (p1.competitors || []).map((c: any) => ({
+            id: `${a.id}_p1_${c.asin || c.name}`,
+            analysis_id: a.id,
+            user_id: session.userId,
+            name: c.name,
+            brand: c.brand,
+            tier: "legacy",
+            asin: c.asin || null,
+            amazon_url: c.asin ? `https://www.amazon.com/dp/${c.asin}` : null,
+            price: c.price || null,
+            rating: c.rating || null,
+            review_count: c.review_count || null,
+            monthly_sales: c.monthly_sales || null,
+            bsr_rank: c.bsr_rank || null,
+            initials: c.initials || c.name.substring(0, 2).toUpperCase(),
+            key_features: c.key_features || [],
+            strengths: c.strengths || [],
+            weaknesses: c.weaknesses || [],
+            recent_news: c.recent_news || [],
+            top_feature_summary: c.top_feature_summary || "",
+            created_at: a.createdAt,
+            analyses: {
+              created_at: a.createdAt,
+              project_id: a.projectId,
+              projects: projectName ? { name: projectName } : null
+            }
+          }));
+
+          const p2Comps = (p2.competitors || []).map((c: any) => ({
+            id: `${a.id}_p2_${c.asin || c.name}`,
+            analysis_id: a.id,
+            user_id: session.userId,
+            name: c.name,
+            brand: c.brand,
+            tier: "emerging",
+            asin: c.asin || null,
+            amazon_url: c.asin ? `https://www.amazon.com/dp/${c.asin}` : null,
+            price: c.price || null,
+            rating: c.rating || null,
+            review_count: c.review_count || null,
+            monthly_sales: c.monthly_sales || null,
+            bsr_rank: c.bsr_rank || null,
+            initials: c.initials || c.name.substring(0, 2).toUpperCase(),
+            key_features: c.key_features || [],
+            strengths: c.strengths || [],
+            weaknesses: c.weaknesses || [],
+            recent_news: c.recent_news || [],
+            top_feature_summary: c.top_feature_summary || "",
+            created_at: a.createdAt,
+            analyses: {
+              created_at: a.createdAt,
+              project_id: a.projectId,
+              projects: projectName ? { name: projectName } : null
+            }
+          }));
+
+          analysisCompetitors.push(...p1Comps, ...p2Comps);
+        }
+
+        return NextResponse.json({ competitors: analysisCompetitors });
+      }
+    }
+
     const search = searchParams.get("search") || "";
     const status = searchParams.get("status") || "";
     const tagsParam = searchParams.get("tags") || "";

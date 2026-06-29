@@ -6,6 +6,7 @@ import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { ProgressPanel } from "@/components/analyze/ProgressPanel";
 import { ResultsPanel } from "@/components/analyze/ResultsPanel";
+import { STYLECRAFT_PRODUCTS } from "@/lib/stylecraft-products";
 
 export default function AnalyzePage() {
   const router = useRouter();
@@ -19,7 +20,8 @@ export default function AnalyzePage() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
 
   // Form Fields State
-  const [industry, setIndustry] = useState("grooming");
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [industry, setIndustry] = useState("grooming-barbering");
   const [targetMarket, setTargetMarket] = useState<"pro" | "consumer" | "both">("both");
   const [productName, setProductName] = useState("");
   const [description, setDescription] = useState("");
@@ -29,9 +31,42 @@ export default function AnalyzePage() {
   const [motorTech, setMotorTech] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
 
+  // When product is selected from StylecraftUS catalog
+  function handleProductSelect(productId: string) {
+    setSelectedProductId(productId);
+    if (!productId) return;
+
+    if (productId === "custom") {
+      setProductName("");
+      setIndustry("grooming-barbering");
+      setTargetMarket("both");
+      setDescription("");
+      setCategory("");
+      setCompanyContext("StylecraftUS® is an innovative hair tools brand established in the USA, known for professional-grade barber clippers, trimmers, and beauty tools. Collections include Saber, Instinct, Rebel, Reign, Rogue, and Ace lines. Featured in Good Housekeeping, Rolling Stone, GMA, and NY Times.");
+      setMotorTech("");
+      setKeyDiff("");
+      setPricePoint("");
+      return;
+    }
+
+    const product = STYLECRAFT_PRODUCTS.find(p => p.id === productId);
+    if (!product) return;
+
+    setIndustry(product.industry);
+    setTargetMarket(product.targetMarket as any);
+    setProductName(product.name);
+    setDescription(product.description);
+    setCategory(product.amazonCategory);
+    setCompanyContext("StylecraftUS® is an innovative hair tools brand established in the USA, known for professional-grade barber clippers, trimmers, and beauty tools. Collections include Saber, Instinct, Rebel, Reign, Rogue, and Ace lines. Featured in Good Housekeeping, Rolling Stone, GMA, and NY Times.");
+    setMotorTech(product.motorType);
+    setKeyDiff(product.keyFeatures[0] || "");
+    setPricePoint(`$${product.price}`);
+  }
+
   // Completed Results State (Aggregated results object)
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [savingReport, setSavingReport] = useState(false);
+  const [savedReportId, setSavedReportId] = useState<string | null>(null);
 
   // Pre-fill form if projectId is passed
   useEffect(() => {
@@ -100,6 +135,27 @@ export default function AnalyzePage() {
     }
 
     try {
+      // Save project defaults if associated with a project
+      if (projectIdParam) {
+        fetch(`/api/projects/${projectIdParam}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            savedDefaults: {
+              productName: productName.trim(),
+              industry,
+              targetMarket,
+              description: description.trim(),
+              category: category.trim(),
+              pricePoint: pricePoint.trim(),
+              companyContext: companyContext.trim(),
+              motorTech,
+              keyDiff: keyDiff.trim(),
+            }
+          })
+        }).catch(() => {});
+      }
+
       const res = await fetch("/api/analyses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -128,6 +184,11 @@ export default function AnalyzePage() {
   };
 
   const handleSaveAsReport = async () => {
+    if (savedReportId) {
+      router.push(`/dashboard/reports/${savedReportId}`);
+      return;
+    }
+
     if (!analysisId || !analysisResult) return;
     
     setSavingReport(true);
@@ -169,6 +230,93 @@ export default function AnalyzePage() {
       {/* VIEW 1: INPUT FORM */}
       {viewState === "form" && (
         <form onSubmit={handleRunAnalysis} className="space-y-6 text-xs">
+          {/* StylecraftUS Quick-fill selector */}
+          <div className="bg-surface-2 border border-accent/30 rounded-xl p-5 space-y-4 shadow-sm relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-accent/5 rounded-full blur-xl pointer-events-none" />
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/15 text-accent border border-accent/20">
+                <Sparkles className="w-4 h-4 text-accent" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-text-primary">Select a StylecraftUS product</h3>
+                <p className="text-[10px] text-text-muted mt-0.5">Auto-fills the form with real product specifications</p>
+              </div>
+            </div>
+
+            <select
+              value={selectedProductId}
+              onChange={e => handleProductSelect(e.target.value)}
+              className="w-full px-3 py-2.5 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent font-medium text-xs animate-pulse-once"
+            >
+              <option value="">Choose a product to analyze…</option>
+
+              <optgroup label="── Clippers ──────────────────">
+                {STYLECRAFT_PRODUCTS
+                  .filter(p => p.category === "Clippers")
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.shortName} — ${p.price}
+                    </option>
+                  ))}
+              </optgroup>
+
+              <optgroup label="── Trimmers ──────────────────">
+                {STYLECRAFT_PRODUCTS
+                  .filter(p => p.category === "Trimmers")
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.shortName} — ${p.price}
+                    </option>
+                  ))}
+              </optgroup>
+
+              <optgroup label="── Sets ──────────────────────">
+                {STYLECRAFT_PRODUCTS
+                  .filter(p => p.category === "Sets")
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.shortName} — ${p.price}
+                    </option>
+                  ))}
+              </optgroup>
+
+              <optgroup label="── Hair Dryers ───────────────">
+                {STYLECRAFT_PRODUCTS
+                  .filter(p => p.category === "Hair Dryers")
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.shortName} — ${p.price}
+                    </option>
+                  ))}
+              </optgroup>
+
+              <optgroup label="── Or type your own ──────────">
+                <option value="custom">Enter custom product details…</option>
+              </optgroup>
+            </select>
+
+            {selectedProductId && selectedProductId !== "custom" && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 p-3 rounded-lg bg-surface-3/50 border border-border text-[10px] text-text-secondary">
+                {(() => {
+                  const p = STYLECRAFT_PRODUCTS.find(x => x.id === selectedProductId)!;
+                  return (
+                    <>
+                      <span className="font-semibold text-text-primary">{p.shortName}</span>
+                      <span>•</span>
+                      <span className="text-accent font-bold">${p.price}</span>
+                      <span>•</span>
+                      <span>{p.motorType}</span>
+                      <span>•</span>
+                      <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline ml-auto flex items-center gap-0.5">
+                        View website ↗
+                      </a>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
           {/* Card 1: Product Specs */}
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
             <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Product details</h2>
@@ -180,12 +328,11 @@ export default function AnalyzePage() {
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                  required
                 >
-                  <option value="grooming">Grooming & Barbering</option>
-                  <option value="haircare">Hair Care & Styling</option>
-                  <option value="beauty">Beauty & Cosmetics</option>
-                  <option value="fashion">Fashion & Apparel</option>
-                  <option value="other">Other Creative Category</option>
+                  <option value="" disabled>Select industry…</option>
+                  <option value="grooming-barbering">Grooming & Barbering</option>
+                  <option value="haircare-styling">Hair Care & Styling</option>
                 </select>
               </div>
 
@@ -339,6 +486,9 @@ export default function AnalyzePage() {
           productName={productName}
           onComplete={(res) => {
             setAnalysisResult(res);
+            if (res.reportId) {
+              setSavedReportId(res.reportId);
+            }
             setViewState("results");
           }}
           onError={(msg) => {

@@ -15,6 +15,7 @@ import {
   Plus
 } from "lucide-react";
 import { toast } from "sonner";
+import { downloadReportPDF } from "@/lib/export-pdf";
 
 export default function ReportsPage() {
   const router = useRouter();
@@ -68,21 +69,21 @@ export default function ReportsPage() {
     toast.loading("Exporting PDF…", { id: "pdf-export" });
     
     try {
-      const res = await fetch(`/api/reports/${id}/export`, { method: "POST" });
+      const res = await fetch(`/api/reports/${id}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message);
+      if (!res.ok) throw new Error("Failed to load report data");
+      
+      await downloadReportPDF(data.report);
+      
+      // Update status
+      await fetch(`/api/reports/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "EXPORTED" })
+      });
       
       toast.dismiss("pdf-export");
-      toast.success("PDF exported");
-      
-      // Trigger a direct mock download
-      const link = document.createElement("a");
-      link.href = "#"; // simulated download
-      link.onclick = (event) => {
-        event.preventDefault();
-        toast.info(`Mock PDF Download: "${title}.pdf"`);
-      };
-      link.click();
+      toast.success("PDF exported successfully");
       fetchReports();
     } catch (err: any) {
       toast.dismiss("pdf-export");
@@ -167,12 +168,12 @@ export default function ReportsPage() {
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-semibold border rounded-full uppercase tracking-wider ${
-                    r.status === "DRAFT" ? "bg-zinc-800 text-zinc-400 border-zinc-700" :
-                    r.status === "IN_REVIEW" ? "bg-warning-bg border-warning/20 text-warning" :
-                    r.status === "READY" ? "bg-success-bg border-success/20 text-success" :
+                    r.status?.toUpperCase() === "DRAFT" ? "bg-zinc-800 text-zinc-400 border-zinc-700" :
+                    r.status?.toUpperCase() === "IN_REVIEW" ? "bg-warning-bg border border-warning/20 text-warning" :
+                    r.status?.toUpperCase() === "READY" ? "bg-success-bg border border-success/20 text-success" :
                     "bg-indigo-950 text-indigo-300 border-indigo-900"
                   }`}>
-                    {r.status.replace("_", " ")}
+                    {r.status?.replace("_", " ")}
                   </span>
                   
                   <div className="flex items-center gap-1.5">

@@ -27,6 +27,10 @@ export interface MockProject {
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;
+  savedDefaults?: any;
+  latestAnalysisId?: string | null;
+  latestReportId?: string | null;
+  lastUsedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +77,26 @@ export interface MockReport {
   updatedAt: Date;
 }
 
+export interface MockArtwork {
+  id: string;
+  projectId: string;
+  fileUrl: string;
+  fileName: string;
+  purpose: string;
+  aiSuggestions: any;
+  createdAt: Date;
+}
+
+export interface MockOutput {
+  id: string;
+  projectId: string;
+  outputType: string;
+  content: any;
+  html?: string;
+  driveUrl?: string;
+  createdAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -87,6 +111,8 @@ class MemoryDatabase {
   competitorAnalyses: MockCompetitorAnalysis[] = [];
   reports: MockReport[] = [];
   notes: MockNote[] = [];
+  artwork: MockArtwork[] = [];
+  outputs: MockOutput[] = [];
 
   constructor() {
     this.seed();

@@ -27,7 +27,7 @@ export default function OnboardingPage() {
   
   // Onboarding Form States
   const [workspaceName, setWorkspaceName] = useState("");
-  const [selectedIndustry, setSelectedIndustry] = useState("grooming");
+  const [selectedIndustry, setSelectedIndustry] = useState("grooming-barbering");
   const [competitorName, setCompetitorName] = useState("");
   const [competitorWebsite, setCompetitorWebsite] = useState("");
   const [productName, setProductName] = useState("");
@@ -188,10 +188,8 @@ export default function OnboardingPage() {
 
             <div className="grid grid-cols-1 gap-2">
               {[
-                { id: "grooming", name: "Grooming & Barbering", icon: Sliders, desc: "Clippers, trimmers, blades, custom kits" },
-                { id: "haircare", name: "Hair Care & Styling", icon: Crown, desc: "Dryers, straighteners, styling sprays" },
-                { id: "beauty", name: "Beauty & Cosmetics", icon: Flame, desc: "Skincare, luxury cosmetic kits" },
-                { id: "fashion", name: "Fashion & Creative", icon: Award, desc: "Apparel, design boutique accessories" }
+                { id: "grooming-barbering", name: "Grooming & Barbering", icon: Sliders, desc: "Clippers, trimmers, blades, custom kits" },
+                { id: "haircare-styling", name: "Hair Care & Styling", icon: Crown, desc: "Dryers, straighteners, styling sprays" }
               ].map((ind) => {
                 const Icon = ind.icon;
                 return (

@@ -208,7 +208,7 @@ export default function CompetitorDetailPage() {
       {/* Navigation Banner Header */}
       <div className="flex flex-col gap-4">
         <button
-          onClick={() => router.push("/dashboard/competitors")}
+          onClick={() => router.back()}
           className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary self-start transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />

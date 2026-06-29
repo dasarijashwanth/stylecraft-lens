@@ -1,4 +1,4 @@
-import { prisma } from "./db";
+import { prisma, isDbConfigured } from "./db";
 
 export interface UserSession {
   userId: string;
@@ -27,7 +27,7 @@ export const hasClerkKeys =
   process.env.CLERK_SECRET_KEY !== "sk_...";
 
 export async function getAuthSession(): Promise<UserSession> {
-  if (hasClerkKeys) {
+  if (hasClerkKeys && isDbConfigured) {
     try {
       const { auth, currentUser } = await import("@clerk/nextjs/server");
       const session = await auth();
@@ -87,45 +87,49 @@ export async function getAuthSession(): Promise<UserSession> {
   }
 
   // Developer Mode Bypass
-  try {
-    let org = await prisma.org.findUnique({ where: { slug: "dev-workspace" } });
-    if (!org) {
-      org = await prisma.org.create({
-        data: {
-          id: "dev_org_id",
-          name: "Dev Workspace",
-          slug: "dev-workspace",
-          plan: "FREE",
-        },
-      });
+  if (isDbConfigured) {
+    try {
+      let org = await prisma.org.findUnique({ where: { slug: "dev-workspace" } });
+      if (!org) {
+        org = await prisma.org.create({
+          data: {
+            id: "dev_org_id",
+            name: "Dev Workspace",
+            slug: "dev-workspace",
+            plan: "FREE",
+          },
+        });
+      }
+      
+      let user = await prisma.user.findUnique({ where: { email: MOCK_SESSION.email } });
+      if (!user) {
+        user = await prisma.user.create({
+          data: {
+            id: MOCK_SESSION.userId,
+            clerkId: "clerk_dev_123",
+            email: MOCK_SESSION.email,
+            name: MOCK_SESSION.name,
+            avatarUrl: MOCK_SESSION.avatarUrl,
+            orgId: org.id,
+            role: "OWNER",
+          },
+        });
+      }
+      
+      return {
+        userId: user.id,
+        orgId: user.orgId || org.id,
+        email: user.email,
+        name: user.name || "Dev Admin",
+        avatarUrl: user.avatarUrl || "",
+        role: user.role as any,
+        plan: org.plan as any,
+      };
+    } catch (error) {
+      // Graceful degradation when the database is completely offline/unconfigured
+      return MOCK_SESSION;
     }
-    
-    let user = await prisma.user.findUnique({ where: { email: MOCK_SESSION.email } });
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          id: MOCK_SESSION.userId,
-          clerkId: "clerk_dev_123",
-          email: MOCK_SESSION.email,
-          name: MOCK_SESSION.name,
-          avatarUrl: MOCK_SESSION.avatarUrl,
-          orgId: org.id,
-          role: "OWNER",
-        },
-      });
-    }
-    
-    return {
-      userId: user.id,
-      orgId: user.orgId || org.id,
-      email: user.email,
-      name: user.name || "Dev Admin",
-      avatarUrl: user.avatarUrl || "",
-      role: user.role as any,
-      plan: org.plan as any,
-    };
-  } catch (error) {
-    // Graceful degradation when the database is completely offline/unconfigured
-    return MOCK_SESSION;
   }
+
+  return MOCK_SESSION;
 }

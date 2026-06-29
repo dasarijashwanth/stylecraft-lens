@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
 import { analysisEvents } from "@/lib/analysisEngine";
+import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,28 @@ export async function GET(
         const p3 = currentAnalysis.phase3Result || {};
         const searches = (p1.web_searches_performed || 0) + (p2.web_searches_performed || 0) + (p3.web_searches_performed || 0);
 
+        let reportId = "";
+        try {
+          if (isSupabaseConfigured) {
+            const { data } = await supabaseAdmin
+              .from("reports")
+              .select("id")
+              .eq("analysis_id", analysisId)
+              .maybeSingle();
+            if (data) reportId = data.id;
+          } else {
+            const reports = await prisma.report.findMany({
+              where: { projectId: currentAnalysis.projectId },
+              orderBy: { createdAt: "desc" },
+              take: 1
+            });
+            if (reports.length > 0) reportId = reports[0].id;
+          }
+        } catch (e) {
+          const report = memoryDb.reports.find(r => r.projectId === currentAnalysis.projectId);
+          if (report) reportId = report.id;
+        }
+
         if (currentAnalysis.phase1Result) {
           sendEvent({ type: "phase_complete", phase: 1, result: p1, total_searches: searches });
         }
@@ -60,11 +83,13 @@ export async function GET(
           label: "Synthesizing market analysis & strategic recommendations",
           total_searches: searches,
           duration_ms: currentAnalysis.durationMs || 0,
+          report_id: reportId,
           result: {
             phase1: p1,
             phase2: p2,
             phase3: p3,
-            totalSearches: searches
+            totalSearches: searches,
+            reportId
           }
         });
         

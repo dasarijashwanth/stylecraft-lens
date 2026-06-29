@@ -12,7 +12,7 @@ export default function NewProjectPage() {
 
   // Form Fields State
   const [name, setName] = useState("");
-  const [industry, setIndustry] = useState("grooming");
+  const [industry, setIndustry] = useState("grooming-barbering");
   const [targetMarket, setTargetMarket] = useState<"pro" | "consumer" | "both">("both");
   const [productName, setProductName] = useState("");
   const [description, setDescription] = useState("");
@@ -77,7 +77,7 @@ export default function NewProjectPage() {
       {/* Back link */}
       <div>
         <button
-          onClick={() => router.push("/dashboard/projects")}
+          onClick={() => router.back()}
           className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -138,12 +138,11 @@ export default function NewProjectPage() {
                 value={industry}
                 onChange={(e) => setIndustry(e.target.value)}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                required
               >
-                <option value="grooming">Grooming & Barbering</option>
-                <option value="haircare">Hair Care & Styling</option>
-                <option value="beauty">Beauty & Cosmetics</option>
-                <option value="fashion">Fashion & Apparel</option>
-                <option value="other">Other Creative Field</option>
+                <option value="" disabled>Select industry…</option>
+                <option value="grooming-barbering">Grooming & Barbering</option>
+                <option value="haircare-styling">Hair Care & Styling</option>
               </select>
             </div>
 
