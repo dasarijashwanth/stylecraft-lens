@@ -25,7 +25,7 @@ export async function buildPhase3Prompt(
     })),
   ];
 
-  // Generate the overview paragraph IN CODE — not by Claude
+  // Generate the overview paragraph IN CODE — not by the AI model
   const overviewParagraph = buildOverviewParagraph({
     productName: ctx.productName,
     motorTech: ctx.motorTech ?? "",
@@ -44,39 +44,6 @@ export async function buildPhase3Prompt(
   const priceFloor = realPrices.length ? Math.min(...realPrices).toFixed(2) : "49.99";
   const priceCeiling = realPrices.length ? Math.max(...realPrices).toFixed(2) : "319.95";
 
-  // Build Google search live snippets
-  let liveSnippets = "";
-  try {
-    const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
-    const cx = process.env.GOOGLE_SEARCH_CX;
-
-    if (apiKey && cx) {
-      const [trendRes, motorRes] = await Promise.allSettled([
-        fetch(`https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(`${ctx.motorTech ?? "professional"} hair clipper market trends 2025 2026 barber`)}&num=3`).then(r => r.json()),
-        fetch(`https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(`${ctx.productName} ${ctx.industry} Amazon competitive analysis 2025`)}&num=3`).then(r => r.json()),
-      ]);
-
-      const snippets: string[] = [];
-
-      if (trendRes.status === "fulfilled" && trendRes.value.items) {
-        trendRes.value.items.slice(0, 2).forEach((item: any) => {
-          snippets.push(`[${new URL(item.link).hostname.replace("www.","")}]: ${item.snippet}`);
-        });
-      }
-      if (motorRes.status === "fulfilled" && motorRes.value.items) {
-        motorRes.value.items.slice(0, 2).forEach((item: any) => {
-          snippets.push(`[${new URL(item.link).hostname.replace("www.","")}]: ${item.snippet}`);
-        });
-      }
-
-      liveSnippets = snippets.join("\n");
-    } else {
-      liveSnippets = "Google Search unavailable — use motor context and competitor data only.";
-    }
-  } catch {
-    liveSnippets = "Google Search unavailable — use motor context and competitor data only.";
-  }
-
   const productSpecificBlock = `
 PRODUCT BEING ANALYZED:
   Name: ${ctx.productName}
@@ -85,20 +52,19 @@ PRODUCT BEING ANALYZED:
   Target: ${ctx.targetMarket}
   Industry: ${ctx.industry}
 
-REAL COMPETITOR PRICES FROM AMAZON (Rainforest API — verified live data):
+REAL COMPETITOR PRICES FROM PHASE 1/2 RESEARCH (Amazon-sourced):
 ${allCompetitors.map((c: any) =>
   ` ${c.tier === "legacy" ? "LEGACY" : "EMERGING"} | ${c.name} | Price: ${c.price ?? "—"} | ASIN: ${c.asin ?? "N/A"}`
 ).join("\n")}
 
-LIVE WEB SEARCH SNIPPETS (product-specific, from Google):
-${liveSnippets}
+You have live Google Search available — use it to verify current market size, CAGR, and trend data for this motor technology and price tier before writing the analysis.
 `.trim();
 
   const systemText = `You are a market analyst. You MUST write analysis that is SPECIFIC to this exact product.
 
 ABSOLUTE RULES:
 1. DO NOT change or rewrite the overview_paragraph provided in the template. Use it EXACTLY as provided.
-2. Every trend MUST use a real data point from the provided snippets or verified data.
+2. Every trend MUST use a real data point — search for it if you don't already have a verified figure.
 3. Threats MUST name specific competitors with their real prices (e.g. "BaBylissPRO at $149.99").
 4. Opportunities MUST reference this product's specific price gap vs named competitors.
 5. CITE sources in trends, threats, and opportunities.
@@ -112,7 +78,7 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
 {
   "web_searches_performed": 4,
   "amazon_category": "${ctx.category ?? ctx.industry ?? "Market Analysis"}",
-  "data_sources_used": ["${marketData?.source ?? "Verified Market Research"}", "Rainforest API", "Google Custom Search"],
+  "data_sources_used": ["${marketData?.source ?? "Verified Market Research"}", "Amazon product research (Phase 1/2)", "Google Search grounding"],
   "market_snapshot": {
     "market_size_current": "${marketData?.market_size_2026 ?? "$1.5B"}",
     "market_size_year": "2026",
@@ -138,7 +104,7 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
   "top_threats": [
     {
       "competitor_name": "Real name from competitor data above",
-      "threat_description": "Must include their real price from Rainforest API data"
+      "threat_description": "Must include their real price from the competitor data above"
     }
   ],
   "top_opportunities": [

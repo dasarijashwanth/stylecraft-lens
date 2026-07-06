@@ -1,3 +1,4 @@
+// app/(app)/dashboard/competitors/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -8,13 +9,12 @@ import {
   List, 
   Plus, 
   Trash2, 
-  Play, 
-  ChevronRight, 
   FileSpreadsheet, 
   RefreshCw,
   Star,
   ExternalLink,
-  Target
+  Target,
+  ShieldAlert
 } from "lucide-react";
 import AddCompetitorModal from "@/components/competitors/AddCompetitorModal";
 import { useAuth } from "@/hooks/useAuth";
@@ -30,7 +30,9 @@ export default function CompetitorsPage() {
   
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabView>("all");
-  const [manualCompetitors, setManualCompetitors] = useState<any[]>([]);
+  
+  // raw data states
+  const [allFetched, setAllFetched] = useState<any[]>([]);
   const [analysisCompetitors, setAnalysisCompetitors] = useState<any[]>([]);
   
   // Filter & UI states
@@ -57,21 +59,21 @@ export default function CompetitorsPage() {
     try {
       setLoading(true);
       
-      const manualRes = await fetch(`/api/competitors?source=manual&limit=100`);
+      const manualRes = await fetch(`/api/competitors?limit=100`);
       const manualData = await manualRes.json();
       
       const analysisRes = await fetch(`/api/competitors?source=analysis`);
       const analysisData = await analysisRes.json();
       
-      const manual = manualData.competitors || [];
+      const fetched = manualData.competitors || [];
       const analysis = analysisData.competitors || [];
       
-      setManualCompetitors(manual);
+      setAllFetched(fetched);
       setAnalysisCompetitors(analysis);
       
       // Extract unique tags for filtering
       const tagsSet = new Set<string>();
-      manual.forEach((c: any) => {
+      fetched.forEach((c: any) => {
         if (c.tags) c.tags.forEach((t: string) => tagsSet.add(t));
       });
       analysis.forEach((c: any) => {
@@ -98,45 +100,52 @@ export default function CompetitorsPage() {
     }, {})
   ) as any[];
 
-  // Merge lists based on current tab selection
-  const allCompetitors = tab === "manual"   ? manualCompetitors
-                       : tab === "analysis" ? uniqueAnalysis
-                       : [...manualCompetitors, ...uniqueAnalysis];
+  // Split fixed reference list from manual/added/analysis ones
+  const fixedReference = allFetched.filter(c => c.is_fixed === true);
+  
+  const nonFixedManual = allFetched.filter(c => c.is_fixed !== true);
+  const activeUserCompetitors = tab === "manual" ? nonFixedManual
+                              : tab === "analysis" ? uniqueAnalysis
+                              : [...nonFixedManual, ...uniqueAnalysis];
 
-  // Apply client-side filters
-  const filtered = allCompetitors.filter(c => {
-    const matchesSearch = !searchQuery ||
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.brand?.toLowerCase().includes(searchQuery.toLowerCase());
+  // Helper to apply client-side filtering & sorting
+  const filterAndSort = (list: any[]) => {
+    const filtered = list.filter(c => {
+      const matchesSearch = !searchQuery ||
+        c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        c.brand?.toLowerCase().includes(searchQuery.toLowerCase());
+        
+      const isFromAnalysis = !c.status;
+      const matchesStatus = statusFilter === "ALL" ||
+        (isFromAnalysis && statusFilter === "ACTIVE") ||
+        (c.status?.toUpperCase() === statusFilter);
+        
+      const matchesTag = selectedTag === "ALL" ||
+        (c.tags && c.tags.map((t: string) => t.toLowerCase()).includes(selectedTag.toLowerCase()));
+
+      return matchesSearch && matchesStatus && matchesTag;
+    });
+
+    return [...filtered].sort((a, b) => {
+      let valA: any = a.name.toLowerCase();
+      let valB: any = b.name.toLowerCase();
       
-    const isFromAnalysis = !c.status;
-    const matchesStatus = statusFilter === "ALL" ||
-      (isFromAnalysis && statusFilter === "ACTIVE") ||
-      (c.status === statusFilter);
+      if (sortField === "date") {
+        valA = new Date(a.createdAt || a.created_at || 0).getTime();
+        valB = new Date(b.createdAt || b.created_at || 0).getTime();
+      } else if (sortField === "updated") {
+        valA = new Date(a.updatedAt || a.created_at || 0).getTime();
+        valB = new Date(b.updatedAt || b.created_at || 0).getTime();
+      }
       
-    const matchesTag = selectedTag === "ALL" ||
-      (c.tags && c.tags.map((t: string) => t.toLowerCase()).includes(selectedTag.toLowerCase()));
+      if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+      if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+  };
 
-    return matchesSearch && matchesStatus && matchesTag;
-  });
-
-  // Apply sorting
-  const sorted = [...filtered].sort((a, b) => {
-    let valA: any = a.name.toLowerCase();
-    let valB: any = b.name.toLowerCase();
-    
-    if (sortField === "date") {
-      valA = new Date(a.createdAt || a.created_at || 0).getTime();
-      valB = new Date(b.createdAt || b.created_at || 0).getTime();
-    } else if (sortField === "updated") {
-      valA = new Date(a.updatedAt || a.created_at || 0).getTime();
-      valB = new Date(b.updatedAt || b.created_at || 0).getTime();
-    }
-    
-    if (valA < valB) return sortOrder === "asc" ? -1 : 1;
-    if (valA > valB) return sortOrder === "asc" ? 1 : -1;
-    return 0;
-  });
+  const processedFixed = filterAndSort(fixedReference);
+  const processedUser = filterAndSort(activeUserCompetitors);
 
   const handleSelectRow = (id: string) => {
     setSelectedIds(prev =>
@@ -144,11 +153,11 @@ export default function CompetitorsPage() {
     );
   };
 
-  const handleSelectAll = () => {
-    if (selectedIds.length === sorted.length) {
+  const handleSelectAllUser = () => {
+    if (selectedIds.length === processedUser.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(sorted.map(c => c.id || `${c.analysis_id}_${c.asin || c.name}`));
+      setSelectedIds(processedUser.map(c => c.id || `${c.analysis_id}_${c.asin || c.name}`));
     }
   };
 
@@ -157,8 +166,11 @@ export default function CompetitorsPage() {
     
     let successCount = 0;
     for (const id of selectedIds) {
-      // Only delete manual ones (analysis competitors are read-only)
-      if (id.startsWith("an_") || id.includes("_p")) continue;
+      // Do not allow deleting analysis / fixed competitors
+      if (id.includes("_p1") || id.includes("_p2")) continue;
+      const compObj = nonFixedManual.find(c => c.id === id);
+      if (!compObj) continue;
+
       try {
         const res = await fetch(`/api/competitors/${id}`, { method: "DELETE" });
         if (res.ok) successCount++;
@@ -171,7 +183,7 @@ export default function CompetitorsPage() {
   };
 
   const handleBulkExportCSV = () => {
-    const selectedList = sorted.filter(c => {
+    const selectedList = [...processedFixed, ...processedUser].filter(c => {
       const id = c.id || `${c.analysis_id}_${c.asin || c.name}`;
       return selectedIds.includes(id);
     });
@@ -215,17 +227,15 @@ export default function CompetitorsPage() {
     }
   };
 
-  const totalCount = manualCompetitors.length + uniqueAnalysis.length;
-
   return (
-    <div className="space-y-6 text-xs">
+    <div className="space-y-8 text-xs">
       
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-display">Competitors</h1>
-          <span className="inline-flex items-center justify-center bg-surface-3 border border-border px-2 py-0.5 rounded-full text-xs font-semibold text-text-secondary">
-            {totalCount} total
+          <h1 className="text-display font-sans">Competitors</h1>
+          <span className="inline-flex items-center justify-center bg-surface-3 border border-border px-2.5 py-0.5 rounded-full text-[10px] font-bold text-text-secondary">
+            {allFetched.length + uniqueAnalysis.length} total
           </span>
         </div>
         <button
@@ -237,27 +247,6 @@ export default function CompetitorsPage() {
         </button>
       </div>
 
-      {/* Tab select bar */}
-      <div className="flex items-center gap-1 border-b border-border">
-        {([
-          { key: "all", label: `All (${totalCount})` },
-          { key: "analysis", label: `From analyses (${uniqueAnalysis.length})` },
-          { key: "manual", label: `Manual (${manualCompetitors.length})` }
-        ] as { key: TabView; label: string }[]).map(t => (
-          <button
-            key={t.key}
-            onClick={() => { setTab(t.key); setSelectedIds([]); }}
-            className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors ${
-              tab === t.key 
-                ? "border-accent text-accent" 
-                : "border-transparent text-text-secondary hover:text-text-primary"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
       {/* Filter Toolbar */}
       <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between p-3 bg-surface-2 border border-border rounded-xl">
         <div className="relative flex-1 max-w-sm">
@@ -266,7 +255,7 @@ export default function CompetitorsPage() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by name or brand..."
+            placeholder="Search competitors..."
             className="w-full pl-9 pr-4 py-1.5 text-xs border border-border rounded-lg bg-surface-1 outline-none text-text-primary placeholder-text-muted transition-colors focus:border-accent"
           />
         </div>
@@ -275,7 +264,7 @@ export default function CompetitorsPage() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-surface-1 border border-border rounded-lg text-text-primary outline-none focus:border-accent"
+            className="px-2.5 py-1.5 text-xs bg-surface-1 border border-border rounded-lg text-text-primary outline-none focus:border-accent font-semibold"
           >
             <option value="ALL">All Statuses</option>
             <option value="ACTIVE">Active</option>
@@ -286,7 +275,7 @@ export default function CompetitorsPage() {
           <select
             value={selectedTag}
             onChange={(e) => setSelectedTag(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-surface-1 border border-border rounded-lg text-text-primary outline-none focus:border-accent"
+            className="px-2.5 py-1.5 text-xs bg-surface-1 border border-border rounded-lg text-text-primary outline-none focus:border-accent font-semibold"
           >
             <option value="ALL">All Tags</option>
             {allTags.map(tag => (
@@ -297,7 +286,7 @@ export default function CompetitorsPage() {
           <select
             value={sortField}
             onChange={(e) => setSortField(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-surface-1 border border-border rounded-lg text-text-primary outline-none focus:border-accent"
+            className="px-2.5 py-1.5 text-xs bg-surface-1 border border-border rounded-lg text-text-primary outline-none focus:border-accent font-semibold"
           >
             <option value="name">Sort: Name A–Z</option>
             <option value="updated">Sort: Last Updated</option>
@@ -331,7 +320,7 @@ export default function CompetitorsPage() {
       {selectedIds.length > 0 && (
         <div className="flex items-center justify-between p-3 border border-accent-border bg-accent-bg rounded-xl animate-pulse-soft">
           <span className="text-xs font-semibold text-accent-text">
-            {selectedIds.length} competitors selected
+            {selectedIds.length} items selected
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -346,171 +335,275 @@ export default function CompetitorsPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-danger/10 border border-danger/25 text-danger text-[11px] font-bold hover:bg-danger/20 transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete manual</span>
+              <span>Delete selected</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Main Content Listing */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center p-20 bg-surface-2 border border-border rounded-xl">
+        <div className="flex flex-col items-center justify-center py-24 bg-surface-2 border border-border rounded-xl">
           <RefreshCw className="w-8 h-8 text-accent animate-spin mb-3" />
-          <p className="text-xs text-text-muted font-medium animate-pulse">Syncing competitors workspace...</p>
+          <p className="text-xs text-text-muted font-medium animate-pulse">Syncing competitors database...</p>
         </div>
-      ) : sorted.length > 0 ? (
-        viewMode === "table" ? (
-          <div className="bg-surface-2 border border-border rounded-xl overflow-hidden shadow-md">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-border/80 text-text-muted font-bold bg-surface-3/20">
-                    <th className="py-3 px-4 w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.length === sorted.length && sorted.length > 0}
-                        onChange={handleSelectAll}
-                        className="rounded border-border bg-surface-1 focus:ring-accent w-3.5 h-3.5 accent-indigo-500"
-                      />
-                    </th>
-                    <th className="py-3 px-4">Name & Website</th>
-                    <th className="py-3 px-4">Brand</th>
-                    <th className="py-3 px-4">Source / Status</th>
-                    <th className="py-3 px-4">Tags</th>
-                    <th className="py-3 px-4">Amazon ASIN</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/40">
-                  {sorted.map((c) => {
-                    const isFromAnalysis = !c.status;
-                    const id = c.id || `${c.analysis_id}_${c.asin || c.name}`;
-                    const isSelected = selectedIds.includes(id);
-                    return (
-                      <tr 
-                        key={id} 
-                        className={`hover:bg-surface-3/20 transition-colors ${
-                          isSelected ? "bg-accent-bg/10" : ""
-                        }`}
-                      >
+      ) : (
+        <div className="space-y-10">
+          
+          {/* SECTION 1: FIXED REFERENCE BRANDS */}
+          <div className="space-y-3.5">
+            <div className="border-b border-border pb-2 flex items-center justify-between bg-surface-3/10 px-3 py-2 rounded-t-lg">
+              <div>
+                <h2 className="text-sm font-bold text-text-primary">Fixed Reference Brands</h2>
+                <p className="text-[10px] text-text-muted mt-0.5">Permanent industry benchmark brands (locked for modifications)</p>
+              </div>
+              <span className="bg-surface-3 px-2 py-0.5 rounded text-[10px] font-bold text-text-secondary border border-border">
+                {processedFixed.length} brands
+              </span>
+            </div>
+
+            {processedFixed.length === 0 ? (
+              <p className="text-xs text-text-muted p-4 border border-dashed border-border rounded-xl text-center bg-surface-2">
+                No fixed reference brands match the search query.
+              </p>
+            ) : viewMode === "table" ? (
+              <div className="bg-surface-2 border border-border rounded-xl overflow-hidden shadow-sm">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border/80 text-text-muted font-bold bg-surface-3/20">
+                      <th className="py-2.5 px-4">Name & Website</th>
+                      <th className="py-2.5 px-4">Main Categories / Products</th>
+                      <th className="py-2.5 px-4">Tags</th>
+                      <th className="py-2.5 px-4 text-right">Access</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {processedFixed.map(c => (
+                      <tr key={c.id} className="hover:bg-surface-3/10 transition-colors">
                         <td className="py-3 px-4">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => handleSelectRow(id)}
-                            className="rounded border-border bg-surface-1 focus:ring-accent w-3.5 h-3.5 accent-indigo-500"
-                          />
-                        </td>
-                        <td className="py-3 px-4 font-sans">
-                          {isFromAnalysis ? (
-                            <span className="font-bold text-text-primary block">
-                              {c.name}
-                            </span>
-                          ) : (
-                            <span 
-                              onClick={() => router.push(`/dashboard/competitors/${c.id}`)}
-                              className="font-bold text-text-primary hover:text-accent cursor-pointer transition-colors block"
-                            >
-                              {c.name}
-                            </span>
-                          )}
-                          {c.website || c.amazon_url ? (
+                          <span className="font-bold text-text-primary block">{c.name}</span>
+                          {c.website && (
                             <a 
-                              href={c.website || c.amazon_url} 
+                              href={c.website} 
                               target="_blank" 
                               rel="noreferrer"
-                              className="text-[10px] text-text-muted hover:underline block mt-0.5 flex items-center gap-0.5"
+                              className="text-[10px] text-accent hover:underline inline-flex items-center gap-0.5 mt-0.5"
                             >
-                              <span>{c.website || "View Listing"}</span>
-                              <ExternalLink size={10} className="text-text-muted/60" />
+                              <span>{c.website}</span>
+                              <ExternalLink size={9} />
                             </a>
-                          ) : (
-                            <span className="text-[10px] text-text-muted block mt-0.5">No domain</span>
                           )}
                         </td>
-                        <td className="py-3 px-4 text-text-secondary">{c.brand || "—"}</td>
+                        <td className="py-3 px-4 text-text-secondary">{c.main_products || "Grooming & Styling Tools"}</td>
                         <td className="py-3 px-4">
-                          {isFromAnalysis ? (
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-bold rounded bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
-                              <span className="w-1 h-1 rounded-full bg-indigo-400" />
-                              From analysis
-                            </span>
-                          ) : (
-                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded ${
-                              c.status === "ACTIVE" ? "bg-success-bg border border-success/20 text-success" :
-                              c.status === "MONITORING" ? "bg-warning-bg border border-warning/20 text-warning" :
-                              "bg-zinc-800 border border-zinc-700 text-zinc-400"
-                            }`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${
-                                c.status === "ACTIVE" ? "bg-success" :
-                                c.status === "MONITORING" ? "bg-warning" : "bg-zinc-500"
-                              }`} />
-                              {c.status.charAt(0) + c.status.slice(1).toLowerCase()}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex flex-wrap gap-1 max-w-[200px]">
-                            {(c.tags || []).slice(0, 3).map((tag: string) => (
-                              <span key={tag} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary">
+                          <div className="flex flex-wrap gap-1">
+                            {(c.tags || []).map((tag: string) => (
+                              <span key={tag} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] font-mono text-text-secondary">
                                 {tag}
                               </span>
                             ))}
-                            {c.tags?.length > 3 && (
-                              <span className="px-1 py-0.5 text-[9px] text-text-muted">+{c.tags.length - 3}</span>
-                            )}
                           </div>
                         </td>
-                        <td className="py-3 px-4 font-mono text-[10px] text-text-secondary">{c.asin || "—"}</td>
                         <td className="py-3 px-4 text-right">
-                          {!isFromAnalysis && (
-                            <button
-                              onClick={() => handleDeleteCompetitor(c.id)}
-                              className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-danger transition-colors"
-                              title="Delete competitor"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-muted font-semibold">
+                            Reference Only
+                          </span>
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {processedFixed.map(c => (
+                  <div key={c.id} className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col justify-between shadow-sm">
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <h4 className="text-xs font-bold text-text-primary">{c.name}</h4>
+                        <span className="bg-surface-3 border border-border px-1.5 py-0.5 rounded text-[8px] font-bold text-text-muted uppercase">Fixed</span>
+                      </div>
+                      <p className="text-[10px] text-text-secondary leading-relaxed mb-3">
+                        {c.main_products || "Leading industry product references for performance & sizing."}
+                      </p>
+                      <div className="flex flex-wrap gap-1 mb-2">
+                        {(c.tags || []).map((tag: string) => (
+                          <span key={tag} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary font-mono">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    {c.website && (
+                      <a href={c.website} target="_blank" rel="noreferrer" className="text-[9px] text-accent hover:underline flex items-center gap-0.5 mt-2 self-start font-bold">
+                        <span>Visit Site</span>
+                        <ExternalLink size={9} />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 2: DISCOVERED & ADDED COMPETITORS */}
+          <div className="space-y-3.5">
+            <div className="border-b border-border pb-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-surface-3/10 px-3 py-2 rounded-t-lg">
+              <div>
+                <h2 className="text-sm font-bold text-text-primary">Discovered & Added Competitors</h2>
+                <p className="text-[10px] text-text-muted mt-0.5">Competitors added manually or mapped via analysis engines</p>
+              </div>
+
+              {/* Sub-tab filter */}
+              <div className="flex items-center gap-1 p-0.5 rounded-lg border border-border bg-surface-1 self-start sm:self-auto">
+                {([
+                  { key: "all", label: "All User" },
+                  { key: "analysis", label: "From Analyses" },
+                  { key: "manual", label: "Manual Entries" }
+                ] as { key: TabView; label: string }[]).map(t => (
+                  <button
+                    key={t.key}
+                    onClick={() => { setTab(t.key); setSelectedIds([]); }}
+                    className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${
+                      tab === t.key 
+                        ? "bg-surface-3 text-text-primary border border-border-strong shadow-sm" 
+                        : "text-text-secondary hover:text-text-primary"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
             </div>
+
+            {processedUser.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-12 bg-surface-2 border border-border border-dashed rounded-xl text-center">
+                <Target className="w-8 h-8 text-text-muted mb-2 opacity-50" />
+                <p className="text-xs font-bold text-text-primary">No manual or discovered competitors</p>
+                <p className="text-[10px] text-text-muted max-w-xs mt-1 leading-normal">
+                  Run competitive analyses or use &quot;Add competitor&quot; to populate your local database workspace.
+                </p>
+              </div>
+            ) : viewMode === "table" ? (
+              <div className="bg-surface-2 border border-border rounded-xl overflow-hidden shadow-sm">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border/80 text-text-muted font-bold bg-surface-3/20">
+                      <th className="py-2.5 px-4 w-10">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.length === processedUser.length && processedUser.length > 0}
+                          onChange={handleSelectAllUser}
+                          className="rounded border-border bg-surface-1 focus:ring-accent w-3.5 h-3.5 accent-indigo-500"
+                        />
+                      </th>
+                      <th className="py-2.5 px-4">Name & URL</th>
+                      <th className="py-2.5 px-4">Type / Status</th>
+                      <th className="py-2.5 px-4">Tags</th>
+                      <th className="py-2.5 px-4">Amazon ASIN</th>
+                      <th className="py-2.5 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {processedUser.map(c => {
+                      const isFromAnalysis = !c.status;
+                      const id = c.id || `${c.analysis_id}_${c.asin || c.name}`;
+                      const isSelected = selectedIds.includes(id);
+                      return (
+                        <tr 
+                          key={id} 
+                          className={`hover:bg-surface-3/15 transition-colors ${
+                            isSelected ? "bg-accent-bg/10" : ""
+                          }`}
+                        >
+                          <td className="py-3 px-4">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleSelectRow(id)}
+                              className="rounded border-border bg-surface-1 focus:ring-accent w-3.5 h-3.5 accent-indigo-500"
+                            />
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="font-bold text-text-primary block">{c.name}</span>
+                            {c.website || c.amazon_url ? (
+                              <a 
+                                href={c.website || c.amazon_url} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="text-[10px] text-accent hover:underline inline-flex items-center gap-0.5 mt-0.5"
+                              >
+                                <span>{c.website || "View Listing"}</span>
+                                <ExternalLink size={9} />
+                              </a>
+                            ) : (
+                              <span className="text-[10px] text-text-muted mt-0.5 block">No URL</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            {isFromAnalysis ? (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold rounded bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
+                                <span className="w-1 h-1 rounded-full bg-indigo-400" />
+                                Analysis Mapped
+                              </span>
+                            ) : (
+                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold rounded ${
+                                c.status.toUpperCase() === "ACTIVE" ? "bg-success-bg border border-success/20 text-success" :
+                                c.status.toUpperCase() === "MONITORING" ? "bg-warning-bg border border-warning/20 text-warning" :
+                                "bg-zinc-800 border border-zinc-700 text-zinc-400"
+                              }`}>
+                                <span className={`w-1 h-1 rounded-full ${
+                                  c.status.toUpperCase() === "ACTIVE" ? "bg-success" :
+                                  c.status.toUpperCase() === "MONITORING" ? "bg-warning" : "bg-zinc-500"
+                                }`} />
+                                {c.status}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-wrap gap-1 max-w-[200px]">
+                              {(c.tags || []).slice(0, 3).map((tag: string) => (
+                                <span key={tag} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary font-mono">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[10px] text-text-secondary">{c.asin || "—"}</td>
+                          <td className="py-3 px-4 text-right">
+                            {!isFromAnalysis && (
+                              <button
+                                onClick={() => handleDeleteCompetitor(c.id)}
+                                className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-danger transition-colors"
+                                title="Delete competitor"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {processedUser.map(c => {
+                  const isFromAnalysis = !c.status;
+                  const id = c.id || `${c.analysis_id}_${c.asin || c.name}`;
+                  return (
+                    <CompetitorGridCard 
+                      key={id} 
+                      competitor={c} 
+                      isFromAnalysis={isFromAnalysis} 
+                      onDelete={() => handleDeleteCompetitor(c.id)} 
+                    />
+                  );
+                })}
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sorted.map((c) => {
-              const isFromAnalysis = !c.status;
-              const id = c.id || `${c.analysis_id}_${c.asin || c.name}`;
-              return (
-                <CompetitorGridCard 
-                  key={id} 
-                  competitor={c} 
-                  isFromAnalysis={isFromAnalysis} 
-                  onDelete={() => handleDeleteCompetitor(c.id)} 
-                />
-              );
-            })}
-          </div>
-        )
-      ) : (
-        <div className="flex flex-col items-center justify-center p-16 bg-surface-2 border border-border rounded-xl text-center">
-          <div className="p-4 rounded-full bg-surface-3 border border-border-strong text-text-secondary mb-4">
-            <Target className="w-10 h-10 opacity-70 animate-pulse" />
-          </div>
-          <h2 className="text-base font-bold text-text-primary mb-1">No competitors found</h2>
-          <p className="text-xs text-text-muted max-w-sm mb-6">
-            Refine your query terms or click the button below to register a new competitor.
-          </p>
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/25"
-          >
-            Add competitor manually
-          </button>
+
         </div>
       )}
 
@@ -526,7 +619,7 @@ export default function CompetitorsPage() {
   );
 }
 
-// ─── Grid Card wrapper with live fetching ────────────────────────────────
+// ─── Grid Card Wrapper ───────────────────────────────────────────
 function CompetitorGridCard({ 
   competitor: c, 
   isFromAnalysis,
@@ -568,8 +661,8 @@ function CompetitorGridCard({
             </span>
           ) : (
             <span className={`inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
-              c.status === "ACTIVE" ? "bg-success-bg border border-success/20 text-success" :
-              c.status === "MONITORING" ? "bg-warning-bg border border-warning/20 text-warning" :
+              c.status.toUpperCase() === "ACTIVE" ? "bg-success-bg border border-success/20 text-success" :
+              c.status.toUpperCase() === "MONITORING" ? "bg-warning-bg border border-warning/20 text-warning" :
               "bg-zinc-800 border border-zinc-700 text-zinc-400"
             }`}>
               {c.status}
@@ -583,7 +676,6 @@ function CompetitorGridCard({
           </p>
         )}
 
-        {/* Live Amazon Data */}
         {c.asin && (
           <div className="grid grid-cols-3 gap-1.5 py-2 border-y border-border/40 text-center font-mono my-3">
             <div className="text-left font-sans">
@@ -608,11 +700,10 @@ function CompetitorGridCard({
           </div>
         )}
 
-        {/* Tags */}
         {c.tags?.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-4">
             {c.tags.slice(0, 3).map((t: string) => (
-              <span key={t} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary">
+              <span key={t} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary font-mono">
                 {t}
               </span>
             ))}

@@ -47,7 +47,7 @@ export function ArtworkTab({ projectId }: { projectId: string }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload failed");
 
-      toast.success("Artwork uploaded and analyzed by Claude Vision!");
+      toast.success("Artwork uploaded and analyzed by Gemini Vision!");
       if (data.suggestions) setActiveSuggestions(data.suggestions);
       fetchArtwork();
     } catch (err: any) {
@@ -74,7 +74,7 @@ export function ArtworkTab({ projectId }: { projectId: string }) {
           <span>Brand Family Artwork & AI Concept Suggestions</span>
         </h3>
         <p className="text-text-muted leading-relaxed">
-          Upload product or packaging artwork. Claude Vision extracts brand color palettes, verifies design guidelines, and generates rough artwork concepts for consistent brand family expansion.
+          Upload product or packaging artwork. Gemini Vision extracts brand color palettes, verifies design guidelines, and generates rough artwork concepts for consistent brand family expansion.
         </p>
       </div>
 
@@ -93,7 +93,7 @@ export function ArtworkTab({ projectId }: { projectId: string }) {
         {uploading ? (
           <div className="flex flex-col items-center justify-center py-2 space-y-2">
             <Loader2 className="w-8 h-8 text-accent animate-spin" />
-            <p className="font-semibold text-text-primary">Claude Vision is analyzing color palettes and brand style…</p>
+            <p className="font-semibold text-text-primary">Gemini Vision is analyzing color palettes and brand style…</p>
           </div>
         ) : (
           <>

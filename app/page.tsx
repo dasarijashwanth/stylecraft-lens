@@ -113,7 +113,7 @@ export default function LandingPage() {
             </div>
             <h3 className="text-sm font-bold text-text-primary">3-Phase AI Analyses</h3>
             <p className="text-xs text-text-secondary leading-relaxed">
-              Activate Claude with real-time web searches to discover emerging challenger threats and evaluate price points.
+              Activate Gemini with real-time Google Search grounding to discover emerging challenger threats and evaluate price points.
             </p>
           </div>
 

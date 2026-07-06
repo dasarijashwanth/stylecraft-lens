@@ -68,11 +68,19 @@ export interface MockCompetitorAnalysis {
 export interface MockReport {
   id: string;
   orgId: string;
+  userId?: string;
   projectId: string | null;
+  analysisId?: string | null;
   title: string;
-  content: any; // TipTap JSON
-  status: "DRAFT" | "IN_REVIEW" | "READY" | "EXPORTED";
+  content: any; // TipTap JSON / full section bundle
+  status: string;
   fileUrl: string | null;
+  // Report section data (kept snake_case to match the Supabase column
+  // contract that the UI and lib/project-context.ts read directly)
+  competitive_analysis?: any;
+  pricing_analysis?: any;
+  go_to_market?: any;
+  content_form?: any;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -159,26 +167,8 @@ class MemoryDatabase {
       }
     ];
 
-    // Seed default project
-    this.projects = [
-      {
-        id: "proj_1",
-        orgId: "dev_org_id",
-        userId: "dev_user_id",
-        name: "Apex Clipper launch",
-        industry: "grooming",
-        targetMarket: "both",
-        productName: "Apex Cordless Clipper",
-        description: "A premium cordless hair clipper with a brushless motor and titanium blades for barber and consumer use.",
-        category: "Hair Clippers & Trimmers",
-        companyContext: "Stylecraft Professional Tools division",
-        motorTech: "Brushless DC",
-        keyDiff: "Interchangeable custom bodies and 4-hour battery life",
-        pricePoint: "$180",
-        createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
-        updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
-      }
-    ];
+    // No default mock projects
+    this.projects = [];
 
     // Seed default notes
     this.notes = [

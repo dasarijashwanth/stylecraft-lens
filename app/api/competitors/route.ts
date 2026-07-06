@@ -112,6 +112,54 @@ export async function GET(request: Request) {
     const limit = parseInt(searchParams.get("limit") || "20", 10);
     
     const tags = tagsParam ? tagsParam.split(",").map(t => t.trim().toLowerCase()) : [];
+
+    if (isSupabaseConfigured) {
+      let query = supabaseAdmin
+        .from("competitors")
+        .select("*", { count: "exact" })
+        .or(`user_id.eq.${session.userId},is_fixed.eq.true`);
+
+      if (search) {
+        query = query.ilike("name", `%${search}%`);
+      }
+      if (status && status !== "ALL") {
+        query = query.eq("status", status.toLowerCase());
+      }
+      if (tags.length > 0) {
+        query = query.contains("tags", tags);
+      }
+
+      const sbOrder = order === "asc";
+      if (sort === "name") {
+        query = query.order("name", { ascending: sbOrder });
+      } else if (sort === "date" || sort === "dateAdded") {
+        query = query.order("created_at", { ascending: sbOrder });
+      } else {
+        query = query.order("updated_at", { ascending: sbOrder });
+      }
+
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
+      query = query.range(from, to);
+
+      const { data: dbComps, count: total, error } = await query;
+      if (error) throw error;
+
+      const competitors = (dbComps || []).map(c => {
+        const threatScore = c.is_fixed ? 35 : Math.floor((c.name.charCodeAt(0) * 7) % 55) + 30;
+        return {
+          ...c,
+          threatScore,
+        };
+      });
+
+      return NextResponse.json({
+        competitors,
+        total: total || 0,
+        page,
+        totalPages: Math.ceil((total || 0) / limit),
+      });
+    }
     
     try {
       // 1. Try PostgreSQL
@@ -274,6 +322,42 @@ export async function POST(request: Request) {
       } catch (e) {
         // Ignore invalid URL formatting for favicon
       }
+    }
+
+    if (isSupabaseConfigured) {
+      const { data: duplicate, error: dupError } = await supabaseAdmin
+        .from("competitors")
+        .select("id")
+        .eq("user_id", session.userId)
+        .ilike("name", name)
+        .maybeSingle();
+      
+      if (dupError) throw dupError;
+      if (duplicate) {
+        return NextResponse.json(
+          { error: "CONFLICT", message: "Competitor with this name already exists" },
+          { status: 409 }
+        );
+      }
+
+      const { data: competitor, error } = await supabaseAdmin
+        .from("competitors")
+        .insert({
+          user_id: session.userId,
+          org_id: session.orgId || session.userId,
+          name,
+          website: website || null,
+          description: description || null,
+          status: status.toLowerCase(),
+          tags: tags || [],
+          logo_url: logoUrl,
+          is_fixed: false,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return NextResponse.json({ competitor }, { status: 201 });
     }
     
     try {

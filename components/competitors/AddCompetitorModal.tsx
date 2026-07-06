@@ -1,8 +1,11 @@
+// components/competitors/AddCompetitorModal.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import { X, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
+import { normalizeUrl } from "@/lib/validations";
+import { useAuth } from "@/hooks/useAuth";
 
 interface AddCompetitorModalProps {
   isOpen: boolean;
@@ -11,6 +14,7 @@ interface AddCompetitorModalProps {
 }
 
 export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCompetitorModalProps) {
+  const { user } = useAuth();
   const [name, setName] = useState("");
   const [website, setWebsite] = useState("");
   const [description, setDescription] = useState("");
@@ -45,28 +49,26 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
       return;
     }
     
-    try {
-      let formattedUrl = website;
-      if (!/^https?:\/\//i.test(website)) {
-        formattedUrl = `https://${website}`;
+    const normalized = normalizeUrl(website);
+    if (!normalized) {
+      setFaviconUrl(null);
+      setErrors(prev => ({
+        ...prev,
+        website: "Please enter a valid URL (e.g., wahlpro.com or https://wahlpro.com)"
+      }));
+    } else {
+      setWebsite(normalized);
+      try {
+        const domain = new URL(normalized).hostname;
+        setFaviconUrl(`https://www.google.com/s2/favicons?sz=64&domain=${domain}`);
+      } catch (e) {
+        setFaviconUrl(null);
       }
-      const parsedUrl = new URL(formattedUrl);
-      const domain = parsedUrl.hostname;
-      setFaviconUrl(`https://www.google.com/s2/favicons?sz=64&domain=${domain}`);
-      setWebsite(formattedUrl);
-      
-      // Clear website error if valid
       setErrors(prev => {
         const next = { ...prev };
         delete next.website;
         return next;
       });
-    } catch (e) {
-      setFaviconUrl(null);
-      setErrors(prev => ({
-        ...prev,
-        website: "Please enter a valid URL (e.g., https://example.com)"
-      }));
     }
   };
 
@@ -112,36 +114,20 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
     setTags(tags.filter(t => t !== tagToRemove));
   };
 
-  const validate = (): boolean => {
-    const newErrors: { [key: string]: string } = {};
-    
-    if (!name.trim()) {
-      newErrors.name = "Company name is required";
-    } else if (name.length < 2) {
-      newErrors.name = "Company name must be at least 2 characters";
-    } else if (name.length > 100) {
-      newErrors.name = "Company name must be 100 characters or less";
-    }
-    
-    if (website) {
-      try {
-        new URL(website);
-      } catch (e) {
-        newErrors.website = "URL must start with https://";
-      }
-    }
-    
-    if (description.length > 500) {
-      newErrors.description = "Description too long — keep it under 500 characters";
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) return;
+    setErrors({});
+
+    if (!name.trim()) {
+      setErrors(prev => ({ ...prev, name: "Company name is required" }));
+      return;
+    }
+
+    const normalizedWebsite = website ? normalizeUrl(website) : null;
+    if (website && !normalizedWebsite) {
+      setErrors(prev => ({ ...prev, website: "Enter a valid URL (e.g. wahlpro.com)" }));
+      return;
+    }
     
     setLoading(true);
     try {
@@ -150,8 +136,8 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          website: website.trim() || undefined,
-          description: description.trim() || undefined,
+          website: normalizedWebsite,
+          description: description.trim(),
           status,
           tags
         })
@@ -265,6 +251,9 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
               )}
             </div>
             {errors.website && <p className="text-[10px] text-danger mt-1">{errors.website}</p>}
+            {website && normalizeUrl(website) && (
+              <p className="text-[10px] text-text-muted mt-1 font-mono">Normalized URL: {normalizeUrl(website)}</p>
+            )}
           </div>
 
           {/* Description */}
@@ -298,80 +287,76 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
               {[
                 { key: "ACTIVE", label: "Active", dotColor: "bg-status-active", hoverLabel: "Actively tracking" },
                 { key: "MONITORING", label: "Monitoring", dotColor: "bg-status-monitoring", hoverLabel: "Light-touch watch" },
-                { key: "ARCHIVED", label: "Archived", dotColor: "bg-status-archived", hoverLabel: "No longer relevant" }
-              ].map((opt) => (
+                { key: "ARCHIVED", label: "Archived", dotColor: "bg-status-archived", hoverLabel: "No longer tracked" }
+              ].map(s => (
                 <button
-                  key={opt.key}
+                  key={s.key}
                   type="button"
-                  onClick={() => setStatus(opt.key as any)}
-                  title={opt.hoverLabel}
-                  className={`flex flex-col items-center justify-center py-2.5 rounded-md text-[11px] font-semibold transition-all duration-200 group ${
-                    status === opt.key 
-                      ? "bg-surface-3 text-text-primary shadow border border-border-strong" 
-                      : "text-text-secondary hover:text-text-primary hover:bg-surface-2/40"
+                  onClick={() => setStatus(s.key as any)}
+                  title={s.hoverLabel}
+                  className={`flex items-center justify-center gap-1.5 py-2 rounded-md text-[10px] font-bold transition-all ${
+                    status === s.key 
+                      ? "bg-surface-3 text-text-primary border border-border-strong shadow-sm" 
+                      : "text-text-secondary hover:text-text-primary"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-1.5 h-1.5 rounded-full ${opt.dotColor}`} />
-                    <span>{opt.label}</span>
-                  </div>
-                  <span className="text-[7px] text-text-muted mt-0.5 hidden group-hover:block transition-all">
-                    {opt.hoverLabel}
-                  </span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${s.dotColor}`} />
+                  <span>{s.label}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Tags */}
+          {/* Tags / Keywords */}
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-text-primary block">
-              Tags <span className="text-[10px] font-normal text-text-muted ml-1">(optional · max 10)</span>
+            <label htmlFor="comp-tags" className="text-xs font-semibold text-text-primary block">
+              Tags / Keywords
             </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={handleTagKeyDown}
-                disabled={tags.length >= 10}
-                placeholder={tags.length >= 10 ? "Limit reached" : "e.g. luxury, cordless"}
-                className={`w-full px-3 py-2 text-xs border rounded-lg bg-surface-1 outline-none text-text-primary placeholder-text-muted transition-all focus:border-accent disabled:opacity-50 disabled:cursor-not-allowed ${
-                  errors.tags ? "border-danger focus:border-danger" : "border-border"
-                }`}
-              />
-              <button
-                type="button"
-                onClick={addTag}
-                disabled={tags.length >= 10 || !tagInput.trim()}
-                className="px-3 py-2 rounded-lg border border-border hover:bg-surface-3 text-xs font-semibold text-text-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                + Add
-              </button>
-            </div>
-            {errors.tags && <p className="text-[10px] text-danger mt-1">{errors.tags}</p>}
-            
-            {/* Render tag pills */}
-            {tags.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-2">
-                {tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md bg-zinc-800 border border-zinc-700 text-zinc-300 transition-colors"
-                  >
-                    <span>{tag}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeTag(tag)}
-                      className="opacity-50 hover:opacity-100 font-bold ml-0.5 text-xs text-text-muted hover:text-text-primary"
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  id="comp-tags"
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={handleTagKeyDown}
+                  placeholder="Type a keyword and press Enter or comma"
+                  className={`flex-1 px-3 py-2 text-xs border rounded-lg bg-surface-1 outline-none text-text-primary placeholder-text-muted transition-all focus:border-accent ${
+                    errors.tags ? "border-danger focus:border-danger" : "border-border"
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={addTag}
+                  className="px-3 py-2 bg-surface-3 hover:bg-surface-3-hover text-text-primary border border-border text-xs font-bold rounded-lg transition-colors shrink-0"
+                >
+                  Add
+                </button>
               </div>
-            )}
-            <p className="text-[9px] text-text-muted">Press Enter, comma, or space to add a tag.</p>
+              
+              {errors.tags && <p className="text-[10px] text-danger">{errors.tags}</p>}
+              
+              {/* Tag Badges list */}
+              {tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 p-2.5 rounded-lg bg-surface-3/30 border border-border min-h-[42px]">
+                  {tags.map((tag) => (
+                    <span 
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-surface-3 border border-border-strong text-[10px] font-semibold text-text-secondary font-mono"
+                    >
+                      <span>{tag}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeTag(tag)}
+                        className="text-text-muted hover:text-text-primary transition-colors ml-0.5"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
         </form>

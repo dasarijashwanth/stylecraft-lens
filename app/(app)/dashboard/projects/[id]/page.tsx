@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ArtworkTab } from "@/components/project/ArtworkTab";
+import { LinkReportModal } from "@/components/project/LinkReportModal";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork";
 
@@ -88,22 +89,6 @@ export default function ProjectDetailPage() {
       router.push("/dashboard/projects");
     } catch (e) {
       toast.error("Failed to delete project");
-    }
-  };
-
-  const handleLinkReport = async (reportId: string) => {
-    try {
-      const res = await fetch(`/api/reports/${reportId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: id })
-      });
-      if (!res.ok) throw new Error();
-      toast.success("Report linked successfully");
-      setLinkingReport(false);
-      fetchProjectDetails();
-    } catch (e) {
-      toast.error("Failed to link report");
     }
   };
 
@@ -336,13 +321,12 @@ export default function ProjectDetailPage() {
       </div>
 
       {/* Link Report Modal */}
-      {linkingReport && (
-        <LinkReportModal
-          projectId={id}
-          onLink={handleLinkReport}
-          onClose={() => setLinkingReport(false)}
-        />
-      )}
+      <LinkReportModal
+        isOpen={linkingReport}
+        projectId={id}
+        onLinked={fetchProjectDetails}
+        onClose={() => setLinkingReport(false)}
+      />
     </div>
   );
 }
@@ -935,75 +919,7 @@ function ContentFormTab({ data, editing, localData, setLocalData }: any) {
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// LINK REPORT MODAL SUBCOMPONENT
-// ────────────────────────────────────────────────────────────────────────────
-function LinkReportModal({ projectId, onLink, onClose }: { projectId: string; onLink: (id: string) => void; onClose: () => void }) {
-  const [reportsList, setReportsList] = useState<any[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [modalLoading, setModalLoading] = useState(true);
-
-  useEffect(() => {
-    fetch("/api/reports")
-      .then(res => res.json())
-      .then(data => {
-        // Find reports not already linked to this project
-        const unlinked = (data.reports || []).filter((r: any) => r.project_id !== projectId && (!r.projects || r.projects.id !== projectId));
-        setReportsList(unlinked);
-        if (unlinked.length > 0) setSelectedId(unlinked[0].id);
-        setModalLoading(false);
-      })
-      .catch(() => setModalLoading(false));
-  }, [projectId]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-surface-2 border border-border rounded-xl p-6 w-full max-w-md space-y-4 shadow-xl">
-        <h3 className="text-sm font-bold text-text-primary">Link an existing report</h3>
-        <p className="text-xs text-text-muted">Select a compiled competitive analysis report to link to this project workspace.</p>
-        
-        {modalLoading ? (
-          <div className="py-6 text-center text-xs text-text-muted flex items-center justify-center gap-1.5">
-            <Loader2 className="w-4 h-4 animate-spin text-accent" />
-            <span>Loading reports…</span>
-          </div>
-        ) : reportsList.length === 0 ? (
-          <div className="py-6 text-center text-xs text-text-muted border border-dashed border-border rounded-lg bg-surface-3/20">
-            No unlinked reports found in database.
-          </div>
-        ) : (
-          <select
-            value={selectedId}
-            onChange={e => setSelectedId(e.target.value)}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary text-xs outline-none focus:border-accent font-semibold"
-          >
-            {reportsList.map(r => (
-              <option key={r.id} value={r.id}>
-                {r.title} ({r.projects?.name || "General"})
-              </option>
-            ))}
-          </select>
-        )}
-
-        <div className="flex justify-end gap-2 text-xs pt-2">
-          <button 
-            onClick={onClose} 
-            className="px-4 py-2 border border-border bg-surface-3/50 hover:bg-surface-3 rounded-lg text-text-secondary font-bold transition-all"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onLink(selectedId)}
-            disabled={!selectedId}
-            className="px-4 py-2 bg-accent hover:bg-accent-hover text-white font-bold rounded-lg disabled:opacity-50 transition-all shadow"
-          >
-            Link Report
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// LinkReportModal subcomponent deleted in favor of shared import
 
 // ────────────────────────────────────────────────────────────────────────────
 // PROJECT OUTPUTS BAR COMPONENT (Sales Kit, TDS, Drive)

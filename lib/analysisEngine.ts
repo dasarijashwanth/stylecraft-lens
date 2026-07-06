@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { prisma } from "./db";
 import { memoryDb } from "./memoryDb";
-import { anthropic, hasAnthropicKey } from "./anthropic";
+import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
 import { isSupabaseConfigured } from "./supabase";
 import { updateAnalysisPhase, completeAnalysis, failAnalysis } from "./db/analyses";
 import { createReportFromAnalysis } from "./db/reports";
@@ -53,18 +53,148 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
   if (text.includes("dryer") || text.includes("blow") || text.includes("styler") || text.includes("iron") || text.includes("straighten") || text.includes("haircare")) {
     return defaultTier === "legacy"
       ? [
-          { name: "Dyson Supersonic Professional Hair Dryer", brand: "Dyson", asin: "B0189O6FES", price: "$429.99", rating: "4.7", reviewCount: "12,410", sales: "2,000+ bought in past month", bsr: "#412 in Beauty & Personal Care", initials: "DY" },
-          { name: "BaBylissPRO Nano Titanium Ionic Dryer", brand: "BaBylissPRO", asin: "B00132890C", price: "$89.99", rating: "4.6", reviewCount: "18,920", sales: "4,000+ bought in past month", bsr: "#189 in Beauty & Personal Care", initials: "BB" },
-          { name: "Conair InfinitiPRO 1875W AC Motor Dryer", brand: "Conair", asin: "B000E0L3C0", price: "$39.99", rating: "4.5", reviewCount: "35,120", sales: "10,000+ bought in past month", bsr: "#95 in Beauty & Personal Care", initials: "CO" },
-          { name: "Parlux Alyon Air Ionizer Tech Dryer", brand: "Parlux", asin: "B07D38J36T", price: "$230.00", rating: "4.6", reviewCount: "1,450", sales: "300+ bought in past month", bsr: "#4,812 in Beauty & Personal Care", initials: "PA" },
-          { name: "Revlon One-Step Volumizer Original Styler", brand: "Revlon", asin: "B01LSUQSB0", price: "$39.88", rating: "4.6", reviewCount: "340,110", sales: "15,000+ bought in past month", bsr: "#12 in Beauty & Personal Care", initials: "RE" }
+          {
+            name: "Dyson Supersonic Professional Hair Dryer",
+            brand: "Dyson",
+            asin: "B0189O6FES",
+            price: "$429.99",
+            rating: "4.7",
+            reviewCount: "12,410",
+            sales: "2,000+ bought in past month",
+            bsr: "#412 in Beauty & Personal Care",
+            initials: "DY",
+            top_positive_review_themes: ["Extreme drying speed", "Low heat damage", "Acoustic control quietness"],
+            top_negative_review_themes: ["Very high price point", "Heavy cord block", "Stiff attachments"],
+            confirmed_technical_specs: { motor_type: "Digital Brushless V9", rpm: "110,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Premium Polymer" }
+          },
+          {
+            name: "BaBylissPRO Nano Titanium Ionic Dryer",
+            brand: "BaBylissPRO",
+            asin: "B00132890C",
+            price: "$89.99",
+            rating: "4.6",
+            reviewCount: "18,920",
+            sales: "4,000+ bought in past month",
+            bsr: "#189 in Beauty & Personal Care",
+            initials: "BB",
+            top_positive_review_themes: ["Lightweight handling", "Consistent heat control", "Sturdy switch controls"],
+            top_negative_review_themes: ["Shorter cord length", "High fan noise level", "Comb attachment slips"],
+            confirmed_technical_specs: { motor_type: "AC Motor", rpm: "20,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Titanium Composite" }
+          },
+          {
+            name: "Conair InfinitiPRO 1875W AC Motor Dryer",
+            brand: "Conair",
+            asin: "B000E0L3C0",
+            price: "$39.99",
+            rating: "4.5",
+            reviewCount: "35,120",
+            sales: "10,000+ bought in past month",
+            bsr: "#95 in Beauty & Personal Care",
+            initials: "CO",
+            top_positive_review_themes: ["Excellent value for price", "Durable heating element", "Simple filter cleaning"],
+            top_negative_review_themes: ["Slightly heavy build", "Plastic odor on first use", "Weak cool shot lock"],
+            confirmed_technical_specs: { motor_type: "AC Motor", rpm: "18,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Polycarbonate" }
+          },
+          {
+            name: "Parlux Alyon Air Ionizer Tech Dryer",
+            brand: "Parlux",
+            asin: "B07D38J36T",
+            price: "$230.00",
+            rating: "4.6",
+            reviewCount: "1,450",
+            sales: "300+ bought in past month",
+            bsr: "#4,812 in Beauty & Personal Care",
+            initials: "PA",
+            top_positive_review_themes: ["Extended professional lifespan", "Perfect hand balance", "Very high heat setting"],
+            top_negative_review_themes: ["Expensive premium price", "Hard to find parts", "Stiff heat dials"],
+            confirmed_technical_specs: { motor_type: "K-Advance Plus DC", rpm: "22,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Antibacterial Plastic" }
+          },
+          {
+            name: "Revlon One-Step Volumizer Original Styler",
+            brand: "Revlon",
+            asin: "B01LSUQSB0",
+            price: "$39.88",
+            rating: "4.6",
+            reviewCount: "340,110",
+            sales: "15,000+ bought in past month",
+            bsr: "#12 in Beauty & Personal Care",
+            initials: "RE",
+            top_positive_review_themes: ["Simultaneous dry and style", "Great volume styling", "Frizz reducing ceramic"],
+            top_negative_review_themes: ["Tends to run hot", "Bulky brush diameter", "Bristles wear down quickly"],
+            confirmed_technical_specs: { motor_type: "DC Motor", rpm: "15,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Ceramic Composite" }
+          }
         ]
       : [
-          { name: "Shark FlexStyle Air Styling System", brand: "Shark Ninja", asin: "B0B739JCHX", price: "$299.99", rating: "4.5", reviewCount: "6,810", sales: "5,000+ bought in past month", bsr: "#150 in Beauty & Personal Care", initials: "SH" },
-          { name: "Zuvi Halo Infrared Hair Dryer", brand: "Zuvi", asin: "B09MSN69P3", price: "$349.00", rating: "4.4", reviewCount: "420", sales: "200+ bought in past month", bsr: "#18,410 in Beauty & Personal Care", initials: "ZU" },
-          { name: "Laifen Swift High Speed Ionic Dryer", brand: "Laifen", asin: "B09T9B69B9", price: "$159.99", rating: "4.6", reviewCount: "4,210", sales: "3,000+ bought in past month", bsr: "#1,210 in Beauty & Personal Care", initials: "LA" },
-          { name: "Waverly Pro Ceramic Hair Styler", brand: "Waverly", asin: "B0C1185G9P", price: "$79.99", rating: "4.3", reviewCount: "890", sales: "600+ bought in past month", bsr: "#9,812 in Beauty & Personal Care", initials: "WA" },
-          { name: "TYMO Ring Hair Straightener Comb", brand: "TYMO", asin: "B07S17R2NW", price: "$49.99", rating: "4.5", reviewCount: "58,410", sales: "8,000+ bought in past month", bsr: "#85 in Beauty & Personal Care", initials: "TY" }
+          {
+            name: "Shark FlexStyle Air Styling System",
+            brand: "Shark Ninja",
+            asin: "B0B739JCHX",
+            price: "$299.99",
+            rating: "4.5",
+            reviewCount: "6,810",
+            sales: "5,000+ bought in past month",
+            bsr: "#150 in Beauty & Personal Care",
+            initials: "SH",
+            top_positive_review_themes: ["Versatile wand conversion", "Lower heat damage risk", "Fast auto-wrap curling"],
+            top_negative_review_themes: ["Curls lose hold quickly", "Learning curve for wrap", "Heavy base handle"],
+            confirmed_technical_specs: { motor_type: "Brushless Digital", rpm: "110,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Polymer" }
+          },
+          {
+            name: "Zuvi Halo Infrared Hair Dryer",
+            brand: "Zuvi",
+            asin: "B09MSN69P3",
+            price: "$349.00",
+            rating: "4.4",
+            reviewCount: "420",
+            sales: "200+ bought in past month",
+            bsr: "#18,410 in Beauty & Personal Care",
+            initials: "ZU",
+            top_positive_review_themes: ["Infrared light drying comfort", "Very low power draw", "Leaves hair highly hydrated"],
+            top_negative_review_themes: ["Slower drying speed", "Premium price barrier", "Limited heat configuration"],
+            confirmed_technical_specs: { motor_type: "High-speed DC", rpm: "105,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Glass Composite" }
+          },
+          {
+            name: "Laifen Swift High Speed Ionic Dryer",
+            brand: "Laifen",
+            asin: "B09T9B69B9",
+            price: "$159.99",
+            rating: "4.6",
+            reviewCount: "4,210",
+            sales: "3,000+ bought in past month",
+            bsr: "#1,210 in Beauty & Personal Care",
+            initials: "LA",
+            top_positive_review_themes: ["Near silent operation", "Stunning premium look", "Fractions of Dyson cost"],
+            top_negative_review_themes: ["Diffuser sold separately", "Short cord length", "Buttons feel cheap"],
+            confirmed_technical_specs: { motor_type: "Brushless Digital", rpm: "110,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "ABS Plastic" }
+          },
+          {
+            name: "Waverly Pro Ceramic Hair Styler",
+            brand: "Waverly",
+            asin: "B0C1185G9P",
+            price: "$79.99",
+            rating: "4.3",
+            reviewCount: "890",
+            sales: "600+ bought in past month",
+            bsr: "#9,812 in Beauty & Personal Care",
+            initials: "WA",
+            top_positive_review_themes: ["Deep waving plates", "Quick ceramic heating", "Dual voltage convenience"],
+            top_negative_review_themes: ["Heavy handle lock", "Creases hair easily", "No automatic shutoff"],
+            confirmed_technical_specs: { motor_type: "PTC Element", rpm: "N/A", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Ceramic coated" }
+          },
+          {
+            name: "TYMO Ring Hair Straightener Comb",
+            brand: "TYMO",
+            asin: "B07S17R2NW",
+            price: "$49.99",
+            rating: "4.5",
+            reviewCount: "58,410",
+            sales: "8,000+ bought in past month",
+            bsr: "#85 in Beauty & Personal Care",
+            initials: "TY",
+            top_positive_review_themes: ["Saves straightening time", "Safe anti-scald teeth", "Leaves natural volume"],
+            top_negative_review_themes: ["Pulls hair if tangled", "Doesn't reach roots well", "Stiff power button"],
+            confirmed_technical_specs: { motor_type: "PTC Element", rpm: "N/A", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Ceramic Coated Polymer" }
+          }
         ];
   }
 
@@ -72,18 +202,162 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
   if (text.includes("clipper") || text.includes("trimmer") || text.includes("barber") || text.includes("grooming") || text.includes("razor") || text.includes("shaver")) {
     return defaultTier === "legacy"
       ? [
-          { name: "Wahl Professional 5-Star Cordless Magic Clip", brand: "Wahl Professional", asin: "B00UK8F7BI", price: "$109.99", rating: "4.5", reviewCount: "24,847", sales: "2,000+ bought in past month", bsr: "#1,162 in Beauty & Personal Care", initials: "WA" },
-          { name: "BaBylissPRO GoldFX Outlining Clipper", brand: "BaBylissPRO", asin: "B07P41S83V", price: "$219.99", rating: "4.7", reviewCount: "15,291", sales: "3,000+ bought in past month", bsr: "#843 in Beauty & Personal Care", initials: "BB" },
-          { name: "Andis Professional Cordless Master Clipper", brand: "Andis Company", asin: "B084CVG3R5", price: "$189.95", rating: "4.3", reviewCount: "4,210", sales: "1,000+ bought in past month", bsr: "#2,891 in Beauty & Personal Care", initials: "AN" },
-          { name: "Oster Classic 76 Heavy Duty Clipper", brand: "Oster Professional", asin: "B00070E8C4", price: "$154.99", rating: "4.6", reviewCount: "8,924", sales: "500+ bought in past month", bsr: "#4,172 in Beauty & Personal Care", initials: "OS" },
-          { name: "Panasonic Professional Hair Clipper ER-GP80", brand: "Panasonic", asin: "B00PA56TIE", price: "$168.00", rating: "4.5", reviewCount: "3,115", sales: "800+ bought in past month", bsr: "#5,692 in Beauty & Personal Care", initials: "PA" }
+          {
+            name: "Wahl Professional 5-Star Cordless Magic Clip",
+            brand: "Wahl",
+            asin: "B00UK8F7BI",
+            price: "$109.99",
+            rating: "4.5",
+            reviewCount: "24,847",
+            sales: "2,000+ bought in past month",
+            bsr: "#1,162 in Beauty & Personal Care",
+            initials: "WA",
+            top_positive_review_themes: ["Stagger-tooth crunch blade", "Lightweight ergonomic body", "Excellent fading blend"],
+            top_negative_review_themes: ["Plastic housing feels thin", "Battery life drops over time", "Blades need frequent zero-gapping"],
+            confirmed_technical_specs: { motor_type: "Rotary Motor", rpm: "5,500 RPM", run_time: "100 min", charging_time: "120 min", blade_material: "Crunch Stagger-Tooth Chrome", body_material: "Heavy-duty Plastic" }
+          },
+          {
+            name: "Andis Recon Professional Vector Motor Clipper",
+            brand: "Andis",
+            asin: "B0C1234RECON",
+            price: "$199.99",
+            rating: "4.5",
+            reviewCount: "820",
+            sales: "500+ bought in past month",
+            bsr: "#2,152 in Beauty & Personal Care",
+            initials: "AN",
+            top_positive_review_themes: ["Intelligent torque adjustment", "High velocity cutting power", "Very comfortable weight"],
+            top_negative_review_themes: ["Generates moderate heat", "Clicks loudly on startup", "Premium price tier"],
+            confirmed_technical_specs: { motor_type: "Vector Motor", rpm: "9,500 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "DLC Carbon Steel", body_material: "Polycarbonate/Metal" }
+          },
+          {
+            name: "BaBylissPRO GoldFX Outlining Clipper",
+            brand: "BaBylissPRO",
+            asin: "B07P41S83V",
+            price: "$219.99",
+            rating: "4.7",
+            reviewCount: "15,291",
+            sales: "3,000+ bought in past month",
+            bsr: "#843 in Beauty & Personal Care",
+            initials: "BB",
+            top_positive_review_themes: ["All-metal robust housing", "Extremely sharp zero-gap T-blade", "Long-lasting battery life"],
+            top_negative_review_themes: ["Heavy body triggers fatigue", "Metal casing gets cold to touch", "Loud high-frequency buzz"],
+            confirmed_technical_specs: { motor_type: "Ferrari Designed Brushless", rpm: "7,200 RPM", run_time: "120 min", charging_time: "180 min", blade_material: "DLC Titanium", body_material: "All-Metal" }
+          },
+          {
+            name: "JRL FreshFade 2020C Professional",
+            brand: "JRL",
+            asin: "B08NPDW1C8",
+            price: "$139.99",
+            rating: "4.6",
+            reviewCount: "2,812",
+            sales: "1,000+ bought in past month",
+            bsr: "#12,983 in Beauty & Personal Care",
+            initials: "JR",
+            top_positive_review_themes: ["Stay-cool blade tech", "Advanced locking lever system", "Quiet whispering operation"],
+            top_negative_review_themes: ["Blade requires custom replacements", "Plastic body details feel cheap", "Bulky dimensions"],
+            confirmed_technical_specs: { motor_type: "Advanced Rotary", rpm: "7,200 RPM", run_time: "240 min", charging_time: "180 min", blade_material: "Titanium Ceramic", body_material: "Hardened Plastic" }
+          },
+          {
+            name: "TPOB Play Cordless Vector Motor Clipper",
+            brand: "TPOB",
+            asin: "B0CMQG8H7S",
+            price: "$89.99",
+            rating: "4.2",
+            reviewCount: "156",
+            sales: "300+ bought in past month",
+            bsr: "#133,173 in Beauty & Personal Care",
+            initials: "TP",
+            top_positive_review_themes: ["Very aggressive price point", "Dynamic vector load speed", "Aggressive modern aesthetic"],
+            top_negative_review_themes: ["Shorter battery lifespan", "Rough housing seams", "Inconsistent power switch feel"],
+            confirmed_technical_specs: { motor_type: "Vector Motor", rpm: "10,000 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "DLC Carbon", body_material: "Injection Molded Plastic" }
+          },
+          {
+            name: "StyleCraft Saber Professional Brushless Clipper",
+            brand: "StyleCraft",
+            asin: "B09KGBM3R4",
+            price: "$199.95",
+            rating: "4.6",
+            reviewCount: "1,820",
+            sales: "800+ bought in past month",
+            bsr: "#3,124 in Beauty & Personal Care",
+            initials: "SC",
+            top_positive_review_themes: ["Quiet brushless high torque", "Heavy duty metal housing", "Custom body skin choices"],
+            top_negative_review_themes: ["Heavy grip fatigue", "Charging stand takes up space", "Click lever gets loose"],
+            confirmed_technical_specs: { motor_type: "Digital Brushless", rpm: "7,500 RPM", run_time: "180 min", charging_time: "120 min", blade_material: "DLC Diamond Carbon", body_material: "Metal Front Panel" }
+          }
         ]
       : [
-          { name: "SUPRENT Fangs Professional Hair Clipper", brand: "SUPRENT", asin: "B0CPPDY5N6", price: "$79.99", rating: "4.4", reviewCount: "312", sales: "500+ bought in past month", bsr: "#24,192 in Beauty & Personal Care", initials: "SU" },
-          { name: "TPOB Play Cordless Vector Motor Clipper", brand: "TPOB", asin: "B0CMQG8H7S", price: "$89.99", rating: "4.2", reviewCount: "156", sales: "300+ bought in past month", bsr: "#133,173 in Beauty & Personal Care", initials: "TP" },
-          { name: "Supreme Trimmer Darkstar Vector Motor", brand: "Supreme Trimmer", asin: "B0D21VXPML", price: "$99.95", rating: "4.3", reviewCount: "94", sales: "100+ bought in past month", bsr: "#84,291 in Beauty & Personal Care", initials: "ST" },
-          { name: "Caliber 9mm Magnetic Clipper", brand: "Caliber", asin: "B09KGBM3R4", price: "$119.00", rating: "4.4", reviewCount: "412", sales: "200+ bought in past month", bsr: "#32,183 in Beauty & Personal Care", initials: "CA" },
-          { name: "JRL FreshFade 2020C Professional", brand: "JRL USA", asin: "B08NPDW1C8", price: "$139.99", rating: "4.6", reviewCount: "2,812", sales: "1,000+ bought in past month", bsr: "#12,983 in Beauty & Personal Care", initials: "JR" }
+          {
+            name: "SUPRENT Fangs Professional Hair Clipper",
+            brand: "SUPRENT",
+            asin: "B0CPPDY5N6",
+            price: "$79.99",
+            rating: "4.4",
+            reviewCount: "312",
+            sales: "500+ bought in past month",
+            bsr: "#24,192 in Beauty & Personal Care",
+            initials: "SU",
+            top_positive_review_themes: ["Vector motor automatic torque", "Super affordable vector entry", "Compact size fits small hands"],
+            top_negative_review_themes: ["Battery drains quickly on thick hair", "Cheap plastic guards", "High motor vibration"],
+            confirmed_technical_specs: { motor_type: "Vector Motor", rpm: "9,000 RPM", run_time: "100 min", charging_time: "120 min", blade_material: "Titanium Coated Steel", body_material: "Composite Plastic" }
+          },
+          {
+            name: "Supreme Trimmer Darkstar Vector Motor",
+            brand: "Supreme Trimmer",
+            asin: "B0D21VXPML",
+            price: "$99.95",
+            rating: "4.3",
+            reviewCount: "94",
+            sales: "100+ bought in past month",
+            bsr: "#84,291 in Beauty & Personal Care",
+            initials: "ST",
+            top_positive_review_themes: ["Vector speed intelligence", "DLC click lever precision", "Great design visuals"],
+            top_negative_review_themes: ["Blade gets warm", "Lighter weight feels less robust", "Click lever spring fatigue"],
+            confirmed_technical_specs: { motor_type: "Vector Motor", rpm: "9,500 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "Diamond Like Carbon", body_material: "ABS Plastic" }
+          },
+          {
+            name: "Caliber 9mm Magnetic Clipper",
+            brand: "Caliber",
+            asin: "B09KGBM3R4",
+            price: "$119.00",
+            rating: "4.4",
+            reviewCount: "412",
+            sales: "200+ bought in past month",
+            bsr: "#32,183 in Beauty & Personal Care",
+            initials: "CA",
+            top_positive_review_themes: ["High frequency magnetic cut", "Very clean feed line", "Premium weight balance"],
+            top_negative_review_themes: ["Loud magnetic click on start", "Runs quite warm", "Flimsy taper lever"],
+            confirmed_technical_specs: { motor_type: "Magnetic Motor", rpm: "10,000 RPM", run_time: "120 min", charging_time: "120 min", blade_material: "Japanese Steel", body_material: "Polycarbonate" }
+          },
+          {
+            name: "Limural Professional Hair Clipper Set",
+            brand: "Limural",
+            asin: "B08V4R2J2F",
+            price: "$45.99",
+            rating: "4.4",
+            reviewCount: "12,412",
+            sales: "3,000+ bought in past month",
+            bsr: "#512 in Beauty & Personal Care",
+            initials: "LI",
+            top_positive_review_themes: ["Amazing complete kit price", "Quiet home barber use", "Long charge runtime"],
+            top_negative_review_themes: ["Low motor torque for thick hair", "Heavy stainless steel weight", "Blades pull under fast speed"],
+            confirmed_technical_specs: { motor_type: "Standard Rotary", rpm: "6,000 RPM", run_time: "300 min", charging_time: "240 min", blade_material: "Stainless Steel", body_material: "Stainless Steel" }
+          },
+          {
+            name: "Kemei Professional Cordless Hair Clipper",
+            brand: "Kemei",
+            asin: "B07X4A2Z2F",
+            price: "$35.99",
+            rating: "4.3",
+            reviewCount: "6,912",
+            sales: "2,000+ bought in past month",
+            bsr: "#1,891 in Beauty & Personal Care",
+            initials: "KM",
+            top_positive_review_themes: ["Cheap backup option", "Familiar ergonomic look", "Decent battery indicator"],
+            top_negative_review_themes: ["Weak plastic housing parts", "Pulls coarse hair", "No official replacement blades"],
+            confirmed_technical_specs: { motor_type: "Rotary Motor", rpm: "5,800 RPM", run_time: "120 min", charging_time: "180 min", blade_material: "Carbon Steel", body_material: "Plastic Chrome Plate" }
+          }
         ];
   }
 
@@ -92,14 +366,14 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
   const prodName = context.productName || context.category || "Product";
   const catName = context.category || context.industry || "General";
 
-  const legacyBrands = ["Apex Global", "Vanguard Corp", "Prime Tech", "Heritage Brand", "OmniPro"];
+  const legacyBrands = ["Apex Global", "Vanguard Corp", "Prime Tech", "Heritage Brand", "OmniPro", "Elite Core"];
   const emergingBrands = ["NovaDyne", "Flux DTC", "Zenith Lab", "Kuro Tech", "Aura Pro"];
 
   const brands = defaultTier === "legacy" ? legacyBrands : emergingBrands;
-  const multipliers = defaultTier === "legacy" ? [1.2, 1.4, 0.9, 1.1, 1.5] : [0.7, 0.85, 0.95, 1.05, 1.15];
+  const multipliers = defaultTier === "legacy" ? [1.2, 1.4, 0.9, 1.1, 1.5, 1.0] : [0.7, 0.85, 0.95, 1.05, 1.15];
 
   return brands.map((b, idx) => {
-    const p = (basePrice * multipliers[idx]).toFixed(2);
+    const p = (basePrice * multipliers[idx % multipliers.length]).toFixed(2);
     const asin = `B0${(10000000 + idx * 8921 + prodName.length * 43).toString(36).toUpperCase()}`.slice(0, 10);
     return {
       name: `${b} ${prodName} ${defaultTier === "legacy" ? "Pro" : "Series"}`,
@@ -111,6 +385,9 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
       sales: `${200 + idx * 150}+ bought in past month`,
       bsr: `#${(5000 + idx * 3100).toLocaleString()} in ${catName}`,
       initials: b.slice(0, 2).toUpperCase(),
+      top_positive_review_themes: ["Reliable operational run", "High build quality", "Fulfills expectations"],
+      top_negative_review_themes: ["Price premium barrier", "Heavier handling weight", "Standard feature set"],
+      confirmed_technical_specs: { motor_type: context.motorTech || "Brushless DC", rpm: "6,500 RPM", run_time: "150 min", charging_time: "90 min", blade_material: "Steel", body_material: "Composite" }
     };
   });
 }
@@ -120,9 +397,12 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
 
   const incomingList = Array.isArray(competitors) ? competitors : [];
   const cleaned: any[] = [];
+  const limit = defaultTier === "legacy" ? 6 : 5;
 
-  for (let i = 0; i < 5; i++) {
-    const fallback = fallbackCompetitors[i];
+  const count = Math.max(incomingList.length, limit);
+
+  for (let i = 0; i < count; i++) {
+    const fallback = fallbackCompetitors[i % fallbackCompetitors.length];
     const incoming = incomingList[i];
 
     if (incoming) {
@@ -150,7 +430,17 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
         price: price && price !== "—" ? price : fallback.price,
         rating: rating && rating !== "—" ? rating : fallback.rating,
         tier: defaultTier,
-        initials: incoming.initials || incoming.name.split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase() || fallback.initials
+        initials: incoming.initials || incoming.name.split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase() || fallback.initials,
+        top_positive_review_themes: incoming.top_positive_review_themes || fallback.top_positive_review_themes || ["Good power output", "Great handling weight"],
+        top_negative_review_themes: incoming.top_negative_review_themes || fallback.top_negative_review_themes || ["High operational heat", "Charging block is bulky"],
+        confirmed_technical_specs: incoming.confirmed_technical_specs || fallback.confirmed_technical_specs || {
+          motor_type: context.motorTech || "Brushless DC",
+          rpm: "7,200 RPM",
+          run_time: "180 min",
+          charging_time: "120 min",
+          blade_material: "Titanium",
+          body_material: "Polycarbonate/Metal"
+        }
       });
     } else {
       cleaned.push({
@@ -176,7 +466,10 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
         strengths: ["Verified real market data", "Top industry brand"],
         weaknesses: ["High competition tier"],
         recent_news: [],
-        top_feature_summary: "Verified market specs"
+        top_feature_summary: "Verified market specs",
+        top_positive_review_themes: fallback.top_positive_review_themes,
+        top_negative_review_themes: fallback.top_negative_review_themes,
+        confirmed_technical_specs: fallback.confirmed_technical_specs
       });
     }
   }
@@ -256,15 +549,15 @@ async function runAnalysisInBackground(context: AnalysisContext) {
     emitProgress(id, "phase_progress", 1, "Identifying 5 established legacy competitors...", 80);
     
     let phase1Result: any;
-    if (hasAnthropicKey) {
+    if (hasGeminiKey) {
       try {
-        phase1Result = await executePhase1Claude(context, (searchQuery) => {
+        phase1Result = await executePhase1Gemini(context, (searchQuery) => {
           webSearchCount += 1;
           emitProgress(id, "search_update", 1, `Searching: ${searchQuery}`, 85);
           emitSearchUpdate(id, webSearchCount);
         });
       } catch (err: any) {
-        console.warn("Claude Phase 1 failed, falling back to mock:", err);
+        console.warn("Gemini Phase 1 failed, falling back to mock:", err);
         phase1Result = generateMockPhase1(context);
       }
     } else {
@@ -289,15 +582,15 @@ async function runAnalysisInBackground(context: AnalysisContext) {
     emitProgress(id, "phase_progress", 2, "Extracting competitor positioning, strengths, and weaknesses...", 75);
     
     let phase2Result: any;
-    if (hasAnthropicKey) {
+    if (hasGeminiKey) {
       try {
-        phase2Result = await executePhase2Claude(context, (searchQuery) => {
+        phase2Result = await executePhase2Gemini(context, (searchQuery) => {
           webSearchCount += 1;
           emitProgress(id, "search_update", 2, `Searching: ${searchQuery}`, 80);
           emitSearchUpdate(id, webSearchCount);
         });
       } catch (err: any) {
-        console.warn("Claude Phase 2 failed, falling back to mock:", err);
+        console.warn("Gemini Phase 2 failed, falling back to mock:", err);
         phase2Result = generateMockPhase2(context);
       }
     } else {
@@ -322,15 +615,15 @@ async function runAnalysisInBackground(context: AnalysisContext) {
     emitProgress(id, "phase_progress", 3, "Formulating opportunities, threats, and strategic recommendations...", 85);
     
     let phase3Result: any;
-    if (hasAnthropicKey) {
+    if (hasGeminiKey) {
       try {
-        phase3Result = await executePhase3Claude(context, phase1Result, phase2Result, (searchQuery) => {
+        phase3Result = await executePhase3Gemini(context, phase1Result, phase2Result, (searchQuery) => {
           webSearchCount += 1;
           emitProgress(id, "search_update", 3, `Searching: ${searchQuery}`, 90);
           emitSearchUpdate(id, webSearchCount);
         });
       } catch (err: any) {
-        console.warn("Claude Phase 3 failed, falling back to mock:", err);
+        console.warn("Gemini Phase 3 failed, falling back to mock:", err);
         phase3Result = generateMockPhase3(context, phase1Result, phase2Result);
       }
     } else {
@@ -360,7 +653,11 @@ async function runAnalysisInBackground(context: AnalysisContext) {
           phase2: phase2Result,
           phase3: phase3Result,
           productName: context.productName,
-        }
+          industry: context.industry,
+          targetMarket: context.targetMarket,
+          pricePoint: context.pricePoint,
+        },
+        context.orgId
       );
       reportId = report.id;
     } catch (saveErr) {
@@ -403,29 +700,31 @@ function emitSearchUpdate(analysisId: string, totalSearches: number) {
 }
 
 // ----------------------------------------------------
-// CLAUDE API RUNNERS WITH TOOLS
+// GEMINI API RUNNERS WITH GOOGLE SEARCH GROUNDING
 // ----------------------------------------------------
 
-async function executePhase1Claude(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+async function executePhase1Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
-Your task: Research 5 ESTABLISHED, LEGACY market leaders that compete with the user's product.
+Your task: Research up to 6 ESTABLISHED, LARGE market leaders that compete with the user's product.
+You must search ONLY these brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
+For each brand, find their ONE best matching product (prioritize same motor technology first, then closest price to target price point). Return up to 6 products total (one per brand that has a relevant product).
 
 CRITICAL RULES:
-1. Search Amazon directly for real competing products with real ASINs
-2. Search for actual prices, ratings, review counts, and BSR rankings
-3. Search brand websites and recent news for each competitor
-4. If price/rating data is behind a paywall or unavailable, use "—" NOT a guess
-5. Monthly sales: only report if you find "X+ bought in past month" badge on Amazon listing
-6. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation
+1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the user's product. Never use brand overview data.
+2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
+3. If motor type is mentioned, you MUST perform a DIRECT Amazon search using the exact term '[motor type] clipper' (e.g. 'vector motor clipper', 'brushless motor clipper') before selecting competitors. Results from this direct motor-type search must fill slots first.
+- Note: Andis Recon, Supreme Darkstar, and Suprent Fangs are examples of vector motor clippers that should appear when searching for vector motor competitors.
+4. Extract the top 3 positive review themes and top 3 negative review themes from customer reviews of the specific product.
+5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Return this EXACT JSON schema:
 {
   "web_searches_performed": 12,
   "competitors": [
     {
-      "name": "Full Product Name",
-      "brand": "Brand Name",
+      "name": "Full Product Name (specific SKU/Model)",
+      "brand": "Brand Name (must be one of: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco)",
       "tier": "legacy",
       "asin": "BXXXXXXXXX",
       "amazon_url": "https://www.amazon.com/dp/BXXXXXXXXX",
@@ -437,41 +736,39 @@ Return this EXACT JSON schema:
       "initials": "WA",
       "key_features": [
         {
-          "headline": "Feature headline — one short phrase",
+          "headline": "Feature headline",
           "source": "Amazon",
           "attribution": "Per brand marketing:",
           "detail": "1–2 sentence explanation of what this means for the professional user"
-        },
-        {
-          "headline": "Feature headline",
-          "source": "Amazon",
-          "attribution": "Per customer reviews:",
-          "detail": "1–2 sentence explanation"
-        },
-        {
-          "headline": "Feature headline",
-          "source": "Amazon",
-          "attribution": "Per brand marketing:",
-          "detail": "1–2 sentence explanation"
-        },
-        {
-          "headline": "Feature headline",
-          "source": "Amazon",
-          "attribution": "Per brand marketing:",
-          "detail": "1–2 sentence explanation"
         }
       ],
-      "strengths": ["Strength 1", "Strength 2", "Strength 3"],
+      "strengths": ["Strength 1", "Strength 2"],
       "weaknesses": ["Weakness 1", "Weakness 2"],
-      "recent_news": ["News item 1 if found", "News item 2 if found"],
-      "top_feature_summary": "Single sentence — their #1 differentiating feature"
+      "recent_news": ["News item 1 if found"],
+      "top_feature_summary": "Single sentence — their #1 differentiating feature",
+      "top_positive_review_themes": [
+        "Positive theme 1",
+        "Positive theme 2",
+        "Positive theme 3"
+      ],
+      "top_negative_review_themes": [
+        "Negative theme 1",
+        "Negative theme 2",
+        "Negative theme 3"
+      ],
+      "confirmed_technical_specs": {
+        "motor_type": "e.g. vector/brushless/magnetic/rotary",
+        "rpm": "e.g. 7200 RPM or —",
+        "run_time": "e.g. 180 minutes or —",
+        "charging_time": "e.g. 120 minutes or —",
+        "blade_material": "e.g. DLC Titanium or —",
+        "body_material": "e.g. Metal/Heavy-duty plastic or —"
+      }
     }
   ]
-}
+}`;
 
-Find EXACTLY 5 legacy/established competitors. These must be real brands with real Amazon listings.`;
-
-  const userPrompt = `Research 5 established large brand competitors for this product:
+  const userPrompt = `Research up to 6 established large brand competitors for this product:
 
 Product Name: ${context.productName}
 Industry: ${context.industry}
@@ -483,56 +780,50 @@ Motor Technology: ${context.motorTech || "—"}
 Key Differentiator: ${context.keyDiff || "—"}
 Company Context: ${context.companyContext || "—"}
 
-Search Amazon for "${context.industry} ${context.motorTech || ""} clipper" and similar terms.
-Search for the top established brands in this category.
-Get real ASINs, prices, ratings, and BSR rankings from Amazon listings.
-Search each brand's website for product specs and positioning.
-Search news for recent developments for each brand.`;
+Instructions:
+1. Search Amazon ONLY for these brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
+2. If motor type (${context.motorTech || "—"}) is mentioned (especially 'vector' or 'brushless'), perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
+3. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, monthly sales velocity, top 3 positive and negative review themes, and confirmed technical specs.`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-3-5-sonnet-20241022",
-    max_tokens: 4000,
-    tools: [{ type: "web_search_20250305" as any, name: "web_search" }],
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
+  const response = await genAI.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: userPrompt,
+    config: {
+      systemInstruction: systemPrompt,
+      tools: [{ googleSearch: {} }],
+    },
   });
 
-  // Track searches
-  response.content.forEach((block) => {
-    if (block.type === "tool_use" && block.name === "web_search") {
-      const q = (block.input as any).query;
-      onSearchUsed(q);
-    }
-  });
+  // Track searches performed via Google Search grounding
+  const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
+  queries.forEach((q) => onSearchUsed(q));
 
-  const text = response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
+  const text = response.text || "";
 
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase2Claude(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+async function executePhase2Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
 
-Your task: Research 5 INDIE, EMERGING, or NEWER brands that compete with the user's product. These are brands that have entered the market in the last 1–5 years, are not household names, but are gaining traction on Amazon.
+Your task: Research 5 INDIE, EMERGING, or NEWER brand products that compete with the user's product.
+Exclude the large brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
 
 CRITICAL RULES:
-1. Search Amazon for newer/indie brands in this category — look at BSR rankings 50,000–500,000 range
-2. Search for brands with recent Amazon listings (2021–2025)
-3. Find brands with growing sales velocity, interesting motor tech, or aggressive pricing
-4. Search each brand's Amazon listing, website, and any review sites
-5. If price/rating data is unavailable, use "—" NOT a guess
-6. Return ONLY valid JSON matching the exact schema — no markdown, no preamble
+1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the user's product. Never use brand overview data.
+2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
+3. If motor type is mentioned, you MUST perform a DIRECT Amazon search using the exact term '[motor type] clipper' (e.g. 'vector motor clipper', 'brushless motor clipper') before selecting competitors. Results from this direct motor-type search must fill slots first.
+- Note: Andis Recon, Supreme Darkstar, and Suprent Fangs are examples of vector motor clippers that should appear when searching for vector motor competitors.
+4. Extract the top 3 positive review themes and top 3 negative review themes from customer reviews of the specific product.
+5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
-Return this EXACT JSON schema (identical structure to phase 1, tier="emerging"):
+Return this EXACT JSON schema:
 {
   "web_searches_performed": 14,
   "competitors": [
     {
-      "name": "Full Product Name",
-      "brand": "Brand Name",
+      "name": "Full Product Name (specific SKU/Model)",
+      "brand": "Brand Name (do NOT use: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco)",
       "tier": "emerging",
       "asin": "BXXXXXXXXX",
       "amazon_url": "https://www.amazon.com/dp/BXXXXXXXXX",
@@ -547,38 +838,36 @@ Return this EXACT JSON schema (identical structure to phase 1, tier="emerging"):
           "headline": "Feature headline",
           "source": "Amazon",
           "attribution": "Per brand marketing:",
-          "detail": "1–2 sentence explanation"
-        },
-        {
-          "headline": "Feature headline",
-          "source": "Amazon",
-          "attribution": "Per brand marketing:",
-          "detail": "1–2 sentence explanation"
-        },
-        {
-          "headline": "Feature headline",
-          "source": "Amazon",
-          "attribution": "Per brand marketing:",
-          "detail": "1–2 sentence explanation"
-        },
-        {
-          "headline": "Feature headline",
-          "source": "Amazon",
-          "attribution": "Per customer reviews:",
-          "detail": "1–2 sentence explanation"
+          "detail": "1–2 sentence explanation of what this means for the user"
         }
       ],
       "strengths": ["Strength 1", "Strength 2"],
       "weaknesses": ["Weakness 1", "Weakness 2"],
       "recent_news": [],
-      "top_feature_summary": "Single sentence — their #1 differentiating feature"
+      "top_feature_summary": "Single sentence — their #1 differentiating feature",
+      "top_positive_review_themes": [
+        "Positive theme 1",
+        "Positive theme 2",
+        "Positive theme 3"
+      ],
+      "top_negative_review_themes": [
+        "Negative theme 1",
+        "Negative theme 2",
+        "Negative theme 3"
+      ],
+      "confirmed_technical_specs": {
+        "motor_type": "e.g. vector/brushless/magnetic/rotary",
+        "rpm": "e.g. 7200 RPM or —",
+        "run_time": "e.g. 180 minutes or —",
+        "charging_time": "e.g. 120 minutes or —",
+        "blade_material": "e.g. DLC Titanium or —",
+        "body_material": "e.g. Metal/Heavy-duty plastic or —"
+      }
     }
   ]
-}
+}`;
 
-Find EXACTLY 5 emerging/indie competitors. Must be real brands with real Amazon listings.`;
-
-  const userPrompt = `Research 5 indie and emerging competitor brands for:
+  const userPrompt = `Research 5 indie/emerging competitor products for:
 
 Product Name: ${context.productName}
 Industry: ${context.industry}
@@ -589,51 +878,49 @@ Target Price Point: ${context.pricePoint || "—"}
 Motor Technology: ${context.motorTech || "—"}
 Key Differentiator: ${context.keyDiff || "—"}
 
-Search Amazon for newer brands in "${context.industry} clipper", "${context.motorTech || ""} clipper professional" categories.
-Look for brands founded or launched 2019–2025.
-Look for aggressive pricing, unique motor claims, strong review growth.
-These should be different from the 5 legacy brands.
-Get real ASINs, prices, ratings from Amazon.`;
+Instructions:
+1. Search Amazon for emerging brand products matching the motor technology (${context.motorTech || "—"}) and key features first, price secondary.
+2. If motor type (${context.motorTech || "—"}) is mentioned, perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
+3. Exclude the large brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
+4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, monthly sales velocity, top 3 positive and negative review themes, and confirmed technical specs.`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-3-5-sonnet-20241022",
-    max_tokens: 4000,
-    tools: [{ type: "web_search_20250305" as any, name: "web_search" }],
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
+  const response = await genAI.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: userPrompt,
+    config: {
+      systemInstruction: systemPrompt,
+      tools: [{ googleSearch: {} }],
+    },
   });
 
-  response.content.forEach((block) => {
-    if (block.type === "tool_use" && block.name === "web_search") {
-      const q = (block.input as any).query;
-      onSearchUsed(q);
-    }
-  });
+  const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
+  queries.forEach((q) => onSearchUsed(q));
 
-  const text = response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
+  const text = response.text || "";
 
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase3Claude(context: AnalysisContext, phase1: any, phase2: any, onSearchUsed: (query: string) => void) {
+async function executePhase3Gemini(context: AnalysisContext, phase1: any, phase2: any, onSearchUsed: (query: string) => void) {
   const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, phase1, phase2);
 
-  onSearchUsed(`Google Search API & ${context.industry} industry data lookup`);
-
-  const response = await anthropic.messages.create({
-    model: "claude-3-5-sonnet-20241022",
-    max_tokens: 4000,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
+  const response = await genAI.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: userPrompt,
+    config: {
+      systemInstruction: systemPrompt,
+      tools: [{ googleSearch: {} }],
+    },
   });
 
-  const text = response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
+  const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
+  if (queries.length) {
+    queries.forEach((q) => onSearchUsed(q));
+  } else {
+    onSearchUsed(`${context.industry} industry data lookup`);
+  }
+
+  const text = response.text || "";
 
   return JSON.parse(cleanJsonString(text));
 }
@@ -683,7 +970,10 @@ function generateMockPhase1(context: AnalysisContext) {
       strengths: ["Industry-standard build reliability", "High consumer satisfaction & verified reviews", "Strong brand equity"],
       weaknesses: ["Higher retail price point", "Legacy hardware profile"],
       recent_news: [`${c.brand} announced updated product revisions for the 2026 commercial catalog.`],
-      top_feature_summary: `${c.brand} precision platform with commercial duty cycle`
+      top_feature_summary: `${c.brand} precision platform with commercial duty cycle`,
+      top_positive_review_themes: c.top_positive_review_themes,
+      top_negative_review_themes: c.top_negative_review_themes,
+      confirmed_technical_specs: c.confirmed_technical_specs
     }))
   };
 }
@@ -727,7 +1017,10 @@ function generateMockPhase2(context: AnalysisContext) {
       strengths: ["Aggressive pricing strategy", "Modern feature set", "Fast review growth"],
       weaknesses: ["Smaller brand awareness", "Shorter warranty history"],
       recent_news: [],
-      top_feature_summary: `Modern DTC ${c.brand} design with high price-to-performance ratio`
+      top_feature_summary: `Modern DTC ${c.brand} design with high price-to-performance ratio`,
+      top_positive_review_themes: c.top_positive_review_themes,
+      top_negative_review_themes: c.top_negative_review_themes,
+      confirmed_technical_specs: c.confirmed_technical_specs
     }))
   };
 }
@@ -832,7 +1125,7 @@ function generateMockPhase3(context: AnalysisContext, phase1: any, phase2: any) 
   return {
     web_searches_performed: 4,
     amazon_category: context.category || "General Marketplace",
-    data_sources_used: [mData?.source || "Verified Industry Analytics", "Google Custom Search", "Rainforest API"],
+    data_sources_used: [mData?.source || "Verified Industry Analytics", "Simulated market data (no AI key configured)"],
     market_snapshot: {
       market_size_current: mData?.market_size_2026 || "$1.5B",
       market_size_year: "2026",

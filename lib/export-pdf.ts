@@ -132,9 +132,16 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   <div class="report-body">
     ${bodyHtml}
   </div>
-</body>
+ </body>
 </html>`;
   }
+
+  const categoryName = ca.market_snapshot?.amazon_category || "Professional Barbering & Grooming";
+  const dateStr = new Date(report.created_at || Date.now()).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
 
   return `<!DOCTYPE html>
 <html>
@@ -144,37 +151,213 @@ function generatePrintHTML(report: any, activeTab?: string): string {
     @media print { 
       body { margin: 15mm 15mm 15mm 15mm; background: #fff; color: #000; } 
       .no-print { display: none; } 
-      .page-break { page-break-after: always; }
+      .page-break { page-break-after: always; break-after: page; }
+      .comp-card, tr, .rec-card { page-break-inside: avoid; break-inside: avoid; }
     }
     body { 
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-      font-size: 13px; 
-      color: #111; 
-      line-height: 1.6; 
+      font-size: 12px; 
+      color: #1a1a1a; 
+      line-height: 1.5; 
       background: #fff;
       padding: 40px;
       max-width: 800px;
       margin: 0 auto;
     }
-    h1 { font-size: 24px; margin-bottom: 4px; font-weight: 800; color: #000; }
-    h2 { font-size: 16px; margin-top: 24px; margin-bottom: 8px; border-bottom: 2px solid #eee; padding-bottom: 4px; font-weight: 700; color: #111; }
-    h3 { font-size: 13px; margin-top: 16px; margin-bottom: 6px; font-weight: 700; color: #222; }
+    .cover-page {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 80vh;
+      border-left: 8px solid #6366F1;
+      padding: 80px 40px;
+      margin-bottom: 40px;
+      page-break-after: always;
+      break-after: page;
+    }
+    .cover-brand {
+      font-weight: 900;
+      font-size: 20px;
+      letter-spacing: 0.05em;
+      color: #111;
+      margin-bottom: 24px;
+    }
+    .cover-brand span { color: #6366F1; }
+    .cover-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      border-radius: 4px;
+      background: #EEF2FF;
+      color: #4F46E5;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+    .cover-title {
+      font-size: 34px;
+      font-weight: 800;
+      line-height: 1.1;
+      color: #111;
+      margin-bottom: 8px;
+    }
+    .cover-subtitle {
+      font-size: 15px;
+      color: #4B5563;
+      margin-bottom: 40px;
+    }
+    .cover-divider {
+      width: 120px;
+      height: 4px;
+      background: #6366F1;
+      margin-bottom: 40px;
+    }
+    .cover-meta {
+      font-size: 12px;
+      color: #666;
+      line-height: 1.8;
+    }
+    h2 { 
+      font-size: 18px; 
+      margin-top: 32px; 
+      margin-bottom: 12px; 
+      border-bottom: 2px solid #E5E7EB; 
+      padding-bottom: 6px; 
+      font-weight: 800; 
+      color: #111; 
+    }
+    h3 { 
+      font-size: 13px; 
+      margin-top: 20px; 
+      margin-bottom: 8px; 
+      font-weight: 700; 
+      color: #374151; 
+    }
     p { margin: 0 0 10px; }
     ul { margin: 0 0 12px; padding-left: 20px; }
     li { margin-bottom: 6px; }
     .header { border-bottom: 3px solid #111; padding-bottom: 12px; margin-bottom: 20px; }
     .meta { font-size: 11px; color: #666; margin-top: 4px; font-family: monospace; }
-    .competitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-    .comp-card { border: 1px solid #ddd; border-radius: 6px; padding: 10px; background: #fafafa; }
-    .comp-name { font-weight: 700; font-size: 12px; color: #000; }
-    .comp-meta { font-size: 11px; color: #555; margin-top: 2px; }
-    .rec-card { border-left: 3px solid #6366F1; padding: 8px 12px; margin-bottom: 10px; background: #f9f9ff; }
-    .priority-high { border-color: #EF4444; background: #fffcfc; }
-    .priority-medium { border-color: #F59E0B; background: #fffdfa; }
-    .priority-low { border-color: #6B7280; background: #fafafa; }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
-    th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; }
-    th { background: #f5f5f5; font-weight: 700; color: #000; }
+    .competitor-grid { 
+      display: grid; 
+      grid-template-columns: 1fr 1fr; 
+      gap: 16px; 
+      margin-bottom: 24px; 
+    }
+    .comp-card { 
+      border: 1px solid #E5E7EB; 
+      border-radius: 8px; 
+      padding: 16px; 
+      background: #F9FAFB; 
+    }
+    .comp-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    .comp-name { 
+      font-weight: 800; 
+      font-size: 13px; 
+      color: #111; 
+    }
+    .comp-brand {
+      font-size: 10px;
+      font-weight: 700;
+      color: #6366F1;
+      text-transform: uppercase;
+    }
+    .comp-price {
+      font-weight: 800;
+      color: #10B981;
+      font-size: 12px;
+    }
+    .comp-metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 10px;
+      color: #4B5563;
+      margin-bottom: 12px;
+      background: #fff;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #F3F4F6;
+    }
+    .comp-bullet {
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .comp-specs {
+      font-size: 10px;
+      color: #6B7280;
+      border-top: 1px solid #E5E7EB;
+      padding-top: 8px;
+      margin-top: 8px;
+    }
+    .comparison-table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      font-size: 10px; 
+      margin-bottom: 32px; 
+      margin-top: 10px;
+    }
+    .comparison-table th, .comparison-table td { 
+      border: 1px solid #E5E7EB; 
+      padding: 8px 10px; 
+      text-align: left; 
+    }
+    .comparison-table th { 
+      background: #F3F4F6; 
+      font-weight: 700; 
+      color: #374151; 
+    }
+    .rec-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .rec-card { 
+      border-left: 4px solid #6366F1; 
+      padding: 12px 16px; 
+      border-radius: 0 8px 8px 0; 
+      background: #F9FAFB; 
+    }
+    .rec-card.priority-high { 
+      border-color: #EF4444; 
+      background: #FEF2F2; 
+    }
+    .rec-card.priority-medium { 
+      border-color: #F59E0B; 
+      background: #FFFBEB; 
+    }
+    .rec-card.priority-low { 
+      border-color: #10B981; 
+      background: #ECFDF5; 
+    }
+    .rec-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .rec-title {
+      font-weight: 800;
+      font-size: 12px;
+      color: #111;
+    }
+    .rec-badge {
+      font-size: 9px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .rec-badge.high { background: #FCA5A5; color: #991B1B; }
+    .rec-badge.medium { background: #FCD34D; color: #92400E; }
+    .rec-badge.low { background: #6EE7B7; color: #065F46; }
     .logo { font-weight: 800; font-size: 16px; letter-spacing: 0.05em; color: #000; }
     .logo span { color: #6366F1; }
     .badge { display: inline-block; padding: 2px 6px; font-size: 9px; font-weight: 700; border-radius: 3px; text-transform: uppercase; background: #eee; color: #333; }
@@ -182,18 +365,25 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="logo">STYLECRAFT <span>LENS</span></div>
-    <h1>${report.title}</h1>
-    <div class="meta">
-      Report ID: ${report.id} · Generated: ${new Date(report.created_at || Date.now()).toLocaleDateString()}
+  
+  <!-- COVER PAGE -->
+  <div class="cover-page">
+    <div class="cover-brand">STYLECRAFT <span>LENS</span></div>
+    <div class="cover-badge">Competitive Intelligence Report</div>
+    <h1 class="cover-title">${ca.product_name || report.title || "Apex Cordless Clipper"}</h1>
+    <p class="cover-subtitle">Target Category: ${categoryName}</p>
+    <div class="cover-divider"></div>
+    <div class="cover-meta">
+      <div><strong>Prepared For:</strong> StyleCraft B2B Dashboard</div>
+      <div><strong>Date Compiled:</strong> ${dateStr}</div>
+      <div style="font-family: monospace; font-size: 9px; margin-top: 20px; opacity: 0.5;">REPORT ID: ${report.id || "TEMP_ID"}</div>
     </div>
   </div>
 
   ${(showAll || activeTab === "competitive-analysis") ? `
-    <h2>Market Analysis & Gaps</h2>
+    <h2>1. Market Analysis & Gaps</h2>
     <p><strong>Product Name:</strong> ${ca.product_name || report.title}</p>
-    <p><strong>Overview:</strong> ${ca.market_snapshot?.overview_paragraph || "No snapshot available."}</p>
+    <p><strong>Market Overview:</strong> ${ca.market_snapshot?.overview_paragraph || "No snapshot available."}</p>
     
     <h3>Key Industry Trends</h3>
     <ul>
@@ -209,40 +399,131 @@ function generatePrintHTML(report: any, activeTab?: string): string {
 
     <div class="page-break"></div>
 
-    <h2>Competitor Landscapes</h2>
-    <h3>Large / Established Brands</h3>
+    <h2>2. Competitor Landscape</h2>
+    
+    <h3>Established Legacy Brands</h3>
     <div class="competitor-grid">
       ${(ca.large_brand_competitors || []).map((c: any) => `
         <div class="comp-card">
-          <div class="comp-name">${c.name}</div>
-          <div class="comp-meta"><strong>Brand:</strong> ${c.brand || c.name} · <strong>Price:</strong> ${c.price || "—"} · <strong>Rating:</strong> ★ ${c.rating || "—"}</div>
-          <div class="comp-meta"><strong>ASIN:</strong> ${c.asin || "N/A"}</div>
+          <div class="comp-header">
+            <div>
+              <div class="comp-name">${c.name}</div>
+              <div class="comp-brand">${c.brand}</div>
+            </div>
+            <div class="comp-price">${c.price || "—"}</div>
+          </div>
+          <div class="comp-metrics">
+            <div><strong>ASIN:</strong> ${c.asin}</div>
+            <div><strong>Rating:</strong> ★ ${c.rating || "—"} (${c.review_count || "0"})</div>
+            <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
+            <div><strong>Rank:</strong> ${c.bsr_rank || "—"}</div>
+          </div>
+          ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
+          <div class="comp-specs">
+            <strong>Specs:</strong> Motor: ${c.confirmed_technical_specs?.motor_type || "—"} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
+          </div>
         </div>
       `).join("")}
     </div>
+
+    <h3>Legacy Brand Comparison Table</h3>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th style="width: 25%">Model</th>
+          <th style="width: 10%">Price</th>
+          <th style="width: 10%">Rating</th>
+          <th style="width: 12%">Review Count</th>
+          <th style="width: 15%">Monthly Sales</th>
+          <th style="width: 15%">Motor Type</th>
+          <th style="width: 13%">RPM</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(ca.large_brand_competitors || []).map((c: any) => `
+          <tr>
+            <td><strong>${c.name}</strong></td>
+            <td>${c.price || "—"}</td>
+            <td>★ ${c.rating || "—"}</td>
+            <td>${c.review_count || "—"}</td>
+            <td>${c.monthly_sales || "—"}</td>
+            <td>${c.confirmed_technical_specs?.motor_type || "—"}</td>
+            <td>${c.confirmed_technical_specs?.rpm || "—"}</td>
+          </tr>
+        `).join("")}
+        ${(ca.large_brand_competitors || []).length === 0 ? "<tr><td colspan='7'>No legacy competitors analyzed.</td></tr>" : ""}
+      </tbody>
+    </table>
+
+    <div class="page-break"></div>
 
     <h3>Indie & Emerging Brands</h3>
     <div class="competitor-grid">
       ${(ca.indie_emerging_competitors || []).map((c: any) => `
         <div class="comp-card">
-          <div class="comp-name">${c.name}</div>
-          <div class="comp-meta"><strong>Brand:</strong> ${c.brand || c.name} · <strong>Price:</strong> ${c.price || "—"} · <strong>Rating:</strong> ★ ${c.rating || "—"}</div>
-          <div class="comp-meta"><strong>ASIN:</strong> ${c.asin || "N/A"}</div>
+          <div class="comp-header">
+            <div>
+              <div class="comp-name">${c.name}</div>
+              <div class="comp-brand">${c.brand}</div>
+            </div>
+            <div class="comp-price">${c.price || "—"}</div>
+          </div>
+          <div class="comp-metrics">
+            <div><strong>ASIN:</strong> ${c.asin}</div>
+            <div><strong>Rating:</strong> ★ ${c.rating || "—"} (${c.review_count || "0"})</div>
+            <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
+            <div><strong>Rank:</strong> ${c.bsr_rank || "—"}</div>
+          </div>
+          ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
+          <div class="comp-specs">
+            <strong>Specs:</strong> Motor: ${c.confirmed_technical_specs?.motor_type || "—"} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
+          </div>
         </div>
       `).join("")}
     </div>
+
+    <h3>Indie Brand Comparison Table</h3>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th style="width: 25%">Model</th>
+          <th style="width: 10%">Price</th>
+          <th style="width: 10%">Rating</th>
+          <th style="width: 12%">Review Count</th>
+          <th style="width: 15%">Monthly Sales</th>
+          <th style="width: 15%">Motor Type</th>
+          <th style="width: 13%">RPM</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(ca.indie_emerging_competitors || []).map((c: any) => `
+          <tr>
+            <td><strong>${c.name}</strong></td>
+            <td>${c.price || "—"}</td>
+            <td>★ ${c.rating || "—"}</td>
+            <td>${c.review_count || "—"}</td>
+            <td>${c.monthly_sales || "—"}</td>
+            <td>${c.confirmed_technical_specs?.motor_type || "—"}</td>
+            <td>${c.confirmed_technical_specs?.rpm || "—"}</td>
+          </tr>
+        `).join("")}
+        ${(ca.indie_emerging_competitors || []).length === 0 ? "<tr><td colspan='7'>No indie competitors analyzed.</td></tr>" : ""}
+      </tbody>
+    </table>
+
+    <div class="page-break"></div>
 
     <h3>Strategic Positioning Statement</h3>
     <p>${ca.positioning_recommendation || "No positioning recommendation specified."}</p>
   ` : ""}
 
   ${(showAll || activeTab === "pricing") ? `
-    ${showAll ? '<div class="page-break"></div>' : ""}
-    <h2>Pricing Analysis</h2>
+    ${showAll ? "" : '<div class="page-break"></div>'}
+    <h2>3. Pricing Analysis</h2>
     <p><strong>Price Positioning Index:</strong> ${pa.price_positioning || "N/A"}</p>
     
     <h3>Competitor Price Reference Grid</h3>
-    <table>
+    <table class="comparison-table">
       <thead>
         <tr>
           <th>Competitor Name</th>
@@ -270,32 +551,32 @@ function generatePrintHTML(report: any, activeTab?: string): string {
 
   ${(showAll || activeTab === "go-to-market") ? `
     ${showAll ? '<div class="page-break"></div>' : ""}
-    <h2>Go-To-Market (GTM) Strategy</h2>
+    <h2>4. Strategic Recommendations & GTM</h2>
     <p><strong>Core Positioning Strategy:</strong> ${gtm.positioning || "No positioning statement recorded."}</p>
 
     <h3>Strategic Recommendations</h3>
-    ${(gtm.recommendations || []).map((r: any) => `
-      <div class="rec-card priority-${r.priority || "medium"}">
-        <strong>${r.headline || r.title || "Recommendation"}</strong> <span class="badge">${r.priority}</span>
-        <p style="margin-top: 4px; font-size: 11px;">${r.explanation || r.detail || ""}</p>
-      </div>
-    `).join("")}
+    <div class="rec-grid">
+      ${(gtm.recommendations || []).map((r: any) => `
+        <div class="rec-card priority-${r.priority || "medium"}">
+          <div class="rec-header">
+            <span class="rec-title">${r.headline || r.title || "Recommendation"}</span>
+            <span class="rec-badge ${r.priority}">${r.priority} Priority</span>
+          </div>
+          <p style="margin-top: 4px; font-size: 11px; color: #4B5563;">${r.explanation || r.detail || ""}</p>
+        </div>
+      `).join("")}
+    </div>
 
     <h3>Tactical Quick Wins</h3>
     <ul>
       ${(gtm.quick_wins || []).map((w: any) => `<li>${w}</li>`).join("")}
       ${(gtm.quick_wins || []).length === 0 ? "<li>No quick wins recorded.</li>" : ""}
     </ul>
-
-    ${gtm.notes ? `
-      <h3>GTM Deployment Notes</h3>
-      <p>${gtm.notes}</p>
-    ` : ""}
   ` : ""}
 
   ${(showAll || activeTab === "content-form") ? `
     ${showAll ? '<div class="page-break"></div>' : ""}
-    <h2>Creative Brief & Content Form</h2>
+    <h2>5. Creative Brief & Content Specs</h2>
     <p><strong>Product / Initiative:</strong> ${cf.product_name || "Stylecraft Lens Tooling"}</p>
     <p><strong>Target Audience Persona:</strong> ${cf.target_audience || "Professional barbers and hair stylists."}</p>
 

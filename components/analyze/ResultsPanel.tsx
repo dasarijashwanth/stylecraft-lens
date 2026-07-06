@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { CompetitorCard } from "./CompetitorCard";
-import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award } from "lucide-react";
+import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
+import { downloadReportPDF } from "@/lib/export-pdf";
 
 interface ResultsPanelProps {
   analysis: {
@@ -57,6 +59,55 @@ interface ResultsPanelProps {
 
 export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3 } = analysis;
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const reportData = {
+        title: `Competitive Intelligence Report — ${analysis.productName}`,
+        created_at: new Date().toISOString(),
+        competitive_analysis: {
+          product_name: analysis.productName,
+          large_brand_competitors: phase1.competitors,
+          indie_emerging_competitors: phase2.competitors,
+          market_snapshot: phase3.market_snapshot,
+          key_trends: phase3.key_trends,
+          market_gaps: phase3.market_gaps,
+          top_threats: phase3.top_threats,
+          top_opportunities: phase3.top_opportunities,
+          positioning_recommendation: phase3.positioning_recommendation,
+          strategic_recommendations: phase3.strategic_recommendations,
+          quick_wins: phase3.quick_wins,
+        },
+        pricing_analysis: {
+          competitors_pricing: [
+            ...phase1.competitors.map((c: any) => ({ name: c.name, price: c.price, tier: "large" })),
+            ...phase2.competitors.map((c: any) => ({ name: c.name, price: c.price, tier: "emerging" })),
+          ],
+          price_positioning: phase3.market_snapshot.headline_stat_value || "",
+          notes: "",
+        },
+        go_to_market: {
+          recommendations: phase3.strategic_recommendations,
+          quick_wins: phase3.quick_wins,
+          positioning: phase3.positioning_recommendation,
+          notes: "",
+        },
+        content_form: {
+          product_name: analysis.productName,
+          key_messages: phase3.top_opportunities.map((o: any) => o.action || o.detail || o.description || ""),
+          target_audience: "",
+          notes: "",
+        }
+      };
+      await downloadReportPDF(reportData);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Sorting strategic recommendations: High -> Medium -> Low
   const sortedRecommendations = [...(phase3.strategic_recommendations || [])].sort((a, b) => {
@@ -88,6 +139,14 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
             className="px-4 py-2 border border-border bg-surface-3/40 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-lg transition-colors"
           >
             New analysis
+          </button>
+          <button
+            onClick={handleExportPDF}
+            disabled={exporting}
+            className="flex items-center gap-1.5 px-4 py-2 border border-border bg-surface-3/45 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-lg transition-colors shadow-sm disabled:opacity-50"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export to PDF</span>
           </button>
           <button
             onClick={onSaveAsReport}

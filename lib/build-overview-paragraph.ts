@@ -19,7 +19,7 @@ export interface ParagraphInput {
   competitors: CompetitorSummary[];
 }
 
-// ── Motor-specific sentences (written by us, not Claude) ─────────────────────
+// ── Motor-specific sentences (written by us, not the AI model) ───────────────
 const MOTOR_SENTENCES: Record<string, string> = {
   "eon": "EON Digital Brushless motors represent StyleCraft's flagship proprietary technology — Modern Barber Supply (2026) ranks StyleCraft among the top three professional clippers for 2026 alongside JRL Onyx, with brushless motors praised for running cooler and delivering consistent power over extended shifts.",
   "brushless": "Brushless motors are the 2026 professional standard — Modern Barber Supply describes them as tools that 'run cooler, last longer, and deliver consistent power,' commanding a 30–50% price premium over brushed rotary alternatives in the professional tier.",

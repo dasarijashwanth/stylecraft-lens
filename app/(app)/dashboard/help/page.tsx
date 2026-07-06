@@ -8,12 +8,12 @@ export default function HelpPage() {
     {
       id: 1,
       q: "How does the 3-phase AI competitive analysis work?",
-      a: "Stylecraft Lens triggers a background search using Claude. Phase 1 performs search engine crawling to identify 10 competing products (5 established market leaders, 5 emerging challenge brands). Phase 2 researches their specific prices, specifications, strengths, and weaknesses. Phase 3 synthesises this intelligence into executive reports and recommendations.",
+      a: "Stylecraft Lens triggers a background search using Gemini (with built-in Google Search grounding). Phase 1 performs search engine crawling to identify 10 competing products (5 established market leaders, 5 emerging challenge brands). Phase 2 researches their specific prices, specifications, strengths, and weaknesses. Phase 3 synthesises this intelligence into executive reports and recommendations.",
       open: true
     },
     {
       id: 2,
-      q: "Can I run analyses without configure Clerk or Anthropic keys?",
+      q: "Can I run analyses without configuring Clerk or Gemini keys?",
       a: "Yes! Stylecraft Lens features a Developer Bypass mode. If credentials are not present in `.env.local`, the application seeds a local database workspace and mock-runs the 3-phase analysis with realistic, high-fidelity results. This allows immediate testing of all dashboard panels.",
       open: false
     },

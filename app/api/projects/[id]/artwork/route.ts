@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 import { buildFullProjectContext } from "@/lib/project-context";
-import { anthropic, hasAnthropicKey } from "@/lib/anthropic";
+import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -55,25 +55,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     let suggestions: any = null;
 
-    if (hasAnthropicKey && purpose === "family_artwork" && file.type.startsWith("image/")) {
+    if (hasGeminiKey && purpose === "family_artwork" && file.type.startsWith("image/")) {
       try {
         const ctx = await buildFullProjectContext(params.id);
         const base64 = buffer.toString("base64");
-        const mediaType = file.type as "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+        const mimeType = file.type;
 
-        const message = await anthropic.messages.create({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 1500,
-          messages: [{
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: { type: "base64", media_type: mediaType, data: base64 },
-              },
-              {
-                type: "text",
-                text: `This is family artwork / brand artwork for a product called "${ctx?.productName ?? "Stylecraft product"}" in the ${ctx?.industry ?? "grooming"} industry.
+        const message = await genAI.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: [
+            {
+              inlineData: { mimeType, data: base64 },
+            },
+            {
+              text: `This is family artwork / brand artwork for a product called "${ctx?.productName ?? "Stylecraft product"}" in the ${ctx?.industry ?? "grooming"} industry.
 
 Analyze the artwork and return ONLY valid JSON:
 {
@@ -103,15 +98,14 @@ Analyze the artwork and return ONLY valid JSON:
   ],
   "amazon_listing_notes": "Specific suggestions for Amazon main image and lifestyle shots based on this brand style"
 }`,
-              },
-            ],
-          }],
+            },
+          ],
         });
 
-        const text = message.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-        suggestions = JSON.parse(text.replace(/```json|```/g, "").trim());
+        const text = message.text || "";
+        suggestions = JSON.parse(cleanJsonString(text));
       } catch (err) {
-        console.warn("Claude Vision artwork analysis failed, using fallback:", err);
+        console.warn("Gemini Vision artwork analysis failed, using fallback:", err);
       }
     }
 

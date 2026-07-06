@@ -38,7 +38,7 @@ export function CompetitorCard({ competitor: c }: CompetitorCardProps) {
     ? `https://www.amazon.com/dp/${c.asin.toUpperCase()}`
     : null;
 
-  // Use live data if available, fall back to Claude's values
+  // Use live data if available, fall back to Gemini's values
   const displayPrice   = live?.price        ?? c.price        ?? "—";
   const displayRating  = live?.rating_str   ?? c.rating       ?? "—";
   const displayReviews = live?.reviews_str  ?? c.review_count ?? "—";

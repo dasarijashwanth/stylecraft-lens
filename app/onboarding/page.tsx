@@ -182,7 +182,7 @@ export default function OnboardingPage() {
               <span className="text-[10px] text-accent font-bold uppercase tracking-widest block">Step 2 of 5</span>
               <h2 className="text-xl font-bold text-text-primary">Choose your industry</h2>
               <p className="text-text-secondary leading-normal">
-                Select your focus sector. This aligns Claude&apos;s search indices and threat score weighting.
+                Select your focus sector. This aligns Gemini&apos;s search indices and threat score weighting.
               </p>
             </div>
 

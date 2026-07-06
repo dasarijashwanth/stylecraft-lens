@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   try {
     const session = await getAuthSession();
     const body = await request.json();
-    const { projectId, analysisId } = body;
+    const { projectId, analysisId, productName, industry, targetMarket, pricePoint } = body;
 
     if (!analysisId) {
       return NextResponse.json(
@@ -63,8 +63,12 @@ export async function POST(request: Request) {
         phase1: analysisData.phase1_result,
         phase2: analysisData.phase2_result,
         phase3: analysisData.phase3_result,
-        productName: analysisData.projects?.product_name || "Product Analysis",
-      }
+        productName: productName || analysisData.projects?.product_name || "Product Analysis",
+        industry: industry || analysisData.projects?.industry,
+        targetMarket,
+        pricePoint,
+      },
+      session.orgId
     );
 
     return NextResponse.json({ report }, { status: 201 });

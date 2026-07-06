@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFullProjectContext } from "@/lib/project-context";
-import { anthropic, hasAnthropicKey } from "@/lib/anthropic";
+import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
@@ -15,12 +15,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const userSpecs = body.specs ?? {};
     let tds: any = null;
 
-    if (hasAnthropicKey) {
+    if (hasGeminiKey) {
       try {
-        const message = await anthropic.messages.create({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 2500,
-          system: `You are a technical writer creating a Technical Data Sheet (TDS) for a grooming/hair tool product.
+        const message = await genAI.models.generateContent({
+          model: GEMINI_MODEL,
+          config: {
+            systemInstruction: `You are a technical writer creating a Technical Data Sheet (TDS) for a grooming/hair tool product.
 Return ONLY valid JSON:
 {
   "product_name": "...",
@@ -69,9 +69,8 @@ Return ONLY valid JSON:
   "country_of_origin": "Designed in USA / Assembled in PRC",
   "msrp": "$180.00"
 }`,
-          messages: [{
-            role: "user",
-            content: `Create a TDS for:
+          },
+          contents: `Create a TDS for:
 Product: ${ctx.productName}
 Motor: ${ctx.motorTech || "Brushless DC"}
 Price: ${ctx.pricePoint || "$180"}
@@ -80,13 +79,12 @@ Company: ${ctx.companyContext}
 
 User-provided specs:
 ${JSON.stringify(userSpecs)}`,
-          }],
         });
 
-        const text = message.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-        tds = JSON.parse(text.replace(/```json|```/g, "").trim());
+        const text = message.text || "";
+        tds = JSON.parse(cleanJsonString(text));
       } catch (err) {
-        console.warn("Claude TDS generation failed, using fallback:", err);
+        console.warn("Gemini TDS generation failed, using fallback:", err);
       }
     }
 

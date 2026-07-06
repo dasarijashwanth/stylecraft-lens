@@ -1,3 +1,4 @@
+// app/(app)/dashboard/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -11,8 +12,7 @@ import {
   ArrowRight,
   Plus,
   Play,
-  Download,
-  AlertCircle
+  Download
 } from "lucide-react";
 import { 
   ResponsiveContainer, 
@@ -26,6 +26,18 @@ import {
 import KPICard from "@/components/dashboard/KPICard";
 import { toast } from "sonner";
 
+function timeAgo(date: Date) {
+  const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+  if (seconds < 0) return "just now";
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export default function DashboardOverview() {
   const router = useRouter();
   
@@ -33,6 +45,7 @@ export default function DashboardOverview() {
   const [competitors, setCompetitors] = useState<any[]>([]);
   const [analyses, setAnalyses] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
+  const [activityFeed, setActivityFeed] = useState<any[]>([]);
   
   // Sparkline data
   const [sparklines] = useState({
@@ -42,12 +55,6 @@ export default function DashboardOverview() {
     insights: [{ value: 10 }, { value: 15 }, { value: 12 }, { value: 18 }, { value: 22 }, { value: 20 }, { value: 26 }],
   });
 
-  const [activityFeed, setActivityFeed] = useState([
-    { id: 1, type: "comp_added", text: "Competitor 'BaBylissPRO' was added.", time: "1 hour ago", icon: Target, color: "text-emerald-400 bg-emerald-950/40" },
-    { id: 2, type: "analysis_run", text: "AI Analysis 'Apex Clipper launch' completed.", time: "2 hours ago", icon: Sparkles, color: "text-indigo-400 bg-indigo-950/40" },
-    { id: 3, type: "report_saved", text: "Report 'BaBylissPRO Q2 Analysis' saved as draft.", time: "4 hours ago", icon: FileText, color: "text-amber-400 bg-amber-950/40" },
-  ]);
-
   useEffect(() => {
     // Parallel fetch from actual API routes
     Promise.all([
@@ -55,9 +62,59 @@ export default function DashboardOverview() {
       fetch("/api/analyses").then(res => res.json()).catch(() => ({ analyses: [] })),
       fetch("/api/reports").then(res => res.json()).catch(() => ({ reports: [] }))
     ]).then(([compData, anData, repData]) => {
-      setCompetitors(compData.competitors || []);
-      setAnalyses(anData.analyses || []);
-      setReports(repData.reports || []);
+      const comps = compData.competitors || [];
+      const ans = anData.analyses || [];
+      const reps = repData.reports || [];
+
+      setCompetitors(comps);
+      setAnalyses(ans);
+      setReports(reps);
+
+      // Generate dynamic activity feed
+      const feed: any[] = [];
+      
+      comps.forEach((c: any) => {
+        if (!c.is_fixed) {
+          const dt = new Date(c.created_at || c.createdAt || Date.now());
+          feed.push({
+            id: `comp_${c.id || c.name}`,
+            text: `Competitor '${c.name}' was registered.`,
+            time: timeAgo(dt),
+            timestamp: dt,
+            icon: Target,
+            color: "text-emerald-400 bg-emerald-950/40"
+          });
+        }
+      });
+
+      ans.forEach((a: any) => {
+        const dt = new Date(a.createdAt || a.created_at || Date.now());
+        feed.push({
+          id: `analysis_${a.id}`,
+          text: `AI Analysis '${a.project?.name || "Product deep dive"}' completed.`,
+          time: timeAgo(dt),
+          timestamp: dt,
+          icon: Sparkles,
+          color: "text-indigo-400 bg-indigo-950/40"
+        });
+      });
+
+      reps.forEach((r: any) => {
+        const dt = new Date(r.updated_at || r.updatedAt || r.created_at || Date.now());
+        feed.push({
+          id: `report_${r.id}`,
+          text: `Report '${r.title}' updated.`,
+          time: timeAgo(dt),
+          timestamp: dt,
+          icon: FileText,
+          color: "text-amber-400 bg-amber-950/40"
+        });
+      });
+
+      // Sort by timestamp desc and take top 5
+      feed.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      setActivityFeed(feed.slice(0, 5));
+
       setLoading(false);
     }).catch(err => {
       console.error("Dashboard fetch error:", err);
@@ -94,25 +151,23 @@ export default function DashboardOverview() {
   const competitorsCount = competitors.length;
   const activeAnalysesCount = analyses.filter(a => a.status === "RUNNING" || a.status === "PENDING").length;
   const reportsCount = reports.length;
-  const draftReportsCount = reports.filter(r => r.status === "DRAFT").length;
+  const draftReportsCount = reports.filter(r => r.status === "draft" || r.status === "DRAFT").length;
   
   // Threat score insights
-  const highThreatCompetitors = [...competitors]
-    .filter(c => c.status === "ACTIVE")
-    .sort((a, b) => b.threatScore - a.threatScore);
+  const sortedCompetitors = [...competitors]
+    .sort((a, b) => (b.threatScore || 30) - (a.threatScore || 30));
 
-  const top8Competitors = highThreatCompetitors.slice(0, 8).map(c => ({
+  const top8Competitors = sortedCompetitors.slice(0, 8).map(c => ({
     name: c.name,
-    threatScore: c.threatScore,
-    tier: c.tier || (c.status === "ACTIVE" ? "established" : "emerging")
+    threatScore: c.threatScore || 30,
+    tier: c.is_fixed ? "established" : "emerging"
   }));
 
-  const emergingThreats = highThreatCompetitors.filter(c => c.threatScore > 65);
+  const emergingThreats = sortedCompetitors.filter(c => (c.threatScore || 0) > 50);
 
   const handleQuickAction = (action: string) => {
     if (action === "add") {
       router.push("/dashboard/competitors");
-      // Delay to allow page transition before dispatching modal trigger
       setTimeout(() => window.dispatchEvent(new CustomEvent("trigger-add-competitor")), 150);
     } else if (action === "analyze") {
       router.push("/dashboard/analyze");
@@ -128,8 +183,8 @@ export default function DashboardOverview() {
         <KPICard
           label="Competitors"
           value={competitorsCount}
-          delta={`+${competitorsCount - 2 > 0 ? competitorsCount - 2 : 0}`}
-          isPositive={true}
+          delta={`+${competitorsCount - 20 > 0 ? competitorsCount - 20 : 0} custom`}
+          isPositive={competitorsCount > 20}
           sparklineData={sparklines.competitors}
           accentColor="#6366F1"
         />
@@ -169,7 +224,7 @@ export default function DashboardOverview() {
           <div className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col flex-1">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-bold text-text-primary">Recent Analyses</h2>
-              <Link href="/dashboard/analyze" className="text-xs text-accent hover:underline flex items-center gap-1">
+              <Link href="/dashboard/analyze" className="text-xs text-accent hover:underline flex items-center gap-1 font-semibold">
                 <span>New Analysis</span>
                 <Plus className="w-3.5 h-3.5" />
               </Link>
@@ -190,13 +245,9 @@ export default function DashboardOverview() {
                   {analyses.slice(0, 5).map((an) => (
                     <tr key={an.id} className="hover:bg-surface-3/30 transition-colors">
                       <td className="py-3 font-semibold text-text-primary">
-                        {an.project?.name || an.phase3Result?.executive_summary ? (
-                          <div className="max-w-[200px] truncate" title={an.project?.name || "Product Analysis"}>
-                            {an.project?.name || "Product Analysis"}
-                          </div>
-                        ) : (
-                          "Competitive Deep Dive"
-                        )}
+                        <div className="max-w-[200px] truncate" title={an.project?.name || "Product Analysis"}>
+                          {an.project?.name || "Product Analysis"}
+                        </div>
                       </td>
                       <td className="py-3">
                         <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
@@ -209,12 +260,12 @@ export default function DashboardOverview() {
                       </td>
                       <td className="py-3 text-text-secondary">{an.competitors?.length || 10} found</td>
                       <td className="py-3 text-text-muted">
-                        {new Date(an.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        {new Date(an.createdAt || an.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                       </td>
                       <td className="py-3 text-right">
                         <button
                           onClick={() => router.push(`/dashboard/analyze?id=${an.id}`)}
-                          className="px-2 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] transition-colors"
+                          className="px-2 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] transition-colors font-semibold"
                         >
                           View
                         </button>
@@ -280,7 +331,7 @@ export default function DashboardOverview() {
             <div className="grid grid-cols-1 gap-2.5">
               <button
                 onClick={() => handleQuickAction("add")}
-                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left"
+                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
               >
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-emerald-950/60 border border-emerald-900/60 text-emerald-400">
@@ -296,7 +347,7 @@ export default function DashboardOverview() {
               
               <button
                 onClick={() => handleQuickAction("analyze")}
-                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left"
+                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
               >
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
@@ -304,7 +355,7 @@ export default function DashboardOverview() {
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-text-primary">Run AI Analysis</p>
-                    <p className="text-[10px] text-text-muted">Scan the market using Claude</p>
+                    <p className="text-[10px] text-text-muted">Scan the market using Gemini</p>
                   </div>
                 </div>
                 <ArrowRight className="w-4 h-4 text-text-muted" />
@@ -312,7 +363,7 @@ export default function DashboardOverview() {
               
               <button
                 onClick={() => handleQuickAction("report")}
-                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left"
+                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
               >
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-amber-950/60 border border-amber-900/60 text-amber-400">
@@ -361,7 +412,7 @@ export default function DashboardOverview() {
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-bold text-text-primary">Emerging Market Threats</h2>
             <span className="bg-danger-bg border border-danger/20 text-danger text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-              Score &gt; 65
+              Score &gt; 50
             </span>
           </div>
           <Link href="/dashboard/competitors" className="text-xs text-text-muted hover:text-text-primary flex items-center gap-1 transition-colors">
@@ -374,9 +425,8 @@ export default function DashboardOverview() {
           <table className="w-full text-xs text-left border-collapse">
             <thead>
               <tr className="border-b border-border/60 text-text-muted font-bold">
-                <th className="pb-2.5">Logo</th>
                 <th className="pb-2.5">Name</th>
-                <th className="pb-2.5">Status</th>
+                <th className="pb-2.5">Source / Status</th>
                 <th className="pb-2.5">Threat Score</th>
                 <th className="pb-2.5">Tags</th>
                 <th className="pb-2.5 text-right">Action</th>
@@ -385,52 +435,53 @@ export default function DashboardOverview() {
             <tbody className="divide-y divide-border/40">
               {emergingThreats.slice(0, 4).map((c) => (
                 <tr key={c.id} className="hover:bg-surface-3/30 transition-colors">
-                  <td className="py-3">
-                    <img
-                      src={c.logoUrl || `https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=40&h=40`}
-                      alt={c.name}
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${c.name}&background=1C1C22&color=6366F1`;
-                      }}
-                      className="w-6 h-6 rounded object-cover border border-border bg-surface-3"
-                    />
-                  </td>
                   <td className="py-3 font-semibold text-text-primary">
                     <div>{c.name}</div>
                     {c.website && <span className="text-[10px] text-text-muted font-normal block">{c.website}</span>}
                   </td>
                   <td className="py-3">
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-success-bg border border-success/20 text-success">
-                      <span className="w-1.5 h-1.5 rounded-full bg-success" />
-                      Active
-                    </span>
+                    {c.is_fixed ? (
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-surface-3 border border-border text-text-secondary">
+                        Reference
+                      </span>
+                    ) : c.status ? (
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-success-bg border border-success/20 text-success">
+                        <span className="w-1.5 h-1.5 rounded-full bg-success" />
+                        {c.status}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
+                        <span className="w-1 h-1 rounded-full bg-indigo-400" />
+                        Analysis Mapped
+                      </span>
+                    )}
                   </td>
                   <td className="py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-16 h-1.5 bg-surface-3 border border-border rounded-full overflow-hidden">
                         <div 
                           className="h-full bg-accent"
-                          style={{ width: `${c.threatScore}%` }}
+                          style={{ width: `${c.threatScore || 30}%` }}
                         />
                       </div>
-                      <span className="font-mono text-text-secondary">{c.threatScore}</span>
+                      <span className="font-mono text-text-secondary">{c.threatScore || 30}</span>
                     </div>
                   </td>
                   <td className="py-3">
                     <div className="flex flex-wrap gap-1">
-                      {c.tags.slice(0, 2).map((t: string) => (
-                        <span key={t} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary">
+                      {(c.tags || []).slice(0, 2).map((t: string) => (
+                        <span key={t} className="px-1.5 py-0.5 rounded bg-surface-3 border border-border text-[9px] text-text-secondary font-mono">
                           {t}
                         </span>
                       ))}
-                      {c.tags.length > 2 && (
+                      {c.tags?.length > 2 && (
                         <span className="px-1 py-0.5 text-[8px] text-text-muted">+{c.tags.length - 2}</span>
                       )}
                     </div>
                   </td>
                   <td className="py-3 text-right">
                     <button
-                      onClick={() => router.push(`/dashboard/competitors/${c.id}`)}
+                      onClick={() => router.push(c.is_fixed ? `/dashboard/competitors` : `/dashboard/competitors/${c.id}`)}
                       className="px-2.5 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] font-semibold transition-colors"
                     >
                       View details
@@ -440,7 +491,7 @@ export default function DashboardOverview() {
               ))}
               {emergingThreats.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-text-muted">
+                  <td colSpan={5} className="py-8 text-center text-text-muted">
                     No active competitors with high threat scores found.
                   </td>
                 </tr>

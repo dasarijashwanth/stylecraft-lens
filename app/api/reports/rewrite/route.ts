@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
-import { anthropic, hasAnthropicKey } from "@/lib/anthropic";
+import { genAI, hasGeminiKey, GEMINI_MODEL } from "@/lib/gemini";
 
 export async function POST(request: Request) {
   try {
@@ -24,31 +24,24 @@ export async function POST(request: Request) {
     
     let rewrittenText = text;
     
-    if (hasAnthropicKey) {
+    if (hasGeminiKey) {
       try {
         const instructions = {
           improve: "Improve clarity, readability, and professional impact while preserving the core meaning.",
           shorten: "Shorten the text to approximately half its length, removing wordiness while keeping key facts.",
           formalize: "Rewrite the text in highly formal, executive-level business consulting report language.",
         };
-        
-        const response = await anthropic.messages.create({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: `${instructions[mode as "improve" | "shorten" | "formalize"]} Return ONLY the rewritten text with no introduction, no conversational text, and no quotes. Just the result.\n\nText: ${text}`,
-            },
-          ],
+
+        const response = await genAI.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: `${instructions[mode as "improve" | "shorten" | "formalize"]} Return ONLY the rewritten text with no introduction, no conversational text, and no quotes. Just the result.\n\nText: ${text}`,
         });
-        
-        const textBlock = response.content.find(b => b.type === "text");
-        if (textBlock && textBlock.type === "text") {
-          rewrittenText = textBlock.text.trim();
+
+        if (response.text) {
+          rewrittenText = response.text.trim();
         }
       } catch (err: any) {
-        console.warn("Claude AI Rewrite failed, falling back to mock rewrite:", err);
+        console.warn("Gemini AI Rewrite failed, falling back to mock rewrite:", err);
         rewrittenText = getMockRewrite(text, mode);
       }
     } else {

@@ -243,12 +243,12 @@ export default function SettingsPage() {
                 <div className="flex gap-3.5 items-start">
                   <Sliders className="w-5 h-5 text-accent shrink-0 mt-0.5" />
                   <div className="space-y-1 leading-relaxed">
-                    <p className="font-semibold text-text-primary">Anthropic Claude API Key</p>
+                    <p className="font-semibold text-text-primary">Google Gemini API Key</p>
                     <p className="text-text-secondary">
-                      To run live market audits, supply a valid `ANTHROPIC_API_KEY` to connect with Claude 3.5 Sonnet.
+                      To run live market audits, supply a valid `GEMINI_API_KEY` to connect with Gemini (includes built-in Google Search grounding — no separate search key needed).
                     </p>
                     <pre className="p-2 border border-border bg-surface-1 text-mono text-[10px] text-accent-text rounded mt-2 select-all w-fit">
-                      {"ANTHROPIC_API_KEY=\"sk-ant-...\""}
+                      {"GEMINI_API_KEY=\"...\""}
                     </pre>
                   </div>
                 </div>

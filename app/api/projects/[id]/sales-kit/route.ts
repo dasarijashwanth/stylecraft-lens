@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFullProjectContext } from "@/lib/project-context";
-import { anthropic, hasAnthropicKey } from "@/lib/anthropic";
+import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
@@ -11,12 +11,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     let kit: any = null;
 
-    if (hasAnthropicKey) {
+    if (hasGeminiKey) {
       try {
-        const message = await anthropic.messages.create({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 3000,
-          system: `You are a professional sales copywriter creating a Sales Kit for a product.
+        const message = await genAI.models.generateContent({
+          model: GEMINI_MODEL,
+          config: {
+            systemInstruction: `You are a professional sales copywriter creating a Sales Kit for a product.
 Return ONLY valid JSON — no markdown, no explanation.
 {
   "tagline": "Short punchy product tagline",
@@ -34,9 +34,8 @@ Return ONLY valid JSON — no markdown, no explanation.
   "key_messages": ["Message 1", "Message 2", "Message 3"],
   "call_to_action": "Where to buy / next step"
 }`,
-          messages: [{
-            role: "user",
-            content: `Create a Sales Kit for:
+          },
+          contents: `Create a Sales Kit for:
 Product: ${ctx.productName}
 Description: ${ctx.description}
 Price: ${ctx.pricePoint || "Contact for pricing"}
@@ -55,13 +54,12 @@ Positioning: ${ctx.positioning}
 
 Key messages:
 ${(ctx.keyMessages || []).join(", ")}`,
-          }],
         });
 
-        const text = message.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-        kit = JSON.parse(text.replace(/```json|```/g, "").trim());
+        const text = message.text || "";
+        kit = JSON.parse(cleanJsonString(text));
       } catch (err) {
-        console.warn("Claude Sales Kit generation failed, using fallback:", err);
+        console.warn("Gemini Sales Kit generation failed, using fallback:", err);
       }
     }
 

@@ -6,7 +6,7 @@ import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { ProgressPanel } from "@/components/analyze/ProgressPanel";
 import { ResultsPanel } from "@/components/analyze/ResultsPanel";
-import { STYLECRAFT_PRODUCTS } from "@/lib/stylecraft-products";
+import { STYLECRAFT_PRODUCTS, PRODUCT_CATEGORIES } from "@/lib/stylecraft-products";
 
 export default function AnalyzePage() {
   const router = useRouter();
@@ -200,6 +200,10 @@ export default function AnalyzePage() {
           title: `Competitive Intelligence Report — ${productName}`,
           projectId: projectIdParam || undefined,
           analysisId,
+          productName,
+          industry,
+          targetMarket,
+          pricePoint,
         })
       });
 
@@ -222,7 +226,7 @@ export default function AnalyzePage() {
         <div className="flex flex-col gap-2">
           <h1 className="text-display">New competitive analysis</h1>
           <p className="text-xs text-text-secondary leading-normal max-w-2xl">
-            Claude searches the web and Amazon indices to discover 10 competing products (5 established, 5 emerging) then maps prices, specifications, and synthesises strategic intelligence recommendations. Takes 1–2 minutes.
+            Gemini searches the web and Amazon indices to discover 10 competing products (5 established, 5 emerging) then maps prices, specifications, and synthesises strategic intelligence recommendations. Takes 1–2 minutes.
           </p>
         </div>
       )}
@@ -250,45 +254,19 @@ export default function AnalyzePage() {
             >
               <option value="">Choose a product to analyze…</option>
 
-              <optgroup label="── Clippers ──────────────────">
-                {STYLECRAFT_PRODUCTS
-                  .filter(p => p.category === "Clippers")
-                  .map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.shortName} — ${p.price}
-                    </option>
-                  ))}
-              </optgroup>
-
-              <optgroup label="── Trimmers ──────────────────">
-                {STYLECRAFT_PRODUCTS
-                  .filter(p => p.category === "Trimmers")
-                  .map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.shortName} — ${p.price}
-                    </option>
-                  ))}
-              </optgroup>
-
-              <optgroup label="── Sets ──────────────────────">
-                {STYLECRAFT_PRODUCTS
-                  .filter(p => p.category === "Sets")
-                  .map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.shortName} — ${p.price}
-                    </option>
-                  ))}
-              </optgroup>
-
-              <optgroup label="── Hair Dryers ───────────────">
-                {STYLECRAFT_PRODUCTS
-                  .filter(p => p.category === "Hair Dryers")
-                  .map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.shortName} — ${p.price}
-                    </option>
-                  ))}
-              </optgroup>
+              {PRODUCT_CATEGORIES.map(cat => {
+                const products = STYLECRAFT_PRODUCTS.filter(p => p.category === cat);
+                if (products.length === 0) return null;
+                return (
+                  <optgroup key={cat} label={`── ${cat} ──────────────────`}>
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.shortName} — ${p.price}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
 
               <optgroup label="── Or type your own ──────────">
                 <option value="custom">Enter custom product details…</option>
