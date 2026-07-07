@@ -7,7 +7,6 @@ interface PhaseState {
   status: "waiting" | "running" | "complete" | "error";
   label: string;
   message: string;
-  searches: number;
 }
 
 const PHASE_LABELS = [
@@ -23,115 +22,114 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+async function fetchJson(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || `Request to ${url} failed`);
+  return data;
+}
+
 export function ProgressPanel({ analysisId, productName, onComplete, onError }: Props) {
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({
       status: "waiting",
       label,
       message: "Waiting to start…",
-      searches: 0,
     }))
   );
   const [totalSearches, setTotalSearches] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [results, setResults] = useState<any>({});
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
+    let cancelled = false;
     startTime.current = Date.now();
     timerRef.current = setInterval(() => {
       setElapsedSeconds(Math.floor((Date.now() - startTime.current) / 1000));
     }, 1000);
 
-    const eventSource = new EventSource(`/api/analyses/${analysisId}/stream`);
+    // The pipeline runs one phase per POST .../continue call — this loop
+    // drives it phase by phase. Since every phase is persisted server-side
+    // before this call returns, a page refresh mid-analysis just resumes
+    // from whatever phase is saved, instead of losing progress.
+    async function run() {
+      const results: any = {};
+      let searchesSoFar = 0;
 
-    eventSource.onmessage = (e) => {
-      const event = JSON.parse(e.data);
+      try {
+        let { analysis } = await fetchJson(`/api/analyses/${analysisId}`);
+        if (analysis.phase1_result && Object.keys(analysis.phase1_result).length) {
+          results.phase1 = analysis.phase1_result;
+          setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "complete", message: "Complete" } : p)));
+        }
+        if (analysis.phase2_result && Object.keys(analysis.phase2_result).length) {
+          results.phase2 = analysis.phase2_result;
+          setPhases((prev) => prev.map((p, i) => (i === 1 ? { ...p, status: "complete", message: "Complete" } : p)));
+        }
 
-      switch (event.type) {
-        case "phase_start":
+        while (!cancelled) {
+          if (analysis.status === "complete") {
+            setPhases((prev) => prev.map((p) => ({ ...p, status: "complete", message: "Complete" })));
+            onComplete({
+              phase1: results.phase1 || {},
+              phase2: results.phase2 || {},
+              phase3: analysis.phase3_result || results.phase3 || {},
+              productName,
+              totalSearches: searchesSoFar,
+              reportId: results.reportId,
+            });
+            return;
+          }
+          if (analysis.status === "failed") {
+            throw new Error(analysis.error_message || "Analysis failed");
+          }
+
+          const runningIdx = analysis.phase; // 0, 1, or 2 — the phase about to run
           setPhases((prev) =>
-            prev.map((p, i) =>
-              i === event.phase - 1
-                ? { ...p, status: "running", message: event.message || "Running..." }
-                : i < event.phase - 1
-                ? { ...p, status: "complete", message: "Complete" }
-                : { ...p, status: "waiting", message: "Waiting to start…" }
-            )
+            prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
           );
-          break;
 
-        case "phase_progress":
-          setPhases((prev) =>
-            prev.map((p, i) =>
-              i === event.phase - 1
-                ? { ...p, status: "running", message: event.message }
-                : p
-            )
-          );
-          break;
-
-        case "search_update":
-          setTotalSearches(event.total_searches);
-          break;
-
-        case "phase_complete":
-          setTotalSearches(event.total_searches);
-          setPhases((prev) =>
-            prev.map((p, i) =>
-              i === event.phase - 1
-                ? { ...p, status: "complete", message: "Complete" }
-                : p
-            )
-          );
-          setResults((prev: any) => {
-            const nextResults = {
-              ...prev,
-              [`phase${event.phase}`]: event.result,
-            };
-            return nextResults;
+          const { analysis: updated, step } = await fetchJson(`/api/analyses/${analysisId}/continue`, {
+            method: "POST",
           });
-          break;
+          if (cancelled) return;
 
-        case "analysis_complete":
-          clearInterval(timerRef.current);
-          eventSource.close();
-          setTotalSearches(event.total_searches);
-          
+          searchesSoFar += step.totalSearches || 0;
+          setTotalSearches(searchesSoFar);
+
+          if (step.status === "failed") {
+            throw new Error(step.error || "Analysis failed");
+          }
+
+          if (step.phase === 1) results.phase1 = step.stepResult;
+          if (step.phase === 2) results.phase2 = step.stepResult;
+          if (step.phase === 4) {
+            results.phase3 = step.stepResult;
+            results.reportId = step.reportId;
+          }
+
+          const completedIdx = step.phase === 4 ? 2 : step.phase - 1;
           setPhases((prev) =>
-            prev.map((p) => ({ ...p, status: "complete", message: "Complete" }))
+            prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
           );
 
-          // Return aggregated results
-          onComplete({
-            phase1: results.phase1 || event.result?.phase1 || {},
-            phase2: results.phase2 || event.result?.phase2 || {},
-            phase3: event.result?.phase3 || event.result || {},
-            productName,
-            totalSearches: event.total_searches
-          });
-          break;
-
-        case "error":
-          clearInterval(timerRef.current);
-          eventSource.close();
-          setPhases((prev) =>
-            prev.map((p) =>
-              p.status === "running" ? { ...p, status: "error", message: event.message } : p
-            )
-          );
-          onError(event.message);
-          break;
+          analysis = updated;
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        clearInterval(timerRef.current);
+        setPhases((prev) =>
+          prev.map((p) => (p.status === "running" ? { ...p, status: "error", message: err.message } : p))
+        );
+        onError(err.message || "Analysis failed");
       }
-    };
+    }
 
-    eventSource.onerror = () => {
-      // Don't crash immediately on simple network flutter, but handle close
-    };
+    run();
 
     return () => {
-      eventSource.close();
+      cancelled = true;
       clearInterval(timerRef.current);
     };
   }, [analysisId]);

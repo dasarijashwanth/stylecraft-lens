@@ -123,6 +123,7 @@ model Analysis {
   project     Project?       @relation(fields: [projectId], references: [id])
   status      AnalysisStatus @default(PENDING)
   phase       Int            @default(0)
+  context     Json?
   phase1Result Json?
   phase2Result Json?
   phase3Result Json?

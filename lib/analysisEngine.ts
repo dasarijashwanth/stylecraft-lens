@@ -1,29 +1,14 @@
-import { EventEmitter } from "events";
 import { prisma } from "./db";
 import { memoryDb } from "./memoryDb";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
 import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "./anthropic";
 import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
-import { updateAnalysisPhase, completeAnalysis, failAnalysis } from "./db/analyses";
+import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis } from "./db/analyses";
 import { createReportFromAnalysis } from "./db/reports";
 import { buildPhase3Prompt } from "./prompts/phase3";
 import { getMarketData } from "./market-data";
 import { buildOverviewParagraph } from "./build-overview-paragraph";
-
-// Global event emitter for streaming progress updates
-class AnalysisEmitter extends EventEmitter {}
-
-const globalForAnalysis = globalThis as unknown as {
-  analysisEvents: AnalysisEmitter | undefined;
-};
-
-export const analysisEvents =
-  globalForAnalysis.analysisEvents ?? new AnalysisEmitter();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForAnalysis.analysisEvents = analysisEvents;
-}
 
 export interface AnalysisContext {
   id: string;
@@ -39,13 +24,6 @@ export interface AnalysisContext {
   motorTech?: string;
   keyDiff?: string;
   pricePoint?: string;
-}
-
-export async function startAnalysis(context: AnalysisContext) {
-  // Start the async analysis in the background
-  runAnalysisInBackground(context).catch(err => {
-    console.error(`Background analysis error for ${context.id}:`, err);
-  });
 }
 
 function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "legacy" | "emerging") {
@@ -524,222 +502,161 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
   );
 }
 
-export async function runAnalysisInBackground(context: AnalysisContext) {
-  const startTime = Date.now();
-  const id = context.id;
-  let webSearchCount = 0;
-  
-  const updateStatus = async (phase: number, status: string, phase1Res?: any, phase2Res?: any, phase3Res?: any, err?: string) => {
-    const isComplete = phase === 4;
-    const isFailed = status === "FAILED";
-    
-    const data: any = {
-      phase,
-      status: isFailed ? "FAILED" : isComplete ? "COMPLETE" : "RUNNING",
-      errorMessage: err || null,
-      completedAt: isComplete ? new Date() : null,
-      durationMs: isComplete ? Date.now() - startTime : null,
-    };
-    
-    if (phase1Res) data.phase1Result = phase1Res;
-    if (phase2Res) data.phase2Result = phase2Res;
-    if (phase3Res) data.phase3Result = phase3Res;
-    
-    if (isSupabaseConfigured) {
-      try {
-        if (isFailed) {
-          await failAnalysis(id, err || "Unknown error");
-        } else if (isComplete) {
-          await completeAnalysis(id, Date.now() - startTime);
-        } else {
-          const phaseKey = phase === 1 ? "phase1_result" : phase === 2 ? "phase2_result" : "phase3_result";
-          const res = phase === 1 ? phase1Res : phase === 2 ? phase2Res : phase3Res;
-          if (res) {
-            await updateAnalysisPhase(id, phase, phaseKey, res, webSearchCount);
-          }
-        }
-      } catch (sbErr) {
-        console.error("Supabase analysis save failed:", sbErr);
-      }
-    }
+export interface AnalysisStepResult {
+  analysisId: string;
+  phase: number;
+  status: "running" | "complete" | "failed";
+  stepResult: any;
+  totalSearches: number;
+  reportId?: string;
+  error?: string;
+}
 
-    try {
-      // 1. Update PostgreSQL
-      await prisma.analysis.update({
-        where: { id },
-        data
-      });
-    } catch (e) {
-      // 2. Update Memory DB
-      const item = memoryDb.analyses.find(a => a.id === id);
-      if (item) {
-        item.phase = phase;
-        item.status = data.status;
-        item.errorMessage = data.errorMessage;
-        item.completedAt = data.completedAt;
-        item.durationMs = data.durationMs;
-        if (phase1Res) item.phase1Result = phase1Res;
-        if (phase2Res) item.phase2Result = phase2Res;
-        if (phase3Res) item.phase3Result = phase3Res;
-      }
-    }
+function hasResult(result: any): boolean {
+  return !!result && typeof result === "object" && Object.keys(result).length > 0;
+}
+
+// Runs exactly ONE phase of the pipeline per call, driven by the caller
+// (see app/api/analyses/[id]/continue/route.ts). Each Vercel Hobby-plan
+// invocation is hard-capped at 60s and background work is killed the
+// instant a response is sent — a single call running all 3 AI phases
+// routinely exceeded that and silently orphaned the analysis at phase 0.
+// Splitting into resumable, DB-persisted steps means every call is a
+// short, independent round trip, and a refreshed/reconnecting client just
+// resumes from whatever phase is persisted.
+export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepResult> {
+  const startTime = Date.now();
+  const record: any = await getAnalysis(analysisId);
+  if (!record) {
+    throw new Error("Analysis not found");
+  }
+
+  if (record.status === "complete" || record.status === "failed") {
+    return {
+      analysisId,
+      phase: record.phase,
+      status: record.status,
+      stepResult: null,
+      totalSearches: 0,
+      error: record.error_message || undefined,
+    };
+  }
+
+  const context: AnalysisContext = {
+    id: analysisId,
+    orgId: record.org_id || "dev_org_id",
+    userId: record.user_id,
+    projectId: record.project_id || null,
+    ...(record.context || {}),
   };
 
+  const phase1Result = hasResult(record.phase1_result) ? record.phase1_result : null;
+  const phase2Result = hasResult(record.phase2_result) ? record.phase2_result : null;
+
+  let webSearchCount = 0;
+  const onSearchUsed = () => { webSearchCount += 1; };
+
   try {
-    // ----------------------------------------------------
-    // PHASE 1: DISCOVERY (0% -> 33%)
-    // ----------------------------------------------------
-    emitProgress(id, "phase_start", 1, "Searching for competitor products...");
-    await sleep(2500); // simulate network/crawling latency
-    emitProgress(id, "phase_progress", 1, "Searching Amazon, retail listings, and search index...", 40);
-    await sleep(2000);
-    emitProgress(id, "phase_progress", 1, "Identifying 5 established legacy competitors...", 80);
-    
-    const onSearchUsed1 = (searchQuery: string) => {
-      webSearchCount += 1;
-      emitProgress(id, "search_update", 1, `Searching: ${searchQuery}`, 85);
-      emitSearchUpdate(id, webSearchCount);
-    };
-    const phase1Result: any = await withAiFallback(
-      "Phase 1",
-      hasGeminiKey ? () => executePhase1Gemini(context, onSearchUsed1) : null,
-      hasAnthropicKey ? () => executePhase1Claude(context, onSearchUsed1) : null,
-      () => generateMockPhase1(context)
-    );
-    
-    phase1Result.competitors = cleanCompetitors(phase1Result.competitors, "legacy", context);
-    if (hasRainforestKey) {
-      emitProgress(id, "phase_progress", 1, "Verifying competitor prices & ratings via Rainforest...", 95);
-      phase1Result.competitors = await enrichCompetitorsWithRainforest(phase1Result.competitors);
-    }
-    webSearchCount += phase1Result.web_searches_performed || 0;
-    emitSearchUpdate(id, webSearchCount);
-
-    await updateStatus(1, "RUNNING", phase1Result);
-    emitProgress(id, "phase_complete", 1, "Found 5 established large brand competitors", 100, phase1Result);
-    await sleep(1500);
-
-    // ----------------------------------------------------
-    // PHASE 2: RESEARCH INTELLIGENCE (33% -> 66%)
-    // ----------------------------------------------------
-    emitProgress(id, "phase_start", 2, "Gathering intelligence for indie and emerging competitors...");
-    await sleep(2000);
-    emitProgress(id, "phase_progress", 2, "Crawling specifications, product reviews, and price points...", 45);
-    await sleep(2500);
-    emitProgress(id, "phase_progress", 2, "Extracting competitor positioning, strengths, and weaknesses...", 75);
-    
-    const onSearchUsed2 = (searchQuery: string) => {
-      webSearchCount += 1;
-      emitProgress(id, "search_update", 2, `Searching: ${searchQuery}`, 80);
-      emitSearchUpdate(id, webSearchCount);
-    };
-    const phase2Result: any = await withAiFallback(
-      "Phase 2",
-      hasGeminiKey ? () => executePhase2Gemini(context, onSearchUsed2) : null,
-      hasAnthropicKey ? () => executePhase2Claude(context, onSearchUsed2) : null,
-      () => generateMockPhase2(context)
-    );
-    
-    phase2Result.competitors = cleanCompetitors(phase2Result.competitors, "emerging", context);
-    if (hasRainforestKey) {
-      emitProgress(id, "phase_progress", 2, "Verifying competitor prices & ratings via Rainforest...", 90);
-      phase2Result.competitors = await enrichCompetitorsWithRainforest(phase2Result.competitors);
-    }
-    webSearchCount += phase2Result.web_searches_performed || 0;
-    emitSearchUpdate(id, webSearchCount);
-
-    await updateStatus(2, "RUNNING", null, phase2Result);
-    emitProgress(id, "phase_complete", 2, "Found 5 indie and emerging competitors", 100, phase2Result);
-    await sleep(1500);
-
-    // ----------------------------------------------------
-    // PHASE 3: STRATEGIC SYNTHESIS (66% -> 100%)
-    // ----------------------------------------------------
-    emitProgress(id, "phase_start", 3, "Synthesizing market analysis & strategic recommendations...");
-    await sleep(2000);
-    emitProgress(id, "phase_progress", 3, "Mapping product capabilities vs competitors...", 50);
-    await sleep(2000);
-    emitProgress(id, "phase_progress", 3, "Formulating opportunities, threats, and strategic recommendations...", 85);
-    
-    const onSearchUsed3 = (searchQuery: string) => {
-      webSearchCount += 1;
-      emitProgress(id, "search_update", 3, `Searching: ${searchQuery}`, 90);
-      emitSearchUpdate(id, webSearchCount);
-    };
-    const phase3Result: any = await withAiFallback(
-      "Phase 3",
-      hasGeminiKey ? () => executePhase3Gemini(context, phase1Result, phase2Result, onSearchUsed3) : null,
-      hasAnthropicKey ? () => executePhase3Claude(context, phase1Result, phase2Result, onSearchUsed3) : null,
-      () => generateMockPhase3(context, phase1Result, phase2Result)
-    );
-    
-    webSearchCount += phase3Result.web_searches_performed || 0;
-    emitSearchUpdate(id, webSearchCount);
-
-    await updateStatus(3, "RUNNING", null, null, phase3Result);
-    
-    // Save CompetitorAnalyses to DB/Memory for link references
-    await saveCompetitorAnalyses(id, context.orgId, phase1Result, phase2Result);
-    
-    // Mark as complete
-    await updateStatus(4, "COMPLETE", null, null, null);
-    
-    // Auto-save report
-    let reportId = "";
-    try {
-      const report = await createReportFromAnalysis(
-        context.userId,
-        id,
-        context.projectId,
-        {
-          phase1: phase1Result,
-          phase2: phase2Result,
-          phase3: phase3Result,
-          productName: context.productName,
-          industry: context.industry,
-          targetMarket: context.targetMarket,
-          pricePoint: context.pricePoint,
-        },
-        context.orgId
+    if (record.phase === 0) {
+      // ----------------------------------------------------
+      // PHASE 1: DISCOVERY
+      // ----------------------------------------------------
+      const result: any = await withAiFallback(
+        "Phase 1",
+        hasGeminiKey ? () => executePhase1Gemini(context, onSearchUsed) : null,
+        hasAnthropicKey ? () => executePhase1Claude(context, onSearchUsed) : null,
+        () => generateMockPhase1(context)
       );
-      reportId = report.id;
-    } catch (saveErr) {
-      console.error("Auto report saving failed:", saveErr);
+
+      result.competitors = cleanCompetitors(result.competitors, "legacy", context);
+      if (hasRainforestKey) {
+        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      }
+      webSearchCount += result.web_searches_performed || 0;
+
+      await updateAnalysisPhase(analysisId, 1, "phase1_result", result, webSearchCount);
+      return { analysisId, phase: 1, status: "running", stepResult: result, totalSearches: webSearchCount };
     }
-    
-    const duration = Date.now() - startTime;
-    emitProgress(id, "analysis_complete", 4, "Analysis completed successfully", 100, {
-      duration,
-      analysisId: id,
-      phase1: phase1Result,
-      phase2: phase2Result,
-      phase3: phase3Result,
-      totalSearches: webSearchCount,
-      reportId
-    });
-    
+
+    if (record.phase === 1) {
+      // ----------------------------------------------------
+      // PHASE 2: RESEARCH INTELLIGENCE
+      // ----------------------------------------------------
+      const result: any = await withAiFallback(
+        "Phase 2",
+        hasGeminiKey ? () => executePhase2Gemini(context, onSearchUsed) : null,
+        hasAnthropicKey ? () => executePhase2Claude(context, onSearchUsed) : null,
+        () => generateMockPhase2(context)
+      );
+
+      result.competitors = cleanCompetitors(result.competitors, "emerging", context);
+      if (hasRainforestKey) {
+        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      }
+      webSearchCount += result.web_searches_performed || 0;
+
+      await updateAnalysisPhase(analysisId, 2, "phase2_result", result, webSearchCount);
+      return { analysisId, phase: 2, status: "running", stepResult: result, totalSearches: webSearchCount };
+    }
+
+    if (record.phase === 2) {
+      // ----------------------------------------------------
+      // PHASE 3: STRATEGIC SYNTHESIS + finalize
+      // ----------------------------------------------------
+      if (!phase1Result || !phase2Result) {
+        throw new Error("Missing phase 1/2 results — cannot run phase 3");
+      }
+
+      const result: any = await withAiFallback(
+        "Phase 3",
+        hasGeminiKey ? () => executePhase3Gemini(context, phase1Result, phase2Result, onSearchUsed) : null,
+        hasAnthropicKey ? () => executePhase3Claude(context, phase1Result, phase2Result, onSearchUsed) : null,
+        () => generateMockPhase3(context, phase1Result, phase2Result)
+      );
+      webSearchCount += result.web_searches_performed || 0;
+
+      await updateAnalysisPhase(analysisId, 3, "phase3_result", result, webSearchCount);
+
+      // Save CompetitorAnalyses to DB/Memory for link references
+      await saveCompetitorAnalyses(analysisId, context.orgId, phase1Result, phase2Result);
+
+      // Mark as complete
+      await completeAnalysis(analysisId, Date.now() - startTime);
+
+      // Auto-save report
+      let reportId = "";
+      try {
+        const report = await createReportFromAnalysis(
+          context.userId,
+          analysisId,
+          context.projectId,
+          {
+            phase1: phase1Result,
+            phase2: phase2Result,
+            phase3: result,
+            productName: context.productName,
+            industry: context.industry,
+            targetMarket: context.targetMarket,
+            pricePoint: context.pricePoint,
+          },
+          context.orgId
+        );
+        reportId = report.id;
+      } catch (saveErr) {
+        console.error("Auto report saving failed:", saveErr);
+      }
+
+      return { analysisId, phase: 4, status: "complete", stepResult: result, totalSearches: webSearchCount, reportId };
+    }
+
+    // Already past phase 3 without being marked complete/failed — nothing left to run.
+    return { analysisId, phase: record.phase, status: record.status, stepResult: null, totalSearches: 0 };
   } catch (error: any) {
-    console.error("Analysis process crashed:", error);
-    await updateStatus(0, "FAILED", null, null, null, error.message || "Unknown error during analysis");
-    emitProgress(id, "error", 0, error.message || "Analysis failed");
+    console.error(`Analysis step crashed at phase ${record.phase}:`, error);
+    const message = error.message || "Unknown error during analysis";
+    await failAnalysis(analysisId, message);
+    return { analysisId, phase: record.phase, status: "failed", stepResult: null, totalSearches: webSearchCount, error: message };
   }
-}
-
-function emitProgress(analysisId: string, type: string, phase: number, message: string, progress = 100, result: any = null) {
-  analysisEvents.emit(`progress:${analysisId}`, {
-    type,
-    phase,
-    message,
-    progress,
-    result,
-  });
-}
-
-function emitSearchUpdate(analysisId: string, totalSearches: number) {
-  analysisEvents.emit(`progress:${analysisId}`, {
-    type: "search_update",
-    total_searches: totalSearches
-  });
 }
 
 // ----------------------------------------------------

@@ -3,7 +3,7 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
 
-export async function createAnalysis(userId: string, orgId: string = "dev_org_id", projectId?: string, formData?: any) {
+export async function createAnalysis(userId: string, orgId: string = "dev_org_id", projectId?: string, context?: any) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("analyses")
@@ -13,6 +13,7 @@ export async function createAnalysis(userId: string, orgId: string = "dev_org_id
         project_id: projectId || null,
         status: "pending",
         phase: 0,
+        context: context || {},
       })
       .select()
       .single();
@@ -29,6 +30,7 @@ export async function createAnalysis(userId: string, orgId: string = "dev_org_id
           projectId: projectId || null,
           status: "PENDING",
           phase: 0,
+          context: context || {},
         }
       });
       return {
@@ -48,6 +50,7 @@ export async function createAnalysis(userId: string, orgId: string = "dev_org_id
         projectId: projectId || null,
         status: "PENDING" as const,
         phase: 0,
+        context: context || {},
         phase1Result: null,
         phase2Result: null,
         phase3Result: null,
@@ -99,11 +102,12 @@ export async function updateAnalysisPhase(
 ) {
   if (isSupabaseConfigured) {
     // Note: total_searches is intentionally not persisted — it's tracked
-    // in-memory and streamed live via SSE only, not part of the schema.
+    // and returned per-step to the client instead, not part of the schema.
     const { error } = await supabaseAdmin
       .from("analyses")
       .update({
         phase,
+        status: "running",
         [phaseKey]: result,
       })
       .eq("id", analysisId);
@@ -111,14 +115,15 @@ export async function updateAnalysisPhase(
     if (error) throw error;
   } else {
     // Local DB/memoryDb Fallback
-    const prismaKey = phaseKey === "phase1_result" ? "phase1Result" 
-                    : phaseKey === "phase2_result" ? "phase2Result" 
+    const prismaKey = phaseKey === "phase1_result" ? "phase1Result"
+                    : phaseKey === "phase2_result" ? "phase2Result"
                     : "phase3Result";
     try {
       await prisma.analysis.update({
         where: { id: analysisId },
         data: {
           phase,
+          status: "RUNNING",
           [prismaKey]: result,
         }
       });
@@ -127,6 +132,7 @@ export async function updateAnalysisPhase(
       const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
       if (mockAnalysis) {
         mockAnalysis.phase = phase;
+        mockAnalysis.status = "RUNNING";
         mockAnalysis[prismaKey as "phase1Result" | "phase2Result" | "phase3Result"] = result;
       }
     }
@@ -220,10 +226,12 @@ export async function getAnalysis(analysisId: string) {
       if (!analysis) return null;
       return {
         id: analysis.id,
+        org_id: analysis.orgId,
         project_id: analysis.projectId,
         user_id: analysis.userId,
         status: analysis.status.toLowerCase(),
         phase: analysis.phase,
+        context: analysis.context,
         phase1_result: analysis.phase1Result,
         phase2_result: analysis.phase2Result,
         phase3_result: analysis.phase3Result,
@@ -246,10 +254,12 @@ export async function getAnalysis(analysisId: string) {
       const project = memoryDb.projects.find(p => p.id === mockAnalysis.projectId);
       return {
         id: mockAnalysis.id,
+        org_id: mockAnalysis.orgId,
         project_id: mockAnalysis.projectId,
         user_id: mockAnalysis.userId,
         status: mockAnalysis.status.toLowerCase(),
         phase: mockAnalysis.phase,
+        context: mockAnalysis.context,
         phase1_result: mockAnalysis.phase1Result,
         phase2_result: mockAnalysis.phase2Result,
         phase3_result: mockAnalysis.phase3Result,

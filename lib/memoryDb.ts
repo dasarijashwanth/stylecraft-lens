@@ -58,6 +58,7 @@ export interface MockAnalysis {
   projectId: string | null;
   status: "PENDING" | "RUNNING" | "COMPLETE" | "FAILED";
   phase: number;
+  context?: any;
   phase1Result: any;
   phase2Result: any;
   phase3Result: any;

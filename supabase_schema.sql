@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS analyses (
     project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     phase INTEGER NOT NULL DEFAULT 1,
+    context JSONB DEFAULT '{}'::jsonb,
     phase1_result JSONB DEFAULT '{}'::jsonb,
     phase2_result JSONB DEFAULT '{}'::jsonb,
     phase3_result JSONB DEFAULT '{}'::jsonb,
