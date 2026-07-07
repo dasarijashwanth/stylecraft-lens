@@ -9,6 +9,13 @@ import path from "path";
 const SNAPSHOT_PATH = path.join(process.cwd(), ".local-data", "memdb-snapshot.json");
 const AUTOSAVE_INTERVAL_MS = 3000;
 
+// Vercel (and other serverless platforms) mount a read-only filesystem and
+// recycle warm containers unpredictably — a setInterval here would fail on
+// every write AND leak a recurring timer into every container that imports
+// this module for the life of that container. This snapshot is a local-dev
+// convenience only; production persistence goes through Supabase.
+const IS_SERVERLESS = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+
 export interface MockCompetitor {
   id: string;
   orgId: string;
@@ -158,13 +165,14 @@ class MemoryDatabase {
   outputs: MockOutput[] = [];
 
   constructor() {
-    if (!this.loadSnapshot()) {
+    if (IS_SERVERLESS || !this.loadSnapshot()) {
       this.seed();
     }
-    this.startAutosave();
+    if (!IS_SERVERLESS) this.startAutosave();
   }
 
   private loadSnapshot(): boolean {
+    if (IS_SERVERLESS) return false;
     try {
       if (!fs.existsSync(SNAPSHOT_PATH)) return false;
       const raw = fs.readFileSync(SNAPSHOT_PATH, "utf-8");
@@ -185,6 +193,7 @@ class MemoryDatabase {
   }
 
   saveSnapshot() {
+    if (IS_SERVERLESS) return;
     try {
       fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
       const data = {
