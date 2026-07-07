@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS reports (
     pricing_analysis JSONB DEFAULT '{}'::jsonb,
     go_to_market JSONB DEFAULT '{}'::jsonb,
     content_form JSONB DEFAULT '{}'::jsonb,
+    product_knowledge JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );

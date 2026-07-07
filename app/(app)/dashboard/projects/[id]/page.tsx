@@ -30,6 +30,7 @@ import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ArtworkTab } from "@/components/project/ArtworkTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
+import { GTM_FIELD_SCHEMA, GTM_SECTIONS } from "@/lib/gtm-field-schema";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork";
 
@@ -471,6 +472,8 @@ function ReportTabContent({
           editing={editing}
           localData={localData}
           setLocalData={setLocalData}
+          report={report}
+          projectId={projectId}
         />
       )}
       {activeTab === "content-form" && (
@@ -766,92 +769,245 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
 // ────────────────────────────────────────────────────────────────────────────
 // GO TO MARKET TAB VIEW & EDIT
 // ────────────────────────────────────────────────────────────────────────────
-function GoToMarketTab({ data, editing, localData, setLocalData }: any) {
-  if (editing) {
-    return (
-      <div className="space-y-4 text-xs">
-        <div className="space-y-1">
-          <label className="font-semibold text-text-primary">Positioning Strategy</label>
-          <textarea
-            rows={3}
-            value={localData?.positioning || ""}
-            onChange={e => setLocalData({ ...localData, positioning: e.target.value })}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="font-semibold text-text-primary">Strategic notes & deployment details</label>
-          <textarea
-            rows={4}
-            value={localData?.notes || ""}
-            onChange={e => setLocalData({ ...localData, notes: e.target.value })}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
-            placeholder="Type strategic details..."
-          />
-        </div>
+function GoToMarketTab({ data, editing, localData, setLocalData, report, projectId }: any) {
+  const [recsOpen, setRecsOpen] = useState(false);
+
+  const editBlock = editing && (
+    <div className="space-y-4 text-xs">
+      <div className="space-y-1">
+        <label className="font-semibold text-text-primary">Positioning Strategy</label>
+        <textarea
+          rows={3}
+          value={localData?.positioning || ""}
+          onChange={e => setLocalData({ ...localData, positioning: e.target.value })}
+          className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
+        />
       </div>
-    );
-  }
+      <div className="space-y-1">
+        <label className="font-semibold text-text-primary">Strategic notes & deployment details</label>
+        <textarea
+          rows={4}
+          value={localData?.notes || ""}
+          onChange={e => setLocalData({ ...localData, notes: e.target.value })}
+          className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
+          placeholder="Type strategic details..."
+        />
+      </div>
+    </div>
+  );
 
   const recs = data.recommendations || [];
   const wins = data.quick_wins || [];
 
   return (
-    <div className="space-y-5 text-xs">
-      <div className="p-4 bg-surface-3/30 border border-border rounded-xl">
-        <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Core Positioning Statement</span>
-        <p className="text-text-primary leading-relaxed mt-1 italic">{data.positioning || "No core positioning recorded."}</p>
-      </div>
+    <div className="space-y-6 text-xs">
+      {editing ? (
+        editBlock
+      ) : (
+        <div className="border border-border rounded-xl overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setRecsOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-surface-3/30 hover:bg-surface-3/50 transition-colors"
+          >
+            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Strategic Recommendations</span>
+            <ChevronRight className={`w-3.5 h-3.5 text-text-muted transition-transform ${recsOpen ? "rotate-90" : ""}`} />
+          </button>
+          {recsOpen && (
+            <div className="p-4 space-y-5">
+              <div className="p-4 bg-surface-3/30 border border-border rounded-xl">
+                <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Core Positioning Statement</span>
+                <p className="text-text-primary leading-relaxed mt-1 italic">{data.positioning || "No core positioning recorded."}</p>
+              </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {/* Recommendations */}
-        <div className="space-y-2.5">
-          <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Strategic Recommendations</h4>
-          <div className="space-y-3">
-            {recs.map((r: any, i: number) => {
-              const priorityColors = 
-                r.priority === "high" ? "border-l-2 border-danger bg-danger-bg/5 p-3 rounded-lg" :
-                r.priority === "medium" ? "border-l-2 border-warning bg-warning-bg/5 p-3 rounded-lg" :
-                "border-l-2 border-zinc-500 bg-surface-3/20 p-3 rounded-lg";
-              return (
-                <div key={i} className={priorityColors}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-text-primary">{r.title || r.headline}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
-                      r.priority === "high" ? "bg-danger/10 border-danger/25 text-danger" :
-                      r.priority === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
-                      "bg-zinc-800 border-zinc-700 text-zinc-400"
-                    }`}>
-                      {r.priority}
-                    </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-2.5">
+                  <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Strategic Recommendations</h4>
+                  <div className="space-y-3">
+                    {recs.map((r: any, i: number) => {
+                      const priorityColors =
+                        r.priority === "high" ? "border-l-2 border-danger bg-danger-bg/5 p-3 rounded-lg" :
+                        r.priority === "medium" ? "border-l-2 border-warning bg-warning-bg/5 p-3 rounded-lg" :
+                        "border-l-2 border-zinc-500 bg-surface-3/20 p-3 rounded-lg";
+                      return (
+                        <div key={i} className={priorityColors}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-text-primary">{r.title || r.headline}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
+                              r.priority === "high" ? "bg-danger/10 border-danger/25 text-danger" :
+                              r.priority === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
+                              "bg-zinc-800 border-zinc-700 text-zinc-400"
+                            }`}>
+                              {r.priority}
+                            </span>
+                          </div>
+                          <p className="text-text-muted text-[10px] mt-1.5 leading-relaxed">{r.detail || r.explanation}</p>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <p className="text-text-muted text-[10px] mt-1.5 leading-relaxed">{r.detail || r.explanation}</p>
                 </div>
-              );
-            })}
-          </div>
-        </div>
 
-        {/* Quick wins */}
-        <div className="space-y-2.5">
-          <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Tactical Quick Wins</h4>
-          <ul className="space-y-2">
-            {wins.map((w: any, i: number) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-accent font-bold font-mono mt-0.5">»</span>
-                <span className="text-text-secondary leading-normal">{w}</span>
-              </li>
-            ))}
-          </ul>
+                <div className="space-y-2.5">
+                  <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Tactical Quick Wins</h4>
+                  <ul className="space-y-2">
+                    {wins.map((w: any, i: number) => (
+                      <li key={i} className="flex gap-2">
+                        <span className="text-accent font-bold font-mono mt-0.5">»</span>
+                        <span className="text-text-secondary leading-normal">{w}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-3 border-t border-border/40">
+                <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">GTM Deployment Notes</h4>
+                <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
+                  {data.notes || "Add deployment details by clicking Edit."}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {!editing && <ProductKnowledgeSection report={report} projectId={projectId} />}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PRODUCT KNOWLEDGE (74-field GTM generator)
+// ────────────────────────────────────────────────────────────────────────────
+const SOURCE_LABELS: Record<string, string> = {
+  sales_kit: "Sales Kit",
+  tds: "TDS",
+  active_report: "Active Report",
+  multiple: "Multiple",
+  none: "TBD",
+};
+
+function isFieldComplete(answer: string | undefined) {
+  const trimmed = (answer || "").trim();
+  return trimmed !== "" && trimmed.toUpperCase() !== "TBD";
+}
+
+function ProductKnowledgeSection({ report, projectId }: { report: any; projectId: string }) {
+  const [pk, setPk] = useState<any>(report?.product_knowledge || null);
+  const [generating, setGenerating] = useState(false);
+  const [savingField, setSavingField] = useState<string | null>(null);
+  const [reportId, setReportId] = useState<string | null>(report?.id || null);
+
+  useEffect(() => {
+    setPk(report?.product_knowledge || null);
+    setReportId(report?.id || null);
+  }, [report?.id]);
+
+  const fields = pk?.fields || {};
+  const completedCount = GTM_FIELD_SCHEMA.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
+
+  async function handleGenerate() {
+    setGenerating(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/gtm`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Generation failed");
+      setPk(json.productKnowledge);
+      setReportId(json.reportId);
+      toast.success("Go-To-Market product knowledge generated");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to generate Go-To-Market data");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleFieldBlur(fieldId: string, value: string) {
+    if (!reportId || !pk) return;
+    const current = fields[fieldId];
+    if (current?.answer === value) return; // no change, skip the write
+
+    const updated = {
+      ...pk,
+      fields: { ...fields, [fieldId]: { answer: value, source: current?.source || "none" } },
+    };
+    setPk(updated);
+    setSavingField(fieldId);
+    try {
+      const res = await fetch(`/api/reports/${reportId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_knowledge: updated }),
+      });
+      if (!res.ok) throw new Error();
+    } catch (e) {
+      toast.error("Failed to save field");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Product Knowledge</span>
+          {pk && (
+            <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
+              {completedCount}/{GTM_FIELD_SCHEMA.length} fields completed
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors shadow"
+        >
+          {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          <span>{pk ? "Regenerate Go-To-Market" : "Generate Go-To-Market"}</span>
+        </button>
       </div>
 
-      <div className="space-y-1.5 pt-3 border-t border-border/40">
-        <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">GTM Deployment Notes</h4>
-        <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
-          {data.notes || "Add deployment details by clicking Edit."}
+      {!pk ? (
+        <p className="p-4 text-text-muted text-[11px]">
+          Generate the 74-field product knowledge sheet from this project's Sales Kit, TDS, and Active Report.
         </p>
-      </div>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {GTM_SECTIONS.map(section => (
+            <div key={section} className="p-4 space-y-3">
+              <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{section}</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                {GTM_FIELD_SCHEMA.filter(f => f.section === section).map(f => {
+                  const entry = fields[f.id];
+                  const complete = isFieldComplete(entry?.answer);
+                  return (
+                    <div key={f.id} className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="font-semibold text-text-primary text-[11px]">{f.question}</label>
+                        <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border shrink-0 ${
+                          !complete ? "bg-warning/10 border-warning/25 text-warning" : "bg-surface-3 border-border text-text-muted"
+                        }`}>
+                          {SOURCE_LABELS[entry?.source || "none"]}
+                          {savingField === f.id && "…"}
+                        </span>
+                      </div>
+                      <textarea
+                        key={`${f.id}-${pk?.generatedAt || "empty"}`}
+                        rows={2}
+                        defaultValue={entry?.answer || ""}
+                        onBlur={e => handleFieldBlur(f.id, e.target.value)}
+                        className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px]"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

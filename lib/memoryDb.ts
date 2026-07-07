@@ -98,6 +98,7 @@ export interface MockReport {
   pricing_analysis?: any;
   go_to_market?: any;
   content_form?: any;
+  product_knowledge?: any;
   createdAt: Date;
   updatedAt: Date;
 }
