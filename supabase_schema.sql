@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS projects (
     motor_tech VARCHAR(255),
     key_diff VARCHAR(255),
     price_point VARCHAR(255),
+    saved_defaults JSONB DEFAULT '{}'::jsonb,
     latest_analysis_id UUID,
     latest_report_id UUID,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,

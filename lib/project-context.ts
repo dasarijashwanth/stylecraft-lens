@@ -43,10 +43,8 @@ export async function buildFullProjectContext(
         .from("projects")
         .select(`
           *,
-          saved_defaults,
           reports (
             id,
-            content,
             competitive_analysis,
             pricing_analysis,
             go_to_market,

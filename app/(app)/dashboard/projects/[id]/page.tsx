@@ -951,13 +951,22 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
     });
   }, [project.id]);
 
+  function writeHtmlToTab(win: Window, html: string) {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  }
+
   function openHtmlInNewTab(html: string) {
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
+    const win = window.open("", "_blank");
+    if (win) writeHtmlToTab(win, html);
   }
 
   async function generateOutput(type: "sales-kit" | "tds") {
+    // Open the tab synchronously, inside the click's user-activation window —
+    // generation can take 10s+, and window.open() after that await is long
+    // past Chrome's user-gesture grace period and gets silently popup-blocked.
+    const win = window.open("", "_blank");
     setGenerating(type);
     try {
       const res = await fetch(`/api/projects/${project.id}/${type}`, { method: "POST" });
@@ -967,13 +976,16 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
       toast.success(`${type === "sales-kit" ? "Sales Kit" : "TDS"} generated!`);
       if (data.html) {
         setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
-        const blob = new Blob([data.html], { type: "text/html" });
-        const url = URL.createObjectURL(blob);
-        const win = window.open(url, "_blank");
-        if (win) win.onload = () => setTimeout(() => win.print(), 400);
+        if (win) {
+          writeHtmlToTab(win, data.html);
+          win.onload = () => setTimeout(() => win.print(), 400);
+        }
+      } else if (win) {
+        win.close();
       }
     } catch (err: any) {
       toast.error(err.message || `Failed to generate ${type}`);
+      if (win) win.close();
     } finally {
       setGenerating(null);
     }
@@ -985,6 +997,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
       return;
     }
 
+    const win = window.open("", "_blank");
     setViewing(type);
     try {
       const res = await fetch(`/api/projects/${project.id}/${type}`, { method: "POST" });
@@ -993,12 +1006,14 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
 
       if (data.html) {
         setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
-        openHtmlInNewTab(data.html);
+        if (win) writeHtmlToTab(win, data.html);
       } else {
         toast.error(`No ${type === "sales-kit" ? "Sales Kit" : "TDS"} available to view`);
+        if (win) win.close();
       }
     } catch (err: any) {
       toast.error(err.message || `Failed to load ${type}`);
+      if (win) win.close();
     } finally {
       setViewing(null);
     }

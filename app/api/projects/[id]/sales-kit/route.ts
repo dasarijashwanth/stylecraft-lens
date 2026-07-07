@@ -4,6 +4,8 @@ import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
+export const maxDuration = 60;
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     if (isSupabaseConfigured) {
