@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
-import { prisma } from "@/lib/db";
-import { memoryDb } from "@/lib/memoryDb";
+import { getProject, updateProject, deleteProject } from "@/lib/db/projects";
 
 export async function GET(
   request: Request,
@@ -10,69 +9,16 @@ export async function GET(
   try {
     const session = await getAuthSession();
     const { id } = params;
-    
-    try {
-      // 1. Try PostgreSQL
-      const project = await prisma.project.findUnique({
-        where: { id },
-        include: {
-          analyses: { orderBy: { createdAt: "desc" } },
-          competitors: {
-            include: {
-              competitor: true,
-            },
-          },
-          reports: { orderBy: { createdAt: "desc" } },
-        },
-      });
-      
-      if (!project || project.orgId !== session.orgId) {
-        return NextResponse.json(
-          { error: "NOT_FOUND", message: "Project not found" },
-          { status: 404 }
-        );
-      }
-      
-      return NextResponse.json({ project });
-    } catch (dbError) {
-      console.warn(`PostgreSQL unavailable in GET /api/projects/${id}. Falling back to memoryDb:`, dbError);
-      
-      // 2. Fallback to Memory Database
-      const project = memoryDb.projects.find(p => p.id === id);
-      if (!project || project.orgId !== session.orgId) {
-        return NextResponse.json(
-          { error: "NOT_FOUND", message: "Project not found" },
-          { status: 404 }
-        );
-      }
-      
-      const analyses = memoryDb.analyses
-        .filter(a => a.projectId === id)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-      
-      const reports = memoryDb.reports
-        .filter(r => r.projectId === id)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-      
-      // Seed some linked competitors for the mock project detail if not present
-      const competitors = memoryDb.competitors
-        .filter(c => c.orgId === session.orgId)
-        .slice(0, 3)
-        .map(c => ({
-          projectId: id,
-          competitorId: c.id,
-          competitor: c,
-        }));
-      
-      return NextResponse.json({
-        project: {
-          ...project,
-          analyses,
-          reports,
-          competitors,
-        },
-      });
+
+    const project = await getProject(id, session.orgId);
+    if (!project) {
+      return NextResponse.json(
+        { error: "NOT_FOUND", message: "Project not found" },
+        { status: 404 }
+      );
     }
+
+    return NextResponse.json({ project });
   } catch (error: any) {
     return NextResponse.json(
       { error: "SERVER_ERROR", message: error.message },
@@ -89,9 +35,9 @@ export async function PATCH(
     const session = await getAuthSession();
     const { id } = params;
     const body = await request.json();
-    
+
     // Filter allowed fields
-    const updateData: any = {};
+    const updateData: Record<string, any> = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.industry !== undefined) updateData.industry = body.industry;
     if (body.targetMarket !== undefined) updateData.targetMarket = body.targetMarket;
@@ -106,48 +52,18 @@ export async function PATCH(
     if (body.latestAnalysisId !== undefined) updateData.latestAnalysisId = body.latestAnalysisId;
     if (body.latestReportId !== undefined) updateData.latestReportId = body.latestReportId;
     if (body.lastUsedAt !== undefined) updateData.lastUsedAt = body.lastUsedAt;
-    
+
     try {
-      // 1. Try PostgreSQL
-      const project = await prisma.project.findUnique({
-        where: { id }
-      });
-      
-      if (!project || project.orgId !== session.orgId) {
+      const project = await updateProject(id, session.orgId, updateData);
+      return NextResponse.json({ project });
+    } catch (e: any) {
+      if (e.message === "Project not found") {
         return NextResponse.json(
           { error: "NOT_FOUND", message: "Project not found" },
           { status: 404 }
         );
       }
-      
-      const updated = await prisma.project.update({
-        where: { id },
-        data: updateData
-      });
-      
-      return NextResponse.json({ project: updated });
-    } catch (dbError) {
-      console.warn(`PostgreSQL unavailable in PATCH /api/projects/${id}. Falling back to memoryDb:`, dbError);
-      
-      // 2. Fallback to Memory Database
-      const projectIndex = memoryDb.projects.findIndex(p => p.id === id);
-      if (projectIndex === -1 || memoryDb.projects[projectIndex].orgId !== session.orgId) {
-        return NextResponse.json(
-          { error: "NOT_FOUND", message: "Project not found" },
-          { status: 404 }
-        );
-      }
-      
-      const existing = memoryDb.projects[projectIndex];
-      const updated = {
-        ...existing,
-        ...updateData,
-        updatedAt: new Date()
-      };
-      
-      memoryDb.projects[projectIndex] = updated;
-      
-      return NextResponse.json({ project: updated });
+      throw e;
     }
   } catch (error: any) {
     return NextResponse.json(
@@ -164,45 +80,17 @@ export async function DELETE(
   try {
     const session = await getAuthSession();
     const { id } = params;
-    
-    try {
-      // 1. Try PostgreSQL
-      const project = await prisma.project.findUnique({
-        where: { id }
-      });
-      
-      if (!project || project.orgId !== session.orgId) {
-        return NextResponse.json(
-          { error: "NOT_FOUND", message: "Project not found" },
-          { status: 404 }
-        );
-      }
-      
-      await prisma.project.delete({
-        where: { id }
-      });
-      
-      return NextResponse.json({ success: true });
-    } catch (dbError) {
-      console.warn(`PostgreSQL unavailable in DELETE /api/projects/${id}. Falling back to memoryDb:`, dbError);
-      
-      // 2. Fallback to Memory Database
-      const projectIndex = memoryDb.projects.findIndex(p => p.id === id);
-      if (projectIndex === -1 || memoryDb.projects[projectIndex].orgId !== session.orgId) {
-        return NextResponse.json(
-          { error: "NOT_FOUND", message: "Project not found" },
-          { status: 404 }
-        );
-      }
-      
-      memoryDb.projects.splice(projectIndex, 1);
-      
-      // Cascade delete analyses and reports associated with this project
-      memoryDb.analyses = memoryDb.analyses.filter(a => a.projectId !== id);
-      memoryDb.reports = memoryDb.reports.filter(r => r.projectId !== id);
-      
-      return NextResponse.json({ success: true });
+
+    const project = await getProject(id, session.orgId);
+    if (!project) {
+      return NextResponse.json(
+        { error: "NOT_FOUND", message: "Project not found" },
+        { status: 404 }
+      );
     }
+
+    await deleteProject(id, session.orgId);
+    return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json(
       { error: "SERVER_ERROR", message: error.message },

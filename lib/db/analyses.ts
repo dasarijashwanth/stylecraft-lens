@@ -3,12 +3,13 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
 
-export async function createAnalysis(userId: string, projectId?: string, formData?: any) {
+export async function createAnalysis(userId: string, orgId: string = "dev_org_id", projectId?: string, formData?: any) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("analyses")
       .insert({
         user_id: userId,
+        org_id: orgId,
         project_id: projectId || null,
         status: "pending",
         phase: 0,
@@ -23,7 +24,7 @@ export async function createAnalysis(userId: string, projectId?: string, formDat
     try {
       const analysis = await prisma.analysis.create({
         data: {
-          orgId: "dev_org_id",
+          orgId,
           userId: userId,
           projectId: projectId || null,
           status: "PENDING",
@@ -42,7 +43,7 @@ export async function createAnalysis(userId: string, projectId?: string, formDat
       const mockId = `an_${Date.now()}`;
       const analysis = {
         id: mockId,
-        orgId: "dev_org_id",
+        orgId,
         userId: userId,
         projectId: projectId || null,
         status: "PENDING" as const,
@@ -67,6 +68,28 @@ export async function createAnalysis(userId: string, projectId?: string, formDat
   }
 }
 
+export async function deleteAnalysis(analysisId: string, userId: string) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin
+      .from("analyses")
+      .delete()
+      .eq("id", analysisId)
+      .eq("user_id", userId);
+
+    if (error) throw error;
+    return;
+  }
+
+  try {
+    await prisma.analysis.delete({ where: { id: analysisId } });
+  } catch (e) {
+    console.warn("Prisma failed in deleteAnalysis. Falling back to memoryDb.");
+    const index = memoryDb.analyses.findIndex(a => a.id === analysisId && a.userId === userId);
+    if (index !== -1) memoryDb.analyses.splice(index, 1);
+    memoryDb.competitorAnalyses = memoryDb.competitorAnalyses.filter(ca => ca.analysisId !== analysisId);
+  }
+}
+
 export async function updateAnalysisPhase(
   analysisId: string,
   phase: number,
@@ -75,12 +98,13 @@ export async function updateAnalysisPhase(
   searches: number
 ) {
   if (isSupabaseConfigured) {
+    // Note: total_searches is intentionally not persisted — it's tracked
+    // in-memory and streamed live via SSE only, not part of the schema.
     const { error } = await supabaseAdmin
       .from("analyses")
       .update({
         phase,
         [phaseKey]: result,
-        total_searches: searches,
       })
       .eq("id", analysisId);
 
