@@ -99,6 +99,8 @@ export interface MockReport {
   go_to_market?: any;
   content_form?: any;
   product_knowledge?: any;
+  driveUrl?: string | null;
+  driveFileId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -120,6 +122,7 @@ export interface MockOutput {
   content: any;
   html?: string;
   driveUrl?: string;
+  driveFileId?: string;
   createdAt: Date;
 }
 

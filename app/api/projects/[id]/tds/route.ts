@@ -11,21 +11,21 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (isSupabaseConfigured) {
       const { data } = await supabaseAdmin
         .from("project_outputs")
-        .select("content, html, created_at")
+        .select("content, html, drive_url, created_at")
         .eq("project_id", params.id)
         .eq("output_type", "tds")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      return NextResponse.json({ tds: data?.content ?? null, html: data?.html ?? null });
+      return NextResponse.json({ tds: data?.content ?? null, html: data?.html ?? null, driveUrl: data?.drive_url ?? null });
     }
 
     const latest = memoryDb.outputs
       .filter(o => o.projectId === params.id && o.outputType === "tds")
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
 
-    return NextResponse.json({ tds: latest?.content ?? null, html: latest?.html ?? null });
+    return NextResponse.json({ tds: latest?.content ?? null, html: latest?.html ?? null, driveUrl: latest?.driveUrl ?? null });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || "Failed to load TDS" }, { status: 500 });
   }

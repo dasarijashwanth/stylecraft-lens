@@ -971,7 +971,7 @@ function ProductKnowledgeSection({ report, projectId }: { report: any; projectId
 
       {!pk ? (
         <p className="p-4 text-text-muted text-[11px]">
-          Generate the 74-field product knowledge sheet from this project's Sales Kit, TDS, and Active Report.
+          Generate the 74-field product knowledge sheet from this project&apos;s Sales Kit, TDS, and Active Report.
         </p>
       ) : (
         <div className="divide-y divide-border/60">
@@ -1094,18 +1094,60 @@ function ContentFormTab({ data, editing, localData, setLocalData }: any) {
 function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
   const [generating, setGenerating] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
   const [generatedHtml, setGeneratedHtml] = useState<Record<string, string>>({});
+  const [driveUrls, setDriveUrls] = useState<Record<string, string | null>>({});
+  const [hasGtm, setHasGtm] = useState(false);
 
-  // Preload any previously generated outputs so View works without regenerating
+  // Preload any previously generated outputs so View/Drive state works without regenerating
   useEffect(() => {
     (["sales-kit", "tds"] as const).forEach(async (type) => {
       try {
         const res = await fetch(`/api/projects/${project.id}/${type}`);
         const data = await res.json();
         if (data.html) setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
+        setDriveUrls(prev => ({ ...prev, [type]: data.driveUrl ?? null }));
       } catch (e) {}
     });
+    (async () => {
+      try {
+        const res = await fetch(`/api/projects/${project.id}/gtm`);
+        const data = await res.json();
+        setHasGtm(!!data.productKnowledge?.fields && Object.keys(data.productKnowledge.fields).length > 0);
+        setDriveUrls(prev => ({ ...prev, gtm: data.productKnowledge?.driveUrl ?? null }));
+      } catch (e) {}
+    })();
   }, [project.id]);
+
+  useEffect(() => {
+    setDriveUrls(prev => ({ ...prev, "active-report": report?.drive_url ?? null }));
+  }, [report?.id]);
+
+  async function downloadPdf(docType: "sales-kit" | "tds" | "gtm" | "active-report", id: string) {
+    setDownloadingPdf(docType);
+    try {
+      const res = await fetch(`/api/documents/${docType}/${id}/export-pdf`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "PDF export failed");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="(.+)"/);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = match?.[1] || `${docType}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to download PDF");
+    } finally {
+      setDownloadingPdf(null);
+    }
+  }
 
   function writeHtmlToTab(win: Window, html: string) {
     win.document.open();
@@ -1187,14 +1229,14 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* Sales Kit Card */}
-        <div className="p-3 bg-surface-1 border border-border rounded-lg flex items-center justify-between gap-3">
+        <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
           <div className="space-y-0.5">
             <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
               <span>💼 Sales Kit</span>
             </h4>
             <p className="text-[10px] text-text-muted">Elevator pitch, features, competitive advantage table & objection handlers</p>
           </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
               onClick={() => viewOutput("sales-kit")}
@@ -1210,29 +1252,30 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
               disabled={generating === "sales-kit"}
               className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-all disabled:opacity-50 shadow-sm"
             >
-              {generating === "sales-kit" ? "Generating…" : "Export HTML"}
+              {generating === "sales-kit" ? "Generating…" : "Regenerate"}
             </button>
-            {generatedHtml["sales-kit"] && (
-              <SaveToDriveButton
-                projectId={project.id}
-                projectName={project.name || project.productName}
-                outputType="Sales Kit"
-                content={generatedHtml["sales-kit"]}
-                fileName={`Sales Kit — ${project.productName}.html`}
-              />
-            )}
+            <button
+              type="button"
+              onClick={() => downloadPdf("sales-kit", project.id)}
+              disabled={downloadingPdf === "sales-kit"}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{downloadingPdf === "sales-kit" ? "Rendering…" : "Download PDF"}</span>
+            </button>
+            <SaveToDriveButton docType="sales-kit" id={project.id} initialDriveUrl={driveUrls["sales-kit"]} />
           </div>
         </div>
 
         {/* Technical Data Sheet Card */}
-        <div className="p-3 bg-surface-1 border border-border rounded-lg flex items-center justify-between gap-3">
+        <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
           <div className="space-y-0.5">
             <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
               <span>📄 Technical Data Sheet (TDS)</span>
             </h4>
             <p className="text-[10px] text-text-muted">Motor RPM, battery mAh, blade specs, dimensions & safety certifications</p>
           </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
               onClick={() => viewOutput("tds")}
@@ -1248,16 +1291,69 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
               disabled={generating === "tds"}
               className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-all disabled:opacity-50 shadow-sm"
             >
-              {generating === "tds" ? "Generating…" : "Export TDS"}
+              {generating === "tds" ? "Generating…" : "Regenerate"}
             </button>
-            {generatedHtml["tds"] && (
-              <SaveToDriveButton
-                projectId={project.id}
-                projectName={project.name || project.productName}
-                outputType="TDS"
-                content={generatedHtml["tds"]}
-                fileName={`TDS — ${project.productName}.html`}
-              />
+            <button
+              type="button"
+              onClick={() => downloadPdf("tds", project.id)}
+              disabled={downloadingPdf === "tds"}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{downloadingPdf === "tds" ? "Rendering…" : "Download PDF"}</span>
+            </button>
+            <SaveToDriveButton docType="tds" id={project.id} initialDriveUrl={driveUrls["tds"]} />
+          </div>
+        </div>
+
+        {/* Go-To-Market Card */}
+        <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
+          <div className="space-y-0.5">
+            <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
+              <span>🎯 Go-To-Market (Product Knowledge)</span>
+            </h4>
+            <p className="text-[10px] text-text-muted">74-field spec sheet — generate it from the Go To Market tab</p>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => downloadPdf("gtm", project.id)}
+              disabled={!hasGtm || downloadingPdf === "gtm"}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{downloadingPdf === "gtm" ? "Rendering…" : "Download PDF"}</span>
+            </button>
+            {hasGtm ? (
+              <SaveToDriveButton docType="gtm" id={project.id} initialDriveUrl={driveUrls["gtm"]} />
+            ) : (
+              <span className="text-[10px] text-text-muted italic">Not generated yet</span>
+            )}
+          </div>
+        </div>
+
+        {/* Active Report Card */}
+        <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
+          <div className="space-y-0.5">
+            <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
+              <span>📊 Active Report</span>
+            </h4>
+            <p className="text-[10px] text-text-muted">Full competitive analysis, pricing, GTM & content brief</p>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => downloadPdf("active-report", report.id)}
+              disabled={!report?.id || downloadingPdf === "active-report"}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{downloadingPdf === "active-report" ? "Rendering…" : "Download PDF"}</span>
+            </button>
+            {report?.id ? (
+              <SaveToDriveButton docType="active-report" id={report.id} initialDriveUrl={driveUrls["active-report"]} />
+            ) : (
+              <span className="text-[10px] text-text-muted italic">No report linked yet</span>
             )}
           </div>
         </div>

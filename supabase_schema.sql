@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS reports (
     go_to_market JSONB DEFAULT '{}'::jsonb,
     content_form JSONB DEFAULT '{}'::jsonb,
     product_knowledge JSONB DEFAULT '{}'::jsonb,
+    drive_url VARCHAR(500),
+    drive_file_id VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -114,6 +116,7 @@ CREATE TABLE IF NOT EXISTS project_outputs (
     content JSONB DEFAULT '{}'::jsonb NOT NULL,
     html TEXT,
     drive_url VARCHAR(500),
+    drive_file_id VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

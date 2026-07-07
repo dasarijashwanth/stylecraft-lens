@@ -49,12 +49,16 @@ export async function uploadToDrive({
   mimeType,
   projectName,
   outputType,
+  existingFileId,
 }: {
   content: string | Buffer;
   fileName: string;
   mimeType: string;
   projectName: string;
   outputType: string;
+  // If set, updates this file's content in place (same Drive file/link)
+  // instead of creating a new one — used for the "replace" path.
+  existingFileId?: string | null;
 }): Promise<{ fileId: string; webViewLink: string }> {
   // If Google credentials are not configured, return a realistic mock drive URL
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REFRESH_TOKEN) {
@@ -73,12 +77,29 @@ export async function uploadToDrive({
       };
     }
 
+    const stream = Readable.from(typeof content === "string" ? [content] : [content]);
+
+    if (existingFileId) {
+      try {
+        const updated = await drive.files.update({
+          fileId: existingFileId,
+          requestBody: { name: fileName },
+          media: { mimeType, body: stream },
+          fields: "id, webViewLink",
+        });
+        return { fileId: updated.data.id!, webViewLink: updated.data.webViewLink! };
+      } catch (updateErr) {
+        // The file may have been deleted/moved out from under us in Drive —
+        // fall through to creating a fresh one rather than failing outright.
+        console.warn("Drive file update failed, creating a new file instead:", updateErr);
+      }
+    }
+
     const rootId = await findOrCreateFolder(drive, "Stylecraft Lens");
     const projId = await findOrCreateFolder(drive, projectName, rootId);
     const outputId = await findOrCreateFolder(drive, outputType, projId);
 
-    const stream = Readable.from(typeof content === "string" ? [content] : [content]);
-
+    const createStream = existingFileId ? Readable.from(typeof content === "string" ? [content] : [content]) : stream;
     const file = await drive.files.create({
       requestBody: {
         name: fileName,
@@ -86,7 +107,7 @@ export async function uploadToDrive({
       },
       media: {
         mimeType,
-        body: stream,
+        body: createStream,
       },
       fields: "id, webViewLink",
     });

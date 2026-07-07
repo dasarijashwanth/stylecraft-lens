@@ -196,6 +196,8 @@ function toApiShape(r: MockReport, project?: { id: string; name: string; product
     go_to_market: r.go_to_market ?? {},
     content_form: r.content_form ?? {},
     product_knowledge: r.product_knowledge ?? {},
+    drive_url: r.driveUrl ?? null,
+    drive_file_id: r.driveFileId ?? null,
     created_at: r.createdAt,
     updated_at: r.updatedAt,
     projects: project ? { id: project.id, name: project.name, product_name: project.productName } : null,
