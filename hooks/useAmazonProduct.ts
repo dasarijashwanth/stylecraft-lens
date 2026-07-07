@@ -48,7 +48,7 @@ export function useAmazonProduct(asin: string | undefined | null): UseAmazonProd
     setLoading(true);
     setError(null);
 
-    fetch(`/api/amazon/product?asin=${key}`)
+    fetch(`/api/amazon/product/${key}`)
       .then(r => r.json())
       .then(d => {
         if (cancelled) return;

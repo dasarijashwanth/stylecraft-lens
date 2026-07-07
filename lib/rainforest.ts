@@ -1,8 +1,10 @@
 // lib/rainforest.ts
 // Shared Rainforest API client — verified live Amazon product data (price,
-// rating, review count, BSR) used to enrich AI-discovered competitors, plus
-// ASIN resolution by title/brand search when the AI's own ASIN is wrong or
-// a placeholder.
+// rating, review count, BSR, feature bullets) used to enrich AI-discovered
+// competitors, plus ASIN resolution by title/brand search when the AI's own
+// ASIN is wrong or a placeholder, plus real customer review fetching for
+// review-grounded strengths/weaknesses analysis.
+import { isSupabaseConfigured, supabaseAdmin } from "./supabase";
 
 export const hasRainforestKey =
   !!process.env.RAINFOREST_API_KEY &&
@@ -24,6 +26,7 @@ export interface RainforestProduct {
   image: string | null;
   amazon_url: string;
   in_stock: boolean;
+  feature_bullets: string[];
   last_updated: string;
 }
 
@@ -33,8 +36,55 @@ export interface AsinMatch {
   confidence: number;
 }
 
+export interface AmazonReview {
+  title: string;
+  body: string;
+  rating: number | null;
+  date: string | null;
+  verifiedPurchase: boolean;
+}
+
 const productCache = new Map<string, Promise<RainforestProduct | null>>();
 const searchCache = new Map<string, Promise<AsinMatch | null>>();
+
+const PRODUCT_TTL_MS = 12 * 60 * 60 * 1000;
+const REVIEWS_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Cross-instance cache backed by Supabase — an in-memory Map only survives
+// within one warm serverless container. Read-through/write-through; callers
+// pass a fetcher that only runs on a genuine cache miss/expiry.
+async function withSupabaseCache<T>(asin: string, cacheType: string, ttlMs: number, fetcher: () => Promise<T | null>): Promise<T | null> {
+  if (isSupabaseConfigured) {
+    try {
+      const { data } = await supabaseAdmin
+        .from("amazon_cache")
+        .select("payload, fetched_at")
+        .eq("asin", asin)
+        .eq("cache_type", cacheType)
+        .maybeSingle();
+
+      if (data && Date.now() - new Date(data.fetched_at).getTime() < ttlMs) {
+        return data.payload as T;
+      }
+    } catch (e) {
+      console.warn(`Amazon cache read failed for ${asin}/${cacheType}:`, e);
+    }
+  }
+
+  const fresh = await fetcher();
+
+  if (isSupabaseConfigured && fresh !== null) {
+    try {
+      await supabaseAdmin
+        .from("amazon_cache")
+        .upsert({ asin, cache_type: cacheType, payload: fresh, fetched_at: new Date().toISOString() }, { onConflict: "asin,cache_type" });
+    } catch (e) {
+      console.warn(`Amazon cache write failed for ${asin}/${cacheType}:`, e);
+    }
+  }
+
+  return fresh;
+}
 
 async function fetchWithRetry(url: string, attempts = 3): Promise<any> {
   let lastErr: any;
@@ -66,7 +116,7 @@ export async function getAmazonProduct(asin: string): Promise<RainforestProduct 
   const cleanAsin = asin.toUpperCase();
   if (productCache.has(cleanAsin)) return productCache.get(cleanAsin)!;
 
-  const promise = fetchAmazonProduct(cleanAsin);
+  const promise = withSupabaseCache(cleanAsin, "product", PRODUCT_TTL_MS, () => fetchAmazonProduct(cleanAsin));
   productCache.set(cleanAsin, promise);
   return promise;
 }
@@ -105,6 +155,8 @@ async function fetchAmazonProduct(cleanAsin: string): Promise<RainforestProduct 
       image: p.main_image?.link ?? null,
       amazon_url: `https://www.amazon.com/dp/${cleanAsin}`,
       in_stock: p.buybox_winner?.is_prime !== undefined ? true : (p.availability?.type === "in_stock"),
+      // Real, verbatim bullet points from the live listing — never invented.
+      feature_bullets: Array.isArray(p.feature_bullets) ? p.feature_bullets.filter((b: any) => typeof b === "string" && b.trim()) : [],
       last_updated: new Date().toISOString(),
     };
   } catch (err) {
@@ -174,4 +226,63 @@ async function fetchAsinMatch(searchTerm: string, title: string, brand?: string)
     console.warn(`Rainforest ASIN search failed for "${searchTerm}":`, err);
     return null;
   }
+}
+
+// Fetches real customer reviews for an ASIN — the ONLY source strengths,
+// weaknesses, and recent-buyer-sentiment analysis is allowed to draw from
+// (see lib/amazon-review-analysis.ts). Pulls up to 2 pages of the most
+// recent reviews (~20-30 reviews); bounded deliberately to keep this fast
+// enough for an on-demand UI action rather than a full 3-page sweep.
+export async function getAmazonReviews(asin: string): Promise<AmazonReview[] | null> {
+  if (!hasRainforestKey) return null;
+  if (!asin || !/^[A-Z0-9]{10}$/i.test(asin)) return null;
+
+  const cleanAsin = asin.toUpperCase();
+  const cached = await withSupabaseCache<AmazonReview[]>(cleanAsin, "reviews_raw", REVIEWS_TTL_MS, () => fetchAllReviews(cleanAsin));
+  return cached;
+}
+
+// Distinguishes "the request itself failed / the endpoint is unavailable"
+// (ok: false — caller should surface "Live Amazon data unavailable", never
+// substitute anything) from "the request succeeded and there just aren't
+// many reviews" (ok: true, reviews: []) — those must not be treated the same.
+async function fetchReviewsPage(cleanAsin: string, page: number): Promise<{ ok: boolean; reviews: AmazonReview[] }> {
+  try {
+    const url = new URL("https://api.rainforestapi.com/request");
+    url.searchParams.set("api_key", process.env.RAINFOREST_API_KEY!);
+    url.searchParams.set("type", "reviews");
+    url.searchParams.set("asin", cleanAsin);
+    url.searchParams.set("amazon_domain", "amazon.com");
+    url.searchParams.set("sort_by", "most_recent");
+    url.searchParams.set("page", String(page));
+
+    const data = await fetchWithRetry(url.toString());
+    if (!data.request_info?.success || !Array.isArray(data.reviews)) {
+      console.warn(`Rainforest reviews request unsuccessful for ${cleanAsin} page ${page}:`, data.request_info?.message);
+      return { ok: false, reviews: [] };
+    }
+
+    return {
+      ok: true,
+      reviews: data.reviews.map((r: any) => ({
+        title: r.title || "",
+        body: r.body || "",
+        rating: r.rating ?? null,
+        date: r.date?.utc || r.date?.raw || null,
+        verifiedPurchase: !!r.verified_purchase,
+      })).filter((r: AmazonReview) => r.body.trim().length > 0),
+    };
+  } catch (err) {
+    console.warn(`Rainforest reviews fetch failed for ${cleanAsin} page ${page}:`, err);
+    return { ok: false, reviews: [] };
+  }
+}
+
+// Returns null if the reviews endpoint itself failed on every page (caller
+// must show "unavailable", never fall back to anything); returns the
+// (possibly empty) review list if at least one page genuinely succeeded.
+async function fetchAllReviews(cleanAsin: string): Promise<AmazonReview[] | null> {
+  const [page1, page2] = await Promise.all([fetchReviewsPage(cleanAsin, 1), fetchReviewsPage(cleanAsin, 2)]);
+  if (!page1.ok && !page2.ok) return null;
+  return [...page1.reviews, ...page2.reviews];
 }

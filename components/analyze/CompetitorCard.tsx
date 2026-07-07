@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useAmazonProduct } from "@/hooks/useAmazonProduct";
-import { ChevronDown, ChevronUp, ExternalLink, Star } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Star, Loader2, Quote } from "lucide-react";
+import type { ReviewAnalysis } from "@/lib/amazon-review-analysis";
 
 interface Competitor {
   name:               string;
@@ -27,11 +28,41 @@ interface CompetitorCardProps {
   tier?: "legacy" | "emerging";
 }
 
+type ReviewAnalysisState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "loaded"; data: ReviewAnalysis & { retrievedAt: string } }
+  | { status: "error"; message: string };
+
 export function CompetitorCard({ competitor: c }: CompetitorCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [reviewAnalysis, setReviewAnalysis] = useState<ReviewAnalysisState>({ status: "idle" });
 
   // Fetch real-time data from Rainforest API using hook
   const { data: live, loading, error } = useAmazonProduct(c.asin);
+
+  const isValidAsinForReviews = /^[A-Z0-9]{10}$/i.test(c.asin ?? "");
+
+  async function loadReviewAnalysis() {
+    if (!isValidAsinForReviews || reviewAnalysis.status === "loading") return;
+    setReviewAnalysis({ status: "loading" });
+    try {
+      const res = await fetch(`/api/amazon/reviews-analysis/${c.asin.toUpperCase()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Live Amazon data unavailable — retry");
+      setReviewAnalysis({ status: "loaded", data });
+    } catch (err: any) {
+      setReviewAnalysis({ status: "error", message: err.message || "Live Amazon data unavailable — retry" });
+    }
+  }
+
+  function handleToggleExpand() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && reviewAnalysis.status === "idle") {
+      loadReviewAnalysis();
+    }
+  }
 
   const isValidAsin = /^[A-Z0-9]{10}$/i.test(c.asin ?? "");
   const amazonUrl   = isValidAsin
@@ -163,51 +194,104 @@ export function CompetitorCard({ competitor: c }: CompetitorCardProps) {
         </div>
       </div>
 
-      {/* Expandable: Strengths / Weaknesses / News */}
+      {/* Expandable: Strengths / Weaknesses / recent themes — sourced live
+          from this ASIN's actual Amazon reviews, fetched on first expand. */}
       <div className="border-t border-border/40 pt-3">
         <button
           type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center justify-between text-text-muted hover:text-text-primary transition-colors font-semibold"
+          onClick={handleToggleExpand}
+          disabled={!isValidAsinForReviews}
+          className="w-full flex items-center justify-between text-text-muted hover:text-text-primary transition-colors font-semibold disabled:opacity-50"
         >
-          <span>Strengths, weaknesses & news</span>
+          <span>Strengths, weaknesses & recent buyer sentiment</span>
           {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
 
         {expanded && (
           <div className="space-y-3.5 mt-3.5 animate-slide-down">
-            {/* Strengths */}
-            <div className="space-y-1">
-              <p className="font-bold text-success text-[10px] uppercase tracking-wider">Strengths</p>
-              <ul className="list-disc pl-4 space-y-1 text-text-secondary">
-                {c.strengths?.map((s, idx) => (
-                  <li key={idx}>{s}</li>
-                ))}
-                {(!c.strengths || c.strengths.length === 0) && <li className="italic text-text-muted">None documented</li>}
-              </ul>
-            </div>
-
-            {/* Weaknesses */}
-            <div className="space-y-1">
-              <p className="font-bold text-danger text-[10px] uppercase tracking-wider">Weaknesses</p>
-              <ul className="list-disc pl-4 space-y-1 text-text-secondary">
-                {c.weaknesses?.map((w, idx) => (
-                  <li key={idx}>{w}</li>
-                ))}
-                {(!c.weaknesses || c.weaknesses.length === 0) && <li className="italic text-text-muted">None documented</li>}
-              </ul>
-            </div>
-
-            {/* Recent News */}
-            {c.recent_news && c.recent_news.length > 0 && (
-              <div className="space-y-1">
-                <p className="font-bold text-accent text-[10px] uppercase tracking-wider">Recent News</p>
-                <ul className="list-disc pl-4 space-y-1 text-text-secondary">
-                  {c.recent_news.map((n, idx) => (
-                    <li key={idx}>{n}</li>
-                  ))}
-                </ul>
+            {reviewAnalysis.status === "loading" && (
+              <div className="flex items-center gap-2 text-text-muted py-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Fetching and analyzing real Amazon reviews…</span>
               </div>
+            )}
+
+            {reviewAnalysis.status === "error" && (
+              <div className="flex items-center justify-between gap-2 py-2">
+                <span className="text-danger">{reviewAnalysis.message}</span>
+                <button
+                  type="button"
+                  onClick={loadReviewAnalysis}
+                  className="px-2 py-1 border border-border rounded text-[10px] font-bold text-text-secondary hover:border-border-strong transition-colors shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.insufficientData && (
+              <p className="italic text-text-muted">Insufficient review data for this product.</p>
+            )}
+
+            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && (
+              <>
+                {/* Strengths */}
+                <div className="space-y-1.5">
+                  <p className="font-bold text-success text-[10px] uppercase tracking-wider">Strengths</p>
+                  {reviewAnalysis.data.strengths.length === 0 && (
+                    <p className="italic text-text-muted">None with verified review support</p>
+                  )}
+                  {reviewAnalysis.data.strengths.map((s, idx) => (
+                    <div key={idx} className="space-y-1">
+                      <p className="text-text-secondary font-semibold">{s.theme}</p>
+                      {s.evidence.map((e, i) => (
+                        <div key={i} className="flex gap-1.5 pl-2 text-[10px] text-text-muted italic">
+                          <Quote className="w-3 h-3 shrink-0 mt-0.5" />
+                          <span>&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Weaknesses */}
+                <div className="space-y-1.5">
+                  <p className="font-bold text-danger text-[10px] uppercase tracking-wider">Weaknesses</p>
+                  {reviewAnalysis.data.weaknesses.length === 0 && (
+                    <p className="italic text-text-muted">None with verified review support</p>
+                  )}
+                  {reviewAnalysis.data.weaknesses.map((w, idx) => (
+                    <div key={idx} className="space-y-1">
+                      <p className="text-text-secondary font-semibold">{w.theme}</p>
+                      {w.evidence.map((e, i) => (
+                        <div key={i} className="flex gap-1.5 pl-2 text-[10px] text-text-muted italic">
+                          <Quote className="w-3 h-3 shrink-0 mt-0.5" />
+                          <span>&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Recent themes */}
+                {reviewAnalysis.data.recentThemes.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="font-bold text-accent text-[10px] uppercase tracking-wider">Recent Buyer Themes</p>
+                    <ul className="list-disc pl-4 space-y-1 text-text-secondary">
+                      {reviewAnalysis.data.recentThemes.map((n, idx) => (
+                        <li key={idx}>{n}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <p className="text-[9px] text-text-muted pt-1 border-t border-border/30">
+                  Based on {reviewAnalysis.data.reviewCountAnalyzed} Amazon reviews
+                  {reviewAnalysis.data.dateRange?.earliest && ` from ${reviewAnalysis.data.dateRange.earliest} to ${reviewAnalysis.data.dateRange.latest}`}
+                  , retrieved {new Date(reviewAnalysis.data.retrievedAt).toLocaleString()}
+                  {(reviewAnalysis.data as any).cached === false ? "" : " (cached)"}
+                </p>
+              </>
             )}
           </div>
         )}

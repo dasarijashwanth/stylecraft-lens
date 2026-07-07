@@ -120,6 +120,19 @@ CREATE TABLE IF NOT EXISTS project_outputs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- 7. AMAZON CACHE (Rainforest product + review-analysis responses)
+-- Cross-instance cache — an in-memory Map only helps within one warm
+-- serverless container; this survives across all of them. product: 12h TTL,
+-- reviews_analysis: 24h TTL, enforced by the caller checking fetched_at.
+CREATE TABLE IF NOT EXISTS amazon_cache (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    asin VARCHAR(20) NOT NULL,
+    cache_type VARCHAR(30) NOT NULL,
+    payload JSONB NOT NULL,
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS amazon_cache_asin_type_idx ON amazon_cache(asin, cache_type);
+
 -- Enable RLS on all tables
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE analyses ENABLE ROW LEVEL SECURITY;
@@ -127,10 +140,12 @@ ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE competitors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE analysis_competitors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_outputs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE amazon_cache ENABLE ROW LEVEL SECURITY;
 
 -- Create Permissive RLS Policies (allows anyone to query/insert/update/delete for prototype stage)
 CREATE POLICY "Allow all operations for projects" ON projects FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for analyses" ON analyses FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for amazon_cache" ON amazon_cache FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for reports" ON reports FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for competitors" ON competitors FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for analysis_competitors" ON analysis_competitors FOR ALL USING (true) WITH CHECK (true);

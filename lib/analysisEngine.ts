@@ -411,16 +411,12 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
         rating: rating && rating !== "—" ? rating : fallback.rating,
         tier: defaultTier,
         initials: incoming.initials || incoming.name.split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase() || fallback.initials,
-        top_positive_review_themes: incoming.top_positive_review_themes || fallback.top_positive_review_themes || ["Good power output", "Great handling weight"],
-        top_negative_review_themes: incoming.top_negative_review_themes || fallback.top_negative_review_themes || ["High operational heat", "Charging block is bulky"],
-        confirmed_technical_specs: incoming.confirmed_technical_specs || fallback.confirmed_technical_specs || {
-          motor_type: context.motorTech || "Brushless DC",
-          rpm: "7,200 RPM",
-          run_time: "180 min",
-          charging_time: "120 min",
-          blade_material: "Titanium",
-          body_material: "Polycarbonate/Metal"
-        }
+        // Strengths/weaknesses/recent buyer sentiment are never AI-generated —
+        // populated on demand from real Amazon reviews via
+        // /api/amazon/reviews-analysis/[asin] (see CompetitorCard).
+        strengths: [],
+        weaknesses: [],
+        recent_news: [],
       });
     } else {
       cleaned.push({
@@ -435,21 +431,11 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
         monthly_sales: fallback.sales || (fallback as any).monthly_sales,
         bsr_rank: fallback.bsr || (fallback as any).bsr_rank,
         initials: fallback.initials,
-        key_features: [
-          {
-            headline: "Verified Listing Feature",
-            source: "Amazon",
-            attribution: "Per customer reviews:",
-            detail: "This product details and specifications have been verified against real Amazon marketplace indices."
-          }
-        ],
-        strengths: ["Verified real market data", "Top industry brand"],
-        weaknesses: ["High competition tier"],
+        key_features: [],
+        strengths: [],
+        weaknesses: [],
         recent_news: [],
-        top_feature_summary: "Verified market specs",
-        top_positive_review_themes: fallback.top_positive_review_themes,
-        top_negative_review_themes: fallback.top_negative_review_themes,
-        confirmed_technical_specs: fallback.confirmed_technical_specs
+        top_feature_summary: "",
       });
     }
   }
@@ -486,6 +472,17 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
         };
       }
 
+      // Real, verbatim bullet points from the live listing replace whatever
+      // the AI guessed — kept in the same {headline,...} shape the UI
+      // already renders, but the text itself is never AI-invented once a
+      // real listing is verified.
+      const realFeatures = product.feature_bullets.slice(0, 6).map(bullet => ({
+        headline: bullet,
+        source: "Amazon",
+        attribution: "From the Amazon listing:",
+        detail: "",
+      }));
+
       return {
         ...c,
         asin: product.asin,
@@ -496,6 +493,7 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
         bsr_rank: product.bsr || c.bsr_rank,
         amazon_url: product.amazon_url,
         image: product.image,
+        key_features: realFeatures.length > 0 ? realFeatures : c.key_features,
         verified_by_rainforest: true,
       };
     })
@@ -749,8 +747,9 @@ CRITICAL RULES:
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
 3. If motor type is mentioned, you MUST perform a DIRECT Amazon search using the exact term '[motor type] clipper' (e.g. 'vector motor clipper', 'brushless motor clipper') before selecting competitors. Results from this direct motor-type search must fill slots first.
 - Note: Andis Recon, Supreme Darkstar, and Suprent Fangs are examples of vector motor clippers that should appear when searching for vector motor competitors.
-4. Extract the top 3 positive review themes and top 3 negative review themes from customer reviews of the specific product.
-5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+4. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+
+Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
 Return this EXACT JSON schema:
 {
@@ -776,28 +775,7 @@ Return this EXACT JSON schema:
           "detail": "1–2 sentence explanation of what this means for the professional user"
         }
       ],
-      "strengths": ["Strength 1", "Strength 2"],
-      "weaknesses": ["Weakness 1", "Weakness 2"],
-      "recent_news": ["News item 1 if found"],
-      "top_feature_summary": "Single sentence — their #1 differentiating feature",
-      "top_positive_review_themes": [
-        "Positive theme 1",
-        "Positive theme 2",
-        "Positive theme 3"
-      ],
-      "top_negative_review_themes": [
-        "Negative theme 1",
-        "Negative theme 2",
-        "Negative theme 3"
-      ],
-      "confirmed_technical_specs": {
-        "motor_type": "e.g. vector/brushless/magnetic/rotary",
-        "rpm": "e.g. 7200 RPM or —",
-        "run_time": "e.g. 180 minutes or —",
-        "charging_time": "e.g. 120 minutes or —",
-        "blade_material": "e.g. DLC Titanium or —",
-        "body_material": "e.g. Metal/Heavy-duty plastic or —"
-      }
+      "top_feature_summary": "Single sentence — their #1 differentiating feature"
     }
   ]
 }`;
@@ -817,7 +795,7 @@ Company Context: ${context.companyContext || "—"}
 Instructions:
 1. Search Amazon ONLY for these brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
 2. If motor type (${context.motorTech || "—"}) is mentioned (especially 'vector' or 'brushless'), perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
-3. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, monthly sales velocity, top 3 positive and negative review themes, and confirmed technical specs.`;
+3. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
   return { systemPrompt, userPrompt };
 }
@@ -864,8 +842,9 @@ CRITICAL RULES:
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
 3. If motor type is mentioned, you MUST perform a DIRECT Amazon search using the exact term '[motor type] clipper' (e.g. 'vector motor clipper', 'brushless motor clipper') before selecting competitors. Results from this direct motor-type search must fill slots first.
 - Note: Andis Recon, Supreme Darkstar, and Suprent Fangs are examples of vector motor clippers that should appear when searching for vector motor competitors.
-4. Extract the top 3 positive review themes and top 3 negative review themes from customer reviews of the specific product.
-5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+4. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+
+Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
 Return this EXACT JSON schema:
 {
@@ -891,28 +870,7 @@ Return this EXACT JSON schema:
           "detail": "1–2 sentence explanation of what this means for the user"
         }
       ],
-      "strengths": ["Strength 1", "Strength 2"],
-      "weaknesses": ["Weakness 1", "Weakness 2"],
-      "recent_news": [],
-      "top_feature_summary": "Single sentence — their #1 differentiating feature",
-      "top_positive_review_themes": [
-        "Positive theme 1",
-        "Positive theme 2",
-        "Positive theme 3"
-      ],
-      "top_negative_review_themes": [
-        "Negative theme 1",
-        "Negative theme 2",
-        "Negative theme 3"
-      ],
-      "confirmed_technical_specs": {
-        "motor_type": "e.g. vector/brushless/magnetic/rotary",
-        "rpm": "e.g. 7200 RPM or —",
-        "run_time": "e.g. 180 minutes or —",
-        "charging_time": "e.g. 120 minutes or —",
-        "blade_material": "e.g. DLC Titanium or —",
-        "body_material": "e.g. Metal/Heavy-duty plastic or —"
-      }
+      "top_feature_summary": "Single sentence — their #1 differentiating feature"
     }
   ]
 }`;
@@ -932,7 +890,7 @@ Instructions:
 1. Search Amazon for emerging brand products matching the motor technology (${context.motorTech || "—"}) and key features first, price secondary.
 2. If motor type (${context.motorTech || "—"}) is mentioned, perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
 3. Exclude the large brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
-4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, monthly sales velocity, top 3 positive and negative review themes, and confirmed technical specs.`;
+4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
   return { systemPrompt, userPrompt };
 }
@@ -1045,13 +1003,12 @@ function generateMockPhase1(context: AnalysisContext) {
           detail: "Offers ultra-fine calibration and seamless control suitable for demanding commercial standards."
         }
       ],
-      strengths: ["Industry-standard build reliability", "High consumer satisfaction & verified reviews", "Strong brand equity"],
-      weaknesses: ["Higher retail price point", "Legacy hardware profile"],
-      recent_news: [`${c.brand} announced updated product revisions for the 2026 commercial catalog.`],
+      // Never fabricated — populated on demand from real Amazon reviews via
+      // /api/amazon/reviews-analysis/[asin].
+      strengths: [],
+      weaknesses: [],
+      recent_news: [],
       top_feature_summary: `${c.brand} precision platform with commercial duty cycle`,
-      top_positive_review_themes: c.top_positive_review_themes,
-      top_negative_review_themes: c.top_negative_review_themes,
-      confirmed_technical_specs: c.confirmed_technical_specs
     }))
   };
 }
@@ -1092,13 +1049,10 @@ function generateMockPhase2(context: AnalysisContext) {
           detail: "Advanced composite materials keep operating temperatures lower than traditional metal alternatives."
         }
       ],
-      strengths: ["Aggressive pricing strategy", "Modern feature set", "Fast review growth"],
-      weaknesses: ["Smaller brand awareness", "Shorter warranty history"],
+      strengths: [],
+      weaknesses: [],
       recent_news: [],
       top_feature_summary: `Modern DTC ${c.brand} design with high price-to-performance ratio`,
-      top_positive_review_themes: c.top_positive_review_themes,
-      top_negative_review_themes: c.top_negative_review_themes,
-      confirmed_technical_specs: c.confirmed_technical_specs
     }))
   };
 }
