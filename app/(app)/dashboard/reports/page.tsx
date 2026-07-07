@@ -199,8 +199,8 @@ export default function ReportsPage() {
                   {r.title}
                 </h3>
                 
-                {r.project && (
-                  <p className="text-[10px] text-text-muted mt-1">Project: {r.project.name}</p>
+                {r.projects && (
+                  <p className="text-[10px] text-text-muted mt-1">Project: {r.projects.name}</p>
                 )}
               </div>
 
@@ -208,7 +208,7 @@ export default function ReportsPage() {
               <div className="pt-4 border-t border-border/60 mt-4 flex items-center justify-between text-[10px] text-text-muted">
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
-                  Edited {formatRelativeTime(r.updatedAt)}
+                  Edited {formatRelativeTime(r.updated_at)}
                 </span>
                 
                 <span className="flex items-center gap-0.5 text-accent font-semibold hover:text-accent-hover">

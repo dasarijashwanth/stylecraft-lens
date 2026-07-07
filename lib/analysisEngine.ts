@@ -2,6 +2,8 @@ import { EventEmitter } from "events";
 import { prisma } from "./db";
 import { memoryDb } from "./memoryDb";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
+import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "./anthropic";
+import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
 import { updateAnalysisPhase, completeAnalysis, failAnalysis } from "./db/analyses";
 import { createReportFromAnalysis } from "./db/reports";
@@ -477,6 +479,51 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
   return cleaned;
 }
 
+// Overwrite AI-discovered competitor price/rating/review data with real,
+// verified live Amazon data from Rainforest. Tries the AI-provided ASIN
+// first; if that doesn't resolve to a real listing, searches Amazon by
+// product title + brand to find the real ASIN before giving up. Competitors
+// that can't be verified either way are explicitly flagged (never left
+// pointing at a fabricated /dp/{asin} link) so the UI can show them as
+// unverified instead of rendering fabricated data as if it were real.
+async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[]> {
+  if (!hasRainforestKey) return competitors;
+
+  return Promise.all(
+    competitors.map(async (c) => {
+      let product = await getAmazonProduct(c.asin);
+
+      if (!product) {
+        const match = await resolveAsinBySearch(c.name, c.brand);
+        if (match) {
+          product = await getAmazonProduct(match.asin);
+        }
+      }
+
+      if (!product) {
+        return {
+          ...c,
+          verified_by_rainforest: false,
+          amazon_url: `https://www.amazon.com/s?k=${encodeURIComponent(`${c.brand || ""} ${c.name}`.trim())}`,
+        };
+      }
+
+      return {
+        ...c,
+        asin: product.asin,
+        price: product.price,
+        rating: product.rating_str,
+        review_count: product.reviews_str,
+        monthly_sales: product.monthly_str || c.monthly_sales,
+        bsr_rank: product.bsr || c.bsr_rank,
+        amazon_url: product.amazon_url,
+        image: product.image,
+        verified_by_rainforest: true,
+      };
+    })
+  );
+}
+
 async function runAnalysisInBackground(context: AnalysisContext) {
   const startTime = Date.now();
   const id = context.id;
@@ -548,23 +595,23 @@ async function runAnalysisInBackground(context: AnalysisContext) {
     await sleep(2000);
     emitProgress(id, "phase_progress", 1, "Identifying 5 established legacy competitors...", 80);
     
-    let phase1Result: any;
-    if (hasGeminiKey) {
-      try {
-        phase1Result = await executePhase1Gemini(context, (searchQuery) => {
-          webSearchCount += 1;
-          emitProgress(id, "search_update", 1, `Searching: ${searchQuery}`, 85);
-          emitSearchUpdate(id, webSearchCount);
-        });
-      } catch (err: any) {
-        console.warn("Gemini Phase 1 failed, falling back to mock:", err);
-        phase1Result = generateMockPhase1(context);
-      }
-    } else {
-      phase1Result = generateMockPhase1(context);
-    }
+    const onSearchUsed1 = (searchQuery: string) => {
+      webSearchCount += 1;
+      emitProgress(id, "search_update", 1, `Searching: ${searchQuery}`, 85);
+      emitSearchUpdate(id, webSearchCount);
+    };
+    const phase1Result: any = await withAiFallback(
+      "Phase 1",
+      hasGeminiKey ? () => executePhase1Gemini(context, onSearchUsed1) : null,
+      hasAnthropicKey ? () => executePhase1Claude(context, onSearchUsed1) : null,
+      () => generateMockPhase1(context)
+    );
     
     phase1Result.competitors = cleanCompetitors(phase1Result.competitors, "legacy", context);
+    if (hasRainforestKey) {
+      emitProgress(id, "phase_progress", 1, "Verifying competitor prices & ratings via Rainforest...", 95);
+      phase1Result.competitors = await enrichCompetitorsWithRainforest(phase1Result.competitors);
+    }
     webSearchCount += phase1Result.web_searches_performed || 0;
     emitSearchUpdate(id, webSearchCount);
 
@@ -581,23 +628,23 @@ async function runAnalysisInBackground(context: AnalysisContext) {
     await sleep(2500);
     emitProgress(id, "phase_progress", 2, "Extracting competitor positioning, strengths, and weaknesses...", 75);
     
-    let phase2Result: any;
-    if (hasGeminiKey) {
-      try {
-        phase2Result = await executePhase2Gemini(context, (searchQuery) => {
-          webSearchCount += 1;
-          emitProgress(id, "search_update", 2, `Searching: ${searchQuery}`, 80);
-          emitSearchUpdate(id, webSearchCount);
-        });
-      } catch (err: any) {
-        console.warn("Gemini Phase 2 failed, falling back to mock:", err);
-        phase2Result = generateMockPhase2(context);
-      }
-    } else {
-      phase2Result = generateMockPhase2(context);
-    }
+    const onSearchUsed2 = (searchQuery: string) => {
+      webSearchCount += 1;
+      emitProgress(id, "search_update", 2, `Searching: ${searchQuery}`, 80);
+      emitSearchUpdate(id, webSearchCount);
+    };
+    const phase2Result: any = await withAiFallback(
+      "Phase 2",
+      hasGeminiKey ? () => executePhase2Gemini(context, onSearchUsed2) : null,
+      hasAnthropicKey ? () => executePhase2Claude(context, onSearchUsed2) : null,
+      () => generateMockPhase2(context)
+    );
     
     phase2Result.competitors = cleanCompetitors(phase2Result.competitors, "emerging", context);
+    if (hasRainforestKey) {
+      emitProgress(id, "phase_progress", 2, "Verifying competitor prices & ratings via Rainforest...", 90);
+      phase2Result.competitors = await enrichCompetitorsWithRainforest(phase2Result.competitors);
+    }
     webSearchCount += phase2Result.web_searches_performed || 0;
     emitSearchUpdate(id, webSearchCount);
 
@@ -614,21 +661,17 @@ async function runAnalysisInBackground(context: AnalysisContext) {
     await sleep(2000);
     emitProgress(id, "phase_progress", 3, "Formulating opportunities, threats, and strategic recommendations...", 85);
     
-    let phase3Result: any;
-    if (hasGeminiKey) {
-      try {
-        phase3Result = await executePhase3Gemini(context, phase1Result, phase2Result, (searchQuery) => {
-          webSearchCount += 1;
-          emitProgress(id, "search_update", 3, `Searching: ${searchQuery}`, 90);
-          emitSearchUpdate(id, webSearchCount);
-        });
-      } catch (err: any) {
-        console.warn("Gemini Phase 3 failed, falling back to mock:", err);
-        phase3Result = generateMockPhase3(context, phase1Result, phase2Result);
-      }
-    } else {
-      phase3Result = generateMockPhase3(context, phase1Result, phase2Result);
-    }
+    const onSearchUsed3 = (searchQuery: string) => {
+      webSearchCount += 1;
+      emitProgress(id, "search_update", 3, `Searching: ${searchQuery}`, 90);
+      emitSearchUpdate(id, webSearchCount);
+    };
+    const phase3Result: any = await withAiFallback(
+      "Phase 3",
+      hasGeminiKey ? () => executePhase3Gemini(context, phase1Result, phase2Result, onSearchUsed3) : null,
+      hasAnthropicKey ? () => executePhase3Claude(context, phase1Result, phase2Result, onSearchUsed3) : null,
+      () => generateMockPhase3(context, phase1Result, phase2Result)
+    );
     
     webSearchCount += phase3Result.web_searches_performed || 0;
     emitSearchUpdate(id, webSearchCount);
@@ -700,10 +743,84 @@ function emitSearchUpdate(analysisId: string, totalSearches: number) {
 }
 
 // ----------------------------------------------------
-// GEMINI API RUNNERS WITH GOOGLE SEARCH GROUNDING
+// AI PROVIDER FALLBACK: try Gemini first, then Anthropic, then mock data.
 // ----------------------------------------------------
 
-async function executePhase1Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+// Google Search grounding has its own quota separate from plain generation —
+// it can be exhausted while plain calls still work fine. Retry ungrounded
+// (no live search, but still real AI reasoning) before giving up on Gemini
+// entirely and falling through to Anthropic/mock.
+async function generateWithGeminiFallback(
+  systemPrompt: string,
+  userPrompt: string,
+  onSearchUsed: (query: string) => void
+): Promise<string> {
+  try {
+    const response = await genAI.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+        tools: [{ googleSearch: {} }],
+        maxOutputTokens: 8192,
+      },
+    });
+    const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
+    queries.forEach((q) => onSearchUsed(q));
+    if (!response.text) {
+      throw new Error(`Empty response (finishReason: ${response.candidates?.[0]?.finishReason})`);
+    }
+    return response.text;
+  } catch (err: any) {
+    console.warn("Gemini call with Google Search grounding failed, retrying ungrounded:", err?.message || err);
+    // The prompt tells the model it has web search — without the tool
+    // actually attached, it tries to call it anyway and produces a
+    // MALFORMED_FUNCTION_CALL. Override that instruction for this attempt.
+    const ungroundedSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Web search is temporarily unavailable for this request. Do NOT attempt to call any search tool. Answer using your own trained knowledge instead, and still return the exact JSON schema requested.`;
+    const response = await genAI.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: userPrompt,
+      config: {
+        systemInstruction: ungroundedSystemPrompt,
+        maxOutputTokens: 8192,
+      },
+    });
+    if (!response.text) {
+      throw new Error(`Empty ungrounded response (finishReason: ${response.candidates?.[0]?.finishReason})`);
+    }
+    return response.text;
+  }
+}
+
+async function withAiFallback<T>(
+  label: string,
+  geminiCall: (() => Promise<T>) | null,
+  anthropicCall: (() => Promise<T>) | null,
+  mockCall: () => T
+): Promise<T> {
+  if (geminiCall) {
+    try {
+      return await geminiCall();
+    } catch (err: any) {
+      console.warn(`Gemini ${label} failed:`, err?.message || err);
+    }
+  }
+  if (anthropicCall) {
+    try {
+      console.warn(`Falling back to Anthropic for ${label}...`);
+      return await anthropicCall();
+    } catch (err: any) {
+      console.warn(`Anthropic ${label} fallback also failed, falling back to mock:`, err?.message || err);
+    }
+  }
+  return mockCall();
+}
+
+// ----------------------------------------------------
+// PHASE 1/2 PROMPTS (shared between Gemini and Anthropic runners)
+// ----------------------------------------------------
+
+function buildPhase1Prompt(context: AnalysisContext) {
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
 Your task: Research up to 6 ESTABLISHED, LARGE market leaders that compete with the user's product.
@@ -785,25 +902,41 @@ Instructions:
 2. If motor type (${context.motorTech || "—"}) is mentioned (especially 'vector' or 'brushless'), perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
 3. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, monthly sales velocity, top 3 positive and negative review themes, and confirmed technical specs.`;
 
-  const response = await genAI.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: userPrompt,
-    config: {
-      systemInstruction: systemPrompt,
-      tools: [{ googleSearch: {} }],
-    },
+  return { systemPrompt, userPrompt };
+}
+
+async function executePhase1Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context);
+  const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
+  return JSON.parse(cleanJsonString(text));
+}
+
+async function executePhase1Claude(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context);
+
+  const response = await anthropic.messages.create({
+    model: ANTHROPIC_MODEL,
+    max_tokens: 4000,
+    tools: [{ type: "web_search_20250305" as any, name: "web_search" }],
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
   });
 
-  // Track searches performed via Google Search grounding
-  const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
-  queries.forEach((q) => onSearchUsed(q));
+  response.content.forEach((block) => {
+    if (block.type === "tool_use" && block.name === "web_search") {
+      onSearchUsed((block.input as any).query);
+    }
+  });
 
-  const text = response.text || "";
+  const text = response.content
+    .filter(b => b.type === "text")
+    .map(b => b.text)
+    .join("");
 
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase2Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+function buildPhase2Prompt(context: AnalysisContext) {
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
 
 Your task: Research 5 INDIE, EMERGING, or NEWER brand products that compete with the user's product.
@@ -884,19 +1017,36 @@ Instructions:
 3. Exclude the large brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
 4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, monthly sales velocity, top 3 positive and negative review themes, and confirmed technical specs.`;
 
-  const response = await genAI.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: userPrompt,
-    config: {
-      systemInstruction: systemPrompt,
-      tools: [{ googleSearch: {} }],
-    },
+  return { systemPrompt, userPrompt };
+}
+
+async function executePhase2Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context);
+  const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
+  return JSON.parse(cleanJsonString(text));
+}
+
+async function executePhase2Claude(context: AnalysisContext, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context);
+
+  const response = await anthropic.messages.create({
+    model: ANTHROPIC_MODEL,
+    max_tokens: 4000,
+    tools: [{ type: "web_search_20250305" as any, name: "web_search" }],
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
   });
 
-  const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
-  queries.forEach((q) => onSearchUsed(q));
+  response.content.forEach((block) => {
+    if (block.type === "tool_use" && block.name === "web_search") {
+      onSearchUsed((block.input as any).query);
+    }
+  });
 
-  const text = response.text || "";
+  const text = response.content
+    .filter(b => b.type === "text")
+    .map(b => b.text)
+    .join("");
 
   return JSON.parse(cleanJsonString(text));
 }
@@ -904,23 +1054,34 @@ Instructions:
 async function executePhase3Gemini(context: AnalysisContext, phase1: any, phase2: any, onSearchUsed: (query: string) => void) {
   const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, phase1, phase2);
 
-  const response = await genAI.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: userPrompt,
-    config: {
-      systemInstruction: systemPrompt,
-      tools: [{ googleSearch: {} }],
-    },
+  let usedAnyQuery = false;
+  const text = await generateWithGeminiFallback(systemPrompt, userPrompt, (q) => {
+    usedAnyQuery = true;
+    onSearchUsed(q);
   });
-
-  const queries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
-  if (queries.length) {
-    queries.forEach((q) => onSearchUsed(q));
-  } else {
+  if (!usedAnyQuery) {
     onSearchUsed(`${context.industry} industry data lookup`);
   }
 
-  const text = response.text || "";
+  return JSON.parse(cleanJsonString(text));
+}
+
+async function executePhase3Claude(context: AnalysisContext, phase1: any, phase2: any, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, phase1, phase2);
+
+  onSearchUsed(`${context.industry} industry data lookup`);
+
+  const response = await anthropic.messages.create({
+    model: ANTHROPIC_MODEL,
+    max_tokens: 4000,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+
+  const text = response.content
+    .filter(b => b.type === "text")
+    .map(b => b.text)
+    .join("");
 
   return JSON.parse(cleanJsonString(text));
 }

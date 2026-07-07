@@ -22,7 +22,8 @@ import {
   Check,
   Globe,
   Sliders,
-  Target
+  Target,
+  Eye
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
@@ -624,7 +625,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               <div className="flex items-center justify-between">
                 <span className="font-bold text-text-primary">{c.name}</span>
                 <a href={c.amazon_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-accent hover:underline">
-                  Amazon Listing ↗
+                  {c.verified_by_rainforest === false ? "Search Amazon ↗" : "Amazon Listing ↗"}
                 </a>
               </div>
               <div className="text-[10px] text-text-muted flex justify-between">
@@ -632,6 +633,11 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
                 <span className="text-text-secondary font-bold">{c.price || "—"}</span>
                 <span>★ {c.rating || "—"} ({c.review_count || "—"})</span>
               </div>
+              {c.verified_by_rainforest === false && (
+                <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-warning-bg border border-warning/20 text-warning uppercase tracking-wider">
+                  Unverified — not matched on Amazon
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -646,7 +652,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               <div className="flex items-center justify-between">
                 <span className="font-bold text-text-primary">{c.name}</span>
                 <a href={c.amazon_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-accent hover:underline">
-                  Amazon Listing ↗
+                  {c.verified_by_rainforest === false ? "Search Amazon ↗" : "Amazon Listing ↗"}
                 </a>
               </div>
               <div className="text-[10px] text-text-muted flex justify-between">
@@ -654,6 +660,11 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
                 <span className="text-text-secondary font-bold">{c.price || "—"}</span>
                 <span>★ {c.rating || "—"} ({c.review_count || "—"})</span>
               </div>
+              {c.verified_by_rainforest === false && (
+                <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-warning-bg border border-warning/20 text-warning uppercase tracking-wider">
+                  Unverified — not matched on Amazon
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -926,7 +937,25 @@ function ContentFormTab({ data, editing, localData, setLocalData }: any) {
 // ────────────────────────────────────────────────────────────────────────────
 function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
   const [generating, setGenerating] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
   const [generatedHtml, setGeneratedHtml] = useState<Record<string, string>>({});
+
+  // Preload any previously generated outputs so View works without regenerating
+  useEffect(() => {
+    (["sales-kit", "tds"] as const).forEach(async (type) => {
+      try {
+        const res = await fetch(`/api/projects/${project.id}/${type}`);
+        const data = await res.json();
+        if (data.html) setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
+      } catch (e) {}
+    });
+  }, [project.id]);
+
+  function openHtmlInNewTab(html: string) {
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+  }
 
   async function generateOutput(type: "sales-kit" | "tds") {
     setGenerating(type);
@@ -950,6 +979,31 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
     }
   }
 
+  async function viewOutput(type: "sales-kit" | "tds") {
+    if (generatedHtml[type]) {
+      openHtmlInNewTab(generatedHtml[type]);
+      return;
+    }
+
+    setViewing(type);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/${type}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+
+      if (data.html) {
+        setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
+        openHtmlInNewTab(data.html);
+      } else {
+        toast.error(`No ${type === "sales-kit" ? "Sales Kit" : "TDS"} available to view`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || `Failed to load ${type}`);
+    } finally {
+      setViewing(null);
+    }
+  }
+
   return (
     <div className="p-4 bg-surface-2 border border-border rounded-xl space-y-3 shadow-sm">
       <div className="flex items-center justify-between">
@@ -970,6 +1024,15 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
             <p className="text-[10px] text-text-muted">Elevator pitch, features, competitive advantage table & objection handlers</p>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => viewOutput("sales-kit")}
+              disabled={viewing === "sales-kit"}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>{viewing === "sales-kit" ? "Loading…" : "View"}</span>
+            </button>
             <button
               type="button"
               onClick={() => generateOutput("sales-kit")}
@@ -999,6 +1062,15 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
             <p className="text-[10px] text-text-muted">Motor RPM, battery mAh, blade specs, dimensions & safety certifications</p>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => viewOutput("tds")}
+              disabled={viewing === "tds"}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>{viewing === "tds" ? "Loading…" : "View"}</span>
+            </button>
             <button
               type="button"
               onClick={() => generateOutput("tds")}

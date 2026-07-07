@@ -1,3 +1,5 @@
+import { Readable } from "stream";
+
 async function getDriveInstance() {
   try {
     const { google } = await import("googleapis");
@@ -70,8 +72,6 @@ export async function uploadToDrive({
         webViewLink: `https://drive.google.com/file/d/mock_${Date.now()}/view?usp=sharing`
       };
     }
-
-    const { Readable } = await import("stream");
 
     const rootId = await findOrCreateFolder(drive, "Stylecraft Lens");
     const projId = await findOrCreateFolder(drive, projectName, rootId);

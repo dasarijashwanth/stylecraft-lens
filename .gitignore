@@ -28,6 +28,9 @@ yarn-error.log*
 # local env files
 .env*.local
 
+# local dev-only memoryDb snapshot (see lib/memoryDb.ts)
+/.local-data
+
 # vercel
 .vercel
 

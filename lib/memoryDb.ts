@@ -1,4 +1,13 @@
 // In-memory fallback database for development when PostgreSQL is not connected
+//
+// Also autosaves to a local JSON snapshot so dev-server restarts (dependency
+// changes, cache clears, crashes) don't silently wipe unsaved data. This is a
+// dev convenience, not a substitute for a real database in production.
+import fs from "fs";
+import path from "path";
+
+const SNAPSHOT_PATH = path.join(process.cwd(), ".local-data", "memdb-snapshot.json");
+const AUTOSAVE_INTERVAL_MS = 3000;
 
 export interface MockCompetitor {
   id: string;
@@ -112,6 +121,32 @@ export interface MockNote {
   createdAt: Date;
 }
 
+// Snapshot JSON turns Date fields into ISO strings — convert the known
+// Date-typed fields back so downstream code (.getTime(), .toLocaleDateString())
+// keeps working after a reload.
+function reviveDateFields(items: any[] | undefined, fields: string[]): any[] {
+  return (items ?? []).map((item: any) => {
+    const copy: any = { ...item };
+    for (const field of fields) {
+      if (copy[field] != null) copy[field] = new Date(copy[field]);
+    }
+    return copy;
+  });
+}
+
+function reviveDates(data: any): any {
+  return {
+    competitors: reviveDateFields(data.competitors, ["createdAt", "updatedAt"]),
+    projects: reviveDateFields(data.projects, ["createdAt", "updatedAt", "lastUsedAt"]),
+    analyses: reviveDateFields(data.analyses, ["createdAt", "completedAt"]),
+    competitorAnalyses: data.competitorAnalyses ?? [],
+    reports: reviveDateFields(data.reports, ["createdAt", "updatedAt"]),
+    notes: reviveDateFields(data.notes, ["createdAt"]),
+    artwork: reviveDateFields(data.artwork, ["createdAt"]),
+    outputs: reviveDateFields(data.outputs, ["createdAt"]),
+  };
+}
+
 class MemoryDatabase {
   competitors: MockCompetitor[] = [];
   projects: MockProject[] = [];
@@ -123,7 +158,64 @@ class MemoryDatabase {
   outputs: MockOutput[] = [];
 
   constructor() {
-    this.seed();
+    if (!this.loadSnapshot()) {
+      this.seed();
+    }
+    this.startAutosave();
+  }
+
+  private loadSnapshot(): boolean {
+    try {
+      if (!fs.existsSync(SNAPSHOT_PATH)) return false;
+      const raw = fs.readFileSync(SNAPSHOT_PATH, "utf-8");
+      const data = reviveDates(JSON.parse(raw));
+      this.competitors = data.competitors ?? [];
+      this.projects = data.projects ?? [];
+      this.analyses = data.analyses ?? [];
+      this.competitorAnalyses = data.competitorAnalyses ?? [];
+      this.reports = data.reports ?? [];
+      this.notes = data.notes ?? [];
+      this.artwork = data.artwork ?? [];
+      this.outputs = data.outputs ?? [];
+      return true;
+    } catch (e) {
+      console.warn("Failed to load memoryDb snapshot, seeding fresh:", e);
+      return false;
+    }
+  }
+
+  saveSnapshot() {
+    try {
+      fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
+      const data = {
+        competitors: this.competitors,
+        projects: this.projects,
+        analyses: this.analyses,
+        competitorAnalyses: this.competitorAnalyses,
+        reports: this.reports,
+        notes: this.notes,
+        artwork: this.artwork,
+        outputs: this.outputs,
+      };
+      fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(data));
+    } catch (e) {
+      console.warn("Failed to save memoryDb snapshot:", e);
+    }
+  }
+
+  private startAutosave() {
+    const g = globalThis as unknown as { __memDbAutosaveStarted?: boolean };
+    if (g.__memDbAutosaveStarted) return;
+    g.__memDbAutosaveStarted = true;
+
+    setInterval(() => this.saveSnapshot(), AUTOSAVE_INTERVAL_MS);
+    const flushAndExit = () => {
+      this.saveSnapshot();
+      process.exit(0);
+    };
+    process.on("exit", () => this.saveSnapshot());
+    process.on("SIGINT", flushAndExit);
+    process.on("SIGTERM", flushAndExit);
   }
 
   seed() {

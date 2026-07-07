@@ -72,3 +72,44 @@ export async function GET(
     );
   }
 }
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getAuthSession();
+    const { id } = params;
+
+    try {
+      const analysis = await prisma.analysis.findUnique({ where: { id } });
+      if (!analysis || analysis.orgId !== session.orgId) {
+        return NextResponse.json(
+          { error: "NOT_FOUND", message: "Analysis not found" },
+          { status: 404 }
+        );
+      }
+      await prisma.analysis.delete({ where: { id } });
+      return NextResponse.json({ success: true });
+    } catch (dbError) {
+      console.warn(`PostgreSQL unavailable in DELETE /api/analyses/${id}. Falling back to memoryDb:`, dbError);
+
+      const index = memoryDb.analyses.findIndex(a => a.id === id);
+      if (index === -1 || memoryDb.analyses[index].orgId !== session.orgId) {
+        return NextResponse.json(
+          { error: "NOT_FOUND", message: "Analysis not found" },
+          { status: 404 }
+        );
+      }
+      memoryDb.analyses.splice(index, 1);
+      memoryDb.competitorAnalyses = memoryDb.competitorAnalyses.filter(ca => ca.analysisId !== id);
+
+      return NextResponse.json({ success: true });
+    }
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: "SERVER_ERROR", message: error.message },
+      { status: 500 }
+    );
+  }
+}
