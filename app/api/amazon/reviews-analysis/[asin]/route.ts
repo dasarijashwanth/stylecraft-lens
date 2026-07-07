@@ -56,11 +56,22 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     const reviews = await getAmazonReviews(asin);
 
     if (reviews === null) {
-      return NextResponse.json({ error: "Live Amazon data unavailable — retry" }, { status: 503 });
+      // This means the Rainforest "reviews" request type itself failed —
+      // distinct from the AI being unavailable. On this account it has been
+      // returning "reviews request type is temporarily unavailable" —
+      // check the Rainforest plan/dashboard if this persists.
+      return NextResponse.json(
+        { error: "Amazon reviews are temporarily unavailable from the data provider (Rainforest) — retry later" },
+        { status: 503 }
+      );
     }
 
     const analysis = await analyzeReviews(asin, product?.title || asin, reviews);
-    await setCachedAnalysis(asin, analysis);
+    // Don't cache an "AI unavailable" result for 24h — that's a transient
+    // provider outage, not a real answer, and should be retried freely.
+    if (!analysis.aiUnavailable) {
+      await setCachedAnalysis(asin, analysis);
+    }
 
     return NextResponse.json({ ...analysis, retrievedAt: new Date().toISOString(), cached: false });
   } catch (err: any) {

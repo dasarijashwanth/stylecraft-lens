@@ -7,7 +7,7 @@ const SOURCE_LABELS: Record<string, string> = {
   tds: "Source: TDS",
   active_report: "Source: Active Report",
   multiple: "Source: Multiple",
-  none: "TBD",
+  none: "N/A",
 };
 
 export function GtmPdf({
@@ -26,7 +26,7 @@ export function GtmPdf({
       <Page size="A4" style={styles.page}>
         <CoverHeader productName={productName} docType="Go-To-Market — Product Knowledge" projectName={projectName} />
         <Text style={{ fontSize: 8, color: "#666666", marginBottom: 4 }}>
-          {Object.values(fields).filter((f: any) => f.answer && f.answer.toUpperCase() !== "TBD").length}/
+          {Object.values(fields).filter((f: any) => f.answer && f.answer.toUpperCase() !== "N/A").length}/
           {GTM_FIELD_SCHEMA.length} fields completed
         </Text>
 
@@ -39,7 +39,7 @@ export function GtmPdf({
                 <TwoColRow
                   key={f.id}
                   question={f.question}
-                  answer={entry?.answer || "TBD"}
+                  answer={entry?.answer || "N/A"}
                   badge={SOURCE_LABELS[entry?.source || "none"]}
                 />
               );

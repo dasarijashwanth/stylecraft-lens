@@ -8,6 +8,7 @@ import { memoryDb } from "@/lib/memoryDb";
 import { getProject } from "@/lib/db/projects";
 import { getProjectReports, updateReport } from "@/lib/db/reports";
 import { GTM_FIELD_SCHEMA, GtmFieldSource, ProductKnowledge } from "@/lib/gtm-field-schema";
+import { deriveFieldsFromSources } from "@/lib/gtm-derive";
 
 export const maxDuration = 60;
 
@@ -121,7 +122,7 @@ ${fieldList}
 Return ONLY valid JSON — no markdown, no explanation — keyed by field id:
 { "<field_id>": { "answer": "...", "source": "sales_kit" | "tds" | "active_report" | "multiple" | "none" } }
 
-If the documents do not contain the answer for a field, return { "answer": "TBD", "source": "none" } for that field. Every field id listed above must appear in your response.`;
+If the documents do not contain the answer for a field, return { "answer": "N/A", "source": "none" } for that field. Every field id listed above must appear in your response.`;
 
     const userContent = `<SALES_KIT>
 ${salesKit ? JSON.stringify(salesKit) : "(not generated for this project)"}
@@ -169,17 +170,29 @@ Description: ${project.description}`;
       }
     }
 
-    // Validate against the schema — every field must be present, backfill
-    // anything missing with TBD/none rather than silently dropping it.
+    // Deterministic, non-AI extraction from the source docs — this is what
+    // backs the sheet whenever the AI is down/quota-exhausted, and the floor
+    // every field falls back to before ever showing N/A.
+    const derived = deriveFieldsFromSources(project.productName, salesKit, tds, activeReport);
+
+    // Validate against the schema — every field must be present. Priority:
+    // AI's answer (if real) > deterministic extraction > N/A. Never drop a
+    // field, never invent one that isn't backed by an actual source.
     const fields: ProductKnowledge["fields"] = {};
     for (const f of GTM_FIELD_SCHEMA) {
       const got = raw?.[f.id];
-      fields[f.id] = {
-        answer: got?.answer?.trim() || "TBD",
-        source: (got?.source as GtmFieldSource) || "none",
-      };
+      const aiAnswer = got?.answer?.trim();
+      const aiUsable = !!aiAnswer && aiAnswer.toUpperCase() !== "N/A" && aiAnswer.toUpperCase() !== "TBD";
+
+      if (aiUsable) {
+        fields[f.id] = { answer: aiAnswer!, source: (got?.source as GtmFieldSource) || "multiple" };
+      } else if (derived[f.id]) {
+        fields[f.id] = derived[f.id];
+      } else {
+        fields[f.id] = { answer: "N/A", source: "none" };
+      }
     }
-    const completedCount = Object.values(fields).filter(f => f.source !== "none" && f.answer !== "TBD").length;
+    const completedCount = Object.values(fields).filter(f => f.source !== "none" && f.answer.toUpperCase() !== "N/A").length;
 
     const productKnowledge: ProductKnowledge = {
       fields,

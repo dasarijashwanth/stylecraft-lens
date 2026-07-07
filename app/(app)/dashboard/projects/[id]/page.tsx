@@ -885,12 +885,12 @@ const SOURCE_LABELS: Record<string, string> = {
   tds: "TDS",
   active_report: "Active Report",
   multiple: "Multiple",
-  none: "TBD",
+  none: "N/A",
 };
 
 function isFieldComplete(answer: string | undefined) {
   const trimmed = (answer || "").trim();
-  return trimmed !== "" && trimmed.toUpperCase() !== "TBD";
+  return trimmed !== "" && trimmed.toUpperCase() !== "N/A";
 }
 
 function ProductKnowledgeSection({ report, projectId }: { report: any; projectId: string }) {

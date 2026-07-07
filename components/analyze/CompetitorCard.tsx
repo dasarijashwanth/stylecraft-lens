@@ -233,7 +233,22 @@ export function CompetitorCard({ competitor: c }: CompetitorCardProps) {
               <p className="italic text-text-muted">Insufficient review data for this product.</p>
             )}
 
-            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && (
+            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.aiUnavailable && (
+              <div className="flex items-center justify-between gap-2 py-2">
+                <span className="text-warning">
+                  Fetched {reviewAnalysis.data.reviewCountAnalyzed} real reviews, but no AI provider is available right now to analyze them.
+                </span>
+                <button
+                  type="button"
+                  onClick={loadReviewAnalysis}
+                  className="px-2 py-1 border border-border rounded text-[10px] font-bold text-text-secondary hover:border-border-strong transition-colors shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && !reviewAnalysis.data.aiUnavailable && (
               <>
                 {/* Strengths */}
                 <div className="space-y-1.5">

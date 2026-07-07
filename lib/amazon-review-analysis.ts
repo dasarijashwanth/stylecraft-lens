@@ -25,6 +25,10 @@ export interface ReviewAnalysis {
   reviewCountAnalyzed: number;
   dateRange: { earliest: string | null; latest: string | null } | null;
   insufficientData: boolean;
+  // True when reviews were fetched fine but no AI provider could analyze
+  // them (both Gemini and Anthropic unavailable) — distinct from
+  // insufficientData, which means the reviews themselves were too few.
+  aiUnavailable: boolean;
 }
 
 const MIN_REVIEWS_REQUIRED = 5;
@@ -103,7 +107,7 @@ export async function analyzeReviews(asin: string, productTitle: string, reviews
   const dateRange = computeDateRange(reviews);
 
   if (reviews.length < MIN_REVIEWS_REQUIRED) {
-    return { strengths: [], weaknesses: [], recentThemes: [], reviewCountAnalyzed: reviews.length, dateRange, insufficientData: true };
+    return { strengths: [], weaknesses: [], recentThemes: [], reviewCountAnalyzed: reviews.length, dateRange, insufficientData: true, aiUnavailable: false };
   }
 
   const { systemPrompt, userPrompt } = buildPrompt(asin, productTitle, reviews);
@@ -111,7 +115,7 @@ export async function analyzeReviews(asin: string, productTitle: string, reviews
 
   if (!raw) {
     // No AI provider available — explicitly empty, never a guess.
-    return { strengths: [], weaknesses: [], recentThemes: [], reviewCountAnalyzed: reviews.length, dateRange, insufficientData: false };
+    return { strengths: [], weaknesses: [], recentThemes: [], reviewCountAnalyzed: reviews.length, dateRange, insufficientData: false, aiUnavailable: true };
   }
 
   function verifyThemes(themes: any[]): ReviewTheme[] {
@@ -134,5 +138,6 @@ export async function analyzeReviews(asin: string, productTitle: string, reviews
     reviewCountAnalyzed: reviews.length,
     dateRange,
     insufficientData: false,
+    aiUnavailable: false,
   };
 }
