@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { getAuthSession } from "@/lib/auth";
-import { startAnalysis } from "@/lib/analysisEngine";
+import { runAnalysisInBackground } from "@/lib/analysisEngine";
 import { AnalysisFormSchema } from "@/lib/validations";
 import { createAnalysis, getUserAnalyses } from "@/lib/db/analyses";
+
+// The 3-phase Gemini/Anthropic pipeline can take well over Vercel's default
+// serverless timeout, especially when falling back between providers. Without
+// this, Vercel freezes the instance right after the 202 response is sent,
+// silently killing the background work partway through.
+export const maxDuration = 60;
 
 export async function GET(request: Request) {
   try {
@@ -54,7 +61,15 @@ export async function POST(request: Request) {
       pricePoint: data.pricePoint
     };
 
-    await startAnalysis(context);
+    // Keep the background analysis alive past the response using Vercel's
+    // waitUntil() — without this, Vercel may freeze the instance immediately
+    // once the 202 response below is sent, silently killing the analysis
+    // partway through (confirmed happening in production before this fix).
+    waitUntil(
+      runAnalysisInBackground(context).catch(err => {
+        console.error(`Background analysis error for ${newAnalysisId}:`, err);
+      })
+    );
 
     // Return 202 Accepted (Runs asynchronously)
     return NextResponse.json(

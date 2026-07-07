@@ -524,7 +524,7 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
   );
 }
 
-async function runAnalysisInBackground(context: AnalysisContext) {
+export async function runAnalysisInBackground(context: AnalysisContext) {
   const startTime = Date.now();
   const id = context.id;
   let webSearchCount = 0;
