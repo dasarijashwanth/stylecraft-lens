@@ -9,6 +9,13 @@ interface ResultsPanelProps {
   analysis: {
     productName: string;
     totalSearches: number;
+    identity?: {
+      category?: string;
+      subcategory?: string;
+      whatItIs?: string;
+      confidence?: "high" | "medium" | "low";
+      evidence?: { claim: string; url: string; quote: string }[];
+    };
     phase1: {
       competitors: any[];
     };
@@ -58,7 +65,7 @@ interface ResultsPanelProps {
 }
 
 export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
-  const { phase1, phase2, phase3 } = analysis;
+  const { phase1, phase2, phase3, identity } = analysis;
   const [exporting, setExporting] = useState(false);
 
   const handleExportPDF = async () => {
@@ -162,6 +169,38 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
           </button>
         </div>
       </div>
+
+      {/* IDENTIFIED PRODUCT — shown so a wrong identification is caught
+          immediately, not buried inside the market analysis text. */}
+      {identity && (identity.category || identity.whatItIs) && (
+        <div className="p-4 bg-surface-2 border border-border rounded-xl space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Identified Product</span>
+            {identity.confidence && (
+              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
+                identity.confidence === "high" ? "bg-success/10 border-success/30 text-success" :
+                identity.confidence === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
+                "bg-danger/10 border-danger/30 text-danger"
+              }`}>{identity.confidence} confidence</span>
+            )}
+          </div>
+          <div className="text-xs text-text-primary font-semibold">
+            {identity.category}{identity.subcategory && identity.subcategory !== identity.category ? ` / ${identity.subcategory}` : ""}
+          </div>
+          {identity.whatItIs && <p className="text-[11px] text-text-secondary leading-relaxed">{identity.whatItIs}</p>}
+          {Array.isArray(identity.evidence) && identity.evidence.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-0.5">
+              {identity.evidence.slice(0, 4).map((e, i) => (
+                e.url ? (
+                  <a key={i} href={e.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-accent hover:underline" title={e.claim}>
+                    evidence {i + 1}
+                  </a>
+                ) : null
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 1. MARKET ANALYSIS SECTION */}
       <section className="results-section bg-surface-2 border border-border rounded-xl p-6 md:p-8 space-y-6">

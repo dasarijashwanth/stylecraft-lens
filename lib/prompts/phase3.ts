@@ -1,13 +1,16 @@
 import { getMarketData } from "@/lib/market-data";
 import { buildOverviewParagraph, CompetitorSummary } from "@/lib/build-overview-paragraph";
 import type { AnalysisContext } from "@/lib/analysisEngine";
+import type { IdentityCard } from "@/lib/product-identification";
 
 export async function buildPhase3Prompt(
   ctx: AnalysisContext,
+  identity: IdentityCard,
   phase1: any,
-  phase2: any
+  phase2: any,
+  extraInstruction?: string
 ) {
-  const marketData = getMarketData(ctx.industry, ctx.productName, ctx.category);
+  const marketData = getMarketData(identity.subcategory || identity.category, ctx.productName);
 
   // Build competitor list for price analysis
   const allCompetitors: CompetitorSummary[] = [
@@ -31,7 +34,8 @@ export async function buildPhase3Prompt(
     motorTech: ctx.motorTech ?? "",
     pricePoint: ctx.pricePoint ?? "",
     targetMarket: ctx.targetMarket,
-    industry: ctx.industry,
+    category: identity.category,
+    subcategory: identity.subcategory,
     marketData: marketData!,
     competitors: allCompetitors,
   });
@@ -44,23 +48,26 @@ export async function buildPhase3Prompt(
   const priceFloor = realPrices.length ? Math.min(...realPrices).toFixed(2) : "49.99";
   const priceCeiling = realPrices.length ? Math.max(...realPrices).toFixed(2) : "319.95";
 
+  const primaryAttribute = identity.keyAttributes[0] || ctx.motorTech || identity.subcategory;
+
   const productSpecificBlock = `
 PRODUCT BEING ANALYZED:
   Name: ${ctx.productName}
-  Motor: ${ctx.motorTech ?? "not specified"}
-  Our price: ${ctx.pricePoint ?? "not specified"}
+  Category: ${identity.category} / ${identity.subcategory}
+  What it is: ${identity.whatItIs}
+  Key attributes: ${identity.keyAttributes.join(", ") || "not specified"}
+  Our price: ${ctx.pricePoint ?? identity.priceObserved?.value ?? "not specified"}
   Target: ${ctx.targetMarket}
-  Industry: ${ctx.industry}
 
 REAL COMPETITOR PRICES FROM PHASE 1/2 RESEARCH (Amazon-sourced):
 ${allCompetitors.map((c: any) =>
   ` ${c.tier === "legacy" ? "LEGACY" : "EMERGING"} | ${c.name} | Price: ${c.price ?? "—"} | ASIN: ${c.asin ?? "N/A"}`
 ).join("\n")}
 
-You have live Google Search available — use it to verify current market size, CAGR, and trend data for this motor technology and price tier before writing the analysis.
+You have live Google Search available — use it to verify current market size, CAGR, and trend data for this category and price tier before writing the analysis.
 `.trim();
 
-  const systemText = `You are a market analyst. You MUST write analysis that is SPECIFIC to this exact product.
+  const systemText = `You are a market analyst. You MUST write analysis that is SPECIFIC to this exact product and its category (${identity.category} / ${identity.subcategory}) — never any other product category.
 
 ABSOLUTE RULES:
 1. DO NOT change or rewrite the overview_paragraph provided in the template. Use it EXACTLY as provided.
@@ -68,7 +75,8 @@ ABSOLUTE RULES:
 3. Threats MUST name specific competitors with their real prices (e.g. "BaBylissPRO at $149.99").
 4. Opportunities MUST reference this product's specific price gap vs named competitors.
 5. CITE sources in trends, threats, and opportunities.
-
+6. Do not include analysis of any other product category. Do not reuse boilerplate from previous analyses — every claim must trace to the competitor data or category above.
+${extraInstruction ? `\n${extraInstruction}\n` : ""}
 Return ONLY valid JSON. No markdown.`;
 
   const userText = `${productSpecificBlock}
@@ -77,7 +85,7 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
 
 {
   "web_searches_performed": 4,
-  "amazon_category": "${ctx.category ?? ctx.industry ?? "Market Analysis"}",
+  "amazon_category": "${identity.category} / ${identity.subcategory}",
   "data_sources_used": ["${marketData?.source ?? "Verified Market Research"}", "Amazon product research (Phase 1/2)", "Google Search grounding"],
   "market_snapshot": {
     "market_size_current": "${marketData?.market_size_2026 ?? "$1.5B"}",
@@ -99,7 +107,7 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
     }
   ],
   "market_gaps": [
-    "Gap that is SPECIFIC to ${ctx.motorTech} motor type and ${ctx.pricePoint} price point"
+    "Gap that is SPECIFIC to ${primaryAttribute} and ${ctx.pricePoint ?? "the observed"} price point, within the ${identity.subcategory} category"
   ],
   "top_threats": [
     {
@@ -109,16 +117,16 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
   ],
   "top_opportunities": [
     {
-      "action": "Action specific to ${ctx.motorTech} and ${ctx.pricePoint}",
+      "action": "Action specific to ${primaryAttribute} and ${ctx.pricePoint ?? "the observed price"}",
       "description": "Reference real competitor prices and the specific price gap"
     }
   ],
-  "positioning_recommendation": "Must name competitors with their real prices. Must state the price gap. Must be specific to ${ctx.motorTech} motor positioning.",
+  "positioning_recommendation": "Must name competitors with their real prices. Must state the price gap. Must be specific to ${identity.subcategory} positioning and ${primaryAttribute}.",
   "strategic_recommendations": [
     {
       "priority": "high",
       "category": "product",
-      "headline": "Specific to ${ctx.motorTech} motor in ${ctx.industry}",
+      "headline": "Specific to ${primaryAttribute} in the ${identity.subcategory} category",
       "explanation": "Reference real competitors and their prices"
     }
   ],

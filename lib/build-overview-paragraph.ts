@@ -14,7 +14,8 @@ export interface ParagraphInput {
   motorTech: string;
   pricePoint: string;
   targetMarket: string;
-  industry: string;
+  category: string;
+  subcategory: string;
   marketData: MarketData;
   competitors: CompetitorSummary[];
 }
@@ -29,15 +30,26 @@ const MOTOR_SENTENCES: Record<string, string> = {
   "c4rbn": "The Super C4RBN motor is a high-performance carbon-composite design engineered for professional duty cycles, positioned in StyleCraft's mid-premium Rebel lineup between the entry ACE and flagship Saber/Instinct tiers.",
   "rechargeable": "Rechargeable consumer motors power the growing home-grooming segment — Accio/Amazon Trends (2025) reports a 20% rise in 'Professional Cordless Hair Clippers & Trimmer Sets' search volume from January to July 2025, with home use accounting for 72.9% of cordless clipper purchases, though professional barbers (65% of whom prioritize motor power, per Professional Barbers Association) distinguish this tier from commercial-grade tools.",
   "linear": "Linear motors — used by Panasonic's ER-GP80 at 10,000 CPM — maintain constant speed regardless of battery level or hair thickness, a key differentiator in the premium hair styling tools segment where Grand View Research (2024) reports cordless models held 65.4% revenue share.",
-  "default": "This motor technology competes in a professional clipper market where 65% of barbers rank motor power as their top purchase criterion (Professional Barbers Association), and Amazon Trends data shows a 20% rise in professional clipper search volume from January to July 2025.",
 };
 
-function getMotorSentence(motorTech: string): string {
-  const lower = (motorTech ?? "").toLowerCase();
-  for (const [key, sentence] of Object.entries(MOTOR_SENTENCES)) {
-    if (lower.includes(key)) return sentence;
+// The keyed sentences above are real, cited clipper/trimmer/barbering
+// research — only relevant (and only accurate) when the identified
+// product actually IS in that category family. Without this gate, a hair
+// dryer that happens to use a "brushless" motor (e.g. Dyson's Supersonic)
+// would get a sentence claiming it ranks "among the top three
+// professional clippers" — wrong category, wrong citation. Anything
+// outside the clipper/trimmer/barbering family gets a generic,
+// category-referencing sentence instead of a hardcoded clipper-market
+// default.
+function getMotorSentence(motorTech: string, category: string, subcategory: string): string {
+  const isClipperFamily = /clipper|trimmer|barber/i.test(`${category} ${subcategory}`);
+  if (isClipperFamily) {
+    const lower = (motorTech ?? "").toLowerCase();
+    for (const [key, sentence] of Object.entries(MOTOR_SENTENCES)) {
+      if (key !== "default" && lower.includes(key)) return sentence;
+    }
   }
-  return MOTOR_SENTENCES["default"];
+  return `Products in the ${subcategory || category || "this"} category compete in a fast-evolving market where buyers increasingly weigh power, reliability, and consistent performance as top purchase criteria.`;
 }
 
 // ── Price positioning sentence ────────────────────────────────────────────────
@@ -99,7 +111,7 @@ function buildPriceSentence(
 
 // ── Main function: build the full overview paragraph ─────────────────────────
 export function buildOverviewParagraph(input: ParagraphInput): string {
-  const { motorTech, pricePoint, marketData, competitors } = input;
+  const { motorTech, pricePoint, marketData, competitors, category, subcategory } = input;
 
   // Sentence 1: Market size (always from verified data, always cited)
   const s1 = `The global ${marketData.industry_label} market was valued at ${marketData.market_size_2025} in 2025 and is projected to reach ${marketData.market_size_2026} in 2026, expanding to ${marketData.market_size_forecast} by ${marketData.forecast_year} at a ${marketData.cagr} CAGR (${marketData.source}).`;
@@ -109,8 +121,9 @@ export function buildOverviewParagraph(input: ParagraphInput): string {
   const segText = topSeg ? `${topSeg.label} represent ${topSeg.share} of market activity (${topSeg.note})` : `Commercial and professional use account for the majority of market revenue`;
   const s2 = `${segText}, with continuous growth expanding across key retail and professional channels (${marketData.source}).`;
 
-  // Sentence 3: Motor-specific context (from our hard-coded research map)
-  const s3 = getMotorSentence(motorTech);
+  // Sentence 3: Motor-specific context (from our hard-coded research map),
+  // gated to the clipper/trimmer/barbering family it's actually about.
+  const s3 = getMotorSentence(motorTech, category, subcategory);
 
   // Sentence 4: Price positioning (calculated from real Rainforest data)
   const s4 = buildPriceSentence(pricePoint, competitors);

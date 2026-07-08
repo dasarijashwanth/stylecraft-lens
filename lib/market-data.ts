@@ -228,12 +228,18 @@ export const MARKET_DATA: Record<string, MarketData> = {
   }
 };
 
-// Aliases for industry mapping
-MARKET_DATA["grooming-barbering"] = MARKET_DATA["clippers"];
-MARKET_DATA["haircare-styling"] = MARKET_DATA["styling"];
-
-export function getMarketData(industry?: string, productName?: string, category?: string): MarketData {
-  const combined = `${category || ""} ${productName || ""} ${industry || ""}`.toLowerCase();
+// Routes off the VERIFIED category/subcategory (from Stage 1's Identity
+// Card) and product name only — deliberately does NOT take `industry`.
+// This app's `industry` field only ever has two values
+// ("grooming-barbering"/"haircare-styling"), and a previous version of
+// this function fell back to `MARKET_DATA[industry]` when no keyword
+// matched, which — via the alias `MARKET_DATA["grooming-barbering"] =
+// MARKET_DATA["clippers"]` below — routed EVERY analysis to clipper
+// market data regardless of the actual product. The keyword checks below
+// plus the fully category-agnostic dynamic-calculation fallback are
+// sufficient without that industry fallback.
+export function getMarketData(category?: string, productName?: string): MarketData {
+  const combined = `${category || ""} ${productName || ""}`.toLowerCase();
 
   if (combined.includes("trimmer") || combined.includes("edger") || combined.includes("outliner")) {
     return MARKET_DATA["trimmers"];
@@ -252,10 +258,6 @@ export function getMarketData(industry?: string, productName?: string, category?
   }
   if (combined.includes("clipper") || combined.includes("barber") || combined.includes("grooming")) {
     return MARKET_DATA["clippers"];
-  }
-
-  if (industry && MARKET_DATA[industry]) {
-    return MARKET_DATA[industry];
   }
 
   // Dynamic calculation for custom categories

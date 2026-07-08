@@ -110,13 +110,14 @@ export default function AnalyzePage() {
           setProductName(name);
 
           if (analysis.status === "complete") {
+            const identity = analysis.phase0_result || {};
             const p1 = analysis.phase1_result || {};
             const p2 = analysis.phase2_result || {};
             const p3 = analysis.phase3_result || {};
             const searches = (p1.web_searches_performed || 0) + (p2.web_searches_performed || 0) + (p3.web_searches_performed || 0);
 
             setAnalysisId(analysis.id);
-            setAnalysisResult({ phase1: p1, phase2: p2, phase3: p3, productName: name, totalSearches: searches });
+            setAnalysisResult({ identity, phase1: p1, phase2: p2, phase3: p3, productName: name, totalSearches: searches });
             setViewState("results");
           } else if (analysis.status === "failed") {
             toast.error(analysis.error_message || "This analysis failed");

@@ -61,9 +61,11 @@ export interface MockAnalysis {
   status: "PENDING" | "RUNNING" | "COMPLETE" | "FAILED";
   phase: number;
   context?: any;
+  phase0Result?: any;
   phase1Result: any;
   phase2Result: any;
   phase3Result: any;
+  pendingQuestion?: { question: string; foundSoFar?: string } | null;
   errorMessage: string | null;
   durationMs: number | null;
   createdAt: Date;

@@ -4,11 +4,15 @@ import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
 import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "./anthropic";
 import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
-import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis } from "./db/analyses";
+import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck } from "./db/analyses";
+import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { createReportFromAnalysis } from "./db/reports";
 import { buildPhase3Prompt } from "./prompts/phase3";
 import { getMarketData } from "./market-data";
 import { buildOverviewParagraph } from "./build-overview-paragraph";
+import { identifyProduct, needsUserInput, IdentityCard } from "./product-identification";
+import { getKnownBrandsHint } from "./known-brands-by-category";
+import { competitorMatchesCategory } from "./category-synonyms";
 
 export interface AnalysisContext {
   id: string;
@@ -26,8 +30,14 @@ export interface AnalysisContext {
   pricePoint?: string;
 }
 
-function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "legacy" | "emerging") {
-  const text = `${context.category || ""} ${context.industry || ""} ${context.productName || ""}`.toLowerCase();
+// Keyed off the VERIFIED category/subcategory from Stage 1's Identity
+// Card only — NEVER off `context.industry`. This app's `industry` field
+// only ever has two values ("grooming-barbering"/"haircare-styling"),
+// both of which contain "grooming"/"styling", so keying this off industry
+// (as a previous version did) meant every analysis routed to the
+// clipper/dryer fallback branches below regardless of the actual product.
+function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "legacy" | "emerging") {
+  const text = `${identity.category || ""} ${identity.subcategory || ""}`.toLowerCase();
 
   // If Hair styling / Dryers / Flat irons
   if (text.includes("dryer") || text.includes("blow") || text.includes("styler") || text.includes("iron") || text.includes("straighten") || text.includes("haircare")) {
@@ -178,8 +188,13 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
         ];
   }
 
-  // Default / Hair clippers and trimmers
-  if (text.includes("clipper") || text.includes("trimmer") || text.includes("barber") || text.includes("grooming") || text.includes("razor") || text.includes("shaver")) {
+  // Hair clippers and trimmers ONLY — "razor"/"shaver" deliberately excluded:
+  // this app has no dedicated shaver mock dataset, and the data below is
+  // 100% clipper-specific. Bundling shaver in here (as a previous version
+  // did) meant an electric-shaver analysis with no live AI available got
+  // confidently-wrong clipper brand names instead of falling through to
+  // the honest generic-placeholder branch below.
+  if (text.includes("clipper") || text.includes("trimmer") || text.includes("barber") || text.includes("grooming")) {
     return defaultTier === "legacy"
       ? [
           {
@@ -341,10 +356,10 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
         ];
   }
 
-  // Fallback for custom industries (e.g., Gaming, Skincare, Tech, Kitchen)
-  const basePrice = parseFloat((context.pricePoint || "").replace(/[^0-9.]/g, "")) || 99;
-  const prodName = context.productName || context.category || "Product";
-  const catName = context.category || context.industry || "General";
+  // Fallback for categories with no dedicated mock data above
+  const basePrice = identity.priceObserved?.value || 99;
+  const prodName = identity.productName || identity.category || "Product";
+  const catName = identity.category || "General";
 
   const legacyBrands = ["Apex Global", "Vanguard Corp", "Prime Tech", "Heritage Brand", "OmniPro", "Elite Core"];
   const emergingBrands = ["NovaDyne", "Flux DTC", "Zenith Lab", "Kuro Tech", "Aura Pro"];
@@ -367,23 +382,33 @@ function getCategoryFallbackCompetitors(context: AnalysisContext, defaultTier: "
       initials: b.slice(0, 2).toUpperCase(),
       top_positive_review_themes: ["Reliable operational run", "High build quality", "Fulfills expectations"],
       top_negative_review_themes: ["Price premium barrier", "Heavier handling weight", "Standard feature set"],
-      confirmed_technical_specs: { motor_type: context.motorTech || "Brushless DC", rpm: "6,500 RPM", run_time: "150 min", charging_time: "90 min", blade_material: "Steel", body_material: "Composite" }
+      confirmed_technical_specs: { motor_type: identity.keyAttributes[0] || "Brushless DC", rpm: "6,500 RPM", run_time: "150 min", charging_time: "90 min", blade_material: "Steel", body_material: "Composite" }
     };
   });
 }
 
-function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging", context: AnalysisContext) {
-  const fallbackCompetitors = getCategoryFallbackCompetitors(context, defaultTier);
+// `cleaned` also drops any AI-returned competitor whose own name/feature
+// text doesn't match the identified category (lib/category-synonyms.ts) —
+// a clipper can never survive into a hair-dryer analysis, even if the AI
+// itself proposed one.
+function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard) {
+  const fallbackCompetitors = getCategoryFallbackCompetitors(identity, defaultTier);
 
   const incomingList = Array.isArray(competitors) ? competitors : [];
   const cleaned: any[] = [];
-  const limit = defaultTier === "legacy" ? 6 : 5;
+  const limit = 5; // 5 established + 5 emerging = 10 total, per spec
 
   const count = Math.max(incomingList.length, limit);
 
   for (let i = 0; i < count; i++) {
     const fallback = fallbackCompetitors[i % fallbackCompetitors.length];
-    const incoming = incomingList[i];
+    const rawIncoming = incomingList[i];
+    // Category-match validation guardrail: a competitor for a beard
+    // trimmer must actually be a trimmer — drop (treat as absent, backfill
+    // from same-category fallback data) anything that doesn't match.
+    const incoming = rawIncoming && competitorMatchesCategory(`${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`, identity.category, identity.subcategory)
+      ? rawIncoming
+      : undefined;
 
     if (incoming) {
       let asin = incoming.asin || "";
@@ -508,6 +533,10 @@ export interface AnalysisStepResult {
   totalSearches: number;
   reportId?: string;
   error?: string;
+  // Set when Stage 0 (Product Identification) can't confidently determine
+  // the category and the pipeline has paused — the client must collect an
+  // answer and POST /api/analyses/:id/answer before calling continue again.
+  pendingQuestion?: { question: string; foundSoFar?: string };
 }
 
 function hasResult(result: any): boolean {
@@ -517,11 +546,21 @@ function hasResult(result: any): boolean {
 // Runs exactly ONE phase of the pipeline per call, driven by the caller
 // (see app/api/analyses/[id]/continue/route.ts). Each Vercel Hobby-plan
 // invocation is hard-capped at 60s and background work is killed the
-// instant a response is sent — a single call running all 3 AI phases
+// instant a response is sent — a single call running all 4 AI phases
 // routinely exceeded that and silently orphaned the analysis at phase 0.
 // Splitting into resumable, DB-persisted steps means every call is a
 // short, independent round trip, and a refreshed/reconnecting client just
 // resumes from whatever phase is persisted.
+//
+// Phase 0 (Product Identification) was added ahead of the original 3
+// competitor-discovery/synthesis phases so every downstream phase can key
+// off a VERIFIED category instead of a hardcoded default — previously
+// Phase 1/2's prompts unconditionally instructed the model to "search
+// ONLY these 8 hair-clipper brands" and to search "[motor type] motor
+// clipper" regardless of what product was actually submitted, and the
+// fallback/market-data routers keyed off `industry` (which only ever has
+// two grooming-related values), so every analysis routed to clipper data
+// even when the AI behaved correctly.
 export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepResult> {
   const startTime = Date.now();
   const record: any = await getAnalysis(analysisId);
@@ -540,6 +579,22 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
     };
   }
 
+  // The pipeline cannot advance while a clarifying question is unanswered
+  // — POST /api/analyses/:id/answer clears this before the next call may
+  // actually run identification again. This is a no-op return, not an
+  // error, so the client can keep polling without accidentally retrying
+  // mid-question.
+  if (record.pending_question) {
+    return {
+      analysisId,
+      phase: record.phase,
+      status: "running",
+      stepResult: null,
+      totalSearches: 0,
+      pendingQuestion: record.pending_question,
+    };
+  }
+
   const context: AnalysisContext = {
     id: analysisId,
     orgId: record.org_id || "dev_org_id",
@@ -548,6 +603,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
     ...(record.context || {}),
   };
 
+  const identityCard: IdentityCard | null = hasResult(record.phase0_result) ? record.phase0_result : null;
   const phase1Result = hasResult(record.phase1_result) ? record.phase1_result : null;
   const phase2Result = hasResult(record.phase2_result) ? record.phase2_result : null;
 
@@ -557,66 +613,120 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
   try {
     if (record.phase === 0) {
       // ----------------------------------------------------
-      // PHASE 1: DISCOVERY
+      // PHASE 0: PRODUCT IDENTIFICATION (mandatory, runs before any competitor search)
       // ----------------------------------------------------
-      const result: any = await withAiFallback(
-        "Phase 1",
-        hasGeminiKey ? () => executePhase1Gemini(context, onSearchUsed) : null,
-        hasAnthropicKey ? () => executePhase1Claude(context, onSearchUsed) : null,
-        () => generateMockPhase1(context)
-      );
+      const card = await identifyProduct(context);
 
-      result.competitors = cleanCompetitors(result.competitors, "legacy", context);
-      if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      if (needsUserInput(card, context)) {
+        await updateAnalysisPhase(analysisId, 0, "phase0_result", card, 0);
+        const question = {
+          question: `What type of product is ${context.productName}? (e.g., trimmer, shaver, dryer, straightener)`,
+          foundSoFar: card.whatItIs || undefined,
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 0, status: "running", stepResult: card, totalSearches: 0, pendingQuestion: question };
       }
-      webSearchCount += result.web_searches_performed || 0;
 
-      await updateAnalysisPhase(analysisId, 1, "phase1_result", result, webSearchCount);
-      return { analysisId, phase: 1, status: "running", stepResult: result, totalSearches: webSearchCount };
+      await updateAnalysisPhase(analysisId, 1, "phase0_result", card, 0);
+      return { analysisId, phase: 1, status: "running", stepResult: card, totalSearches: 0 };
     }
 
     if (record.phase === 1) {
       // ----------------------------------------------------
-      // PHASE 2: RESEARCH INTELLIGENCE
+      // PHASE 1: ESTABLISHED-COMPETITOR DISCOVERY
       // ----------------------------------------------------
+      if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
+
       const result: any = await withAiFallback(
-        "Phase 2",
-        hasGeminiKey ? () => executePhase2Gemini(context, onSearchUsed) : null,
-        hasAnthropicKey ? () => executePhase2Claude(context, onSearchUsed) : null,
-        () => generateMockPhase2(context)
+        "Phase 1",
+        hasGeminiKey ? () => executePhase1Gemini(context, identityCard, onSearchUsed) : null,
+        hasAnthropicKey ? () => executePhase1Claude(context, identityCard, onSearchUsed) : null,
+        () => generateMockPhase1(context, identityCard)
       );
 
-      result.competitors = cleanCompetitors(result.competitors, "emerging", context);
+      result.competitors = cleanCompetitors(result.competitors, "legacy", identityCard);
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
       }
       webSearchCount += result.web_searches_performed || 0;
 
-      await updateAnalysisPhase(analysisId, 2, "phase2_result", result, webSearchCount);
+      await updateAnalysisPhase(analysisId, 2, "phase1_result", result, webSearchCount);
       return { analysisId, phase: 2, status: "running", stepResult: result, totalSearches: webSearchCount };
     }
 
     if (record.phase === 2) {
       // ----------------------------------------------------
-      // PHASE 3: STRATEGIC SYNTHESIS + finalize
+      // PHASE 2: EMERGING-COMPETITOR DISCOVERY
       // ----------------------------------------------------
-      if (!phase1Result || !phase2Result) {
-        throw new Error("Missing phase 1/2 results — cannot run phase 3");
-      }
+      if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
 
       const result: any = await withAiFallback(
+        "Phase 2",
+        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, onSearchUsed) : null,
+        hasAnthropicKey ? () => executePhase2Claude(context, identityCard, onSearchUsed) : null,
+        () => generateMockPhase2(context, identityCard)
+      );
+
+      result.competitors = cleanCompetitors(result.competitors, "emerging", identityCard);
+      if (hasRainforestKey) {
+        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      }
+      webSearchCount += result.web_searches_performed || 0;
+
+      await updateAnalysisPhase(analysisId, 3, "phase2_result", result, webSearchCount);
+      return { analysisId, phase: 3, status: "running", stepResult: result, totalSearches: webSearchCount };
+    }
+
+    if (record.phase === 3) {
+      // ----------------------------------------------------
+      // PHASE 3: STRATEGIC SYNTHESIS + finalize
+      // ----------------------------------------------------
+      if (!phase1Result || !phase2Result || !identityCard) {
+        throw new Error("Missing identity/phase 1/2 results — cannot run phase 3");
+      }
+
+      let result: any = await withAiFallback(
         "Phase 3",
-        hasGeminiKey ? () => executePhase3Gemini(context, phase1Result, phase2Result, onSearchUsed) : null,
-        hasAnthropicKey ? () => executePhase3Claude(context, phase1Result, phase2Result, onSearchUsed) : null,
-        () => generateMockPhase3(context, phase1Result, phase2Result)
+        hasGeminiKey ? () => executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
+        hasAnthropicKey ? () => executePhase3Claude(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
+        () => generateMockPhase3(context, identityCard, phase1Result, phase2Result)
       );
       webSearchCount += result.web_searches_performed || 0;
 
-      await updateAnalysisPhase(analysisId, 3, "phase3_result", result, webSearchCount);
+      // Anti-boilerplate check: if this analysis's positioning text is
+      // near-identical to a recent DIFFERENT-category analysis, it's
+      // almost certainly generic could-apply-to-anything strategy text —
+      // one regeneration attempt with the real competitor facts, same
+      // retry-with-facts pattern already proven in lib/gtm-generate.ts.
+      try {
+        const positioningText = typeof result.positioning_recommendation === "string" ? result.positioning_recommendation : "";
+        if (positioningText && hasGeminiKey) {
+          const recent = await getRecentAnalysesForBoilerplateCheck(context.orgId, analysisId);
+          const boilerplateMatch = recent.find(r =>
+            r.category && r.category.toLowerCase() !== identityCard.category.toLowerCase() &&
+            r.positioningText && textSimilarity(positioningText, r.positioningText) > BOILERPLATE_SIMILARITY_THRESHOLD
+          );
+          if (boilerplateMatch) {
+            const facts = [...(phase1Result?.competitors || []), ...(phase2Result?.competitors || [])]
+              .slice(0, 3)
+              .map((c: any) => `${c.name} at ${c.price || "an unlisted price"}`);
+            const extraInstruction = `The draft was generic. Rewrite strictly about ${identityCard.subcategory} using these specific competitor facts: ${facts.join("; ") || "the competitor data above"}.`;
+            const retried = await executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction);
+            if (retried && typeof retried.positioning_recommendation === "string") {
+              result = retried;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Phase 3 anti-boilerplate check failed (non-fatal, keeping original result):", err);
+      }
+
+      result.analysis_label = `Analysis of ${identityCard.productName} (${identityCard.subcategory}) — competitors verified ${new Date().toISOString()}`;
+
+      await updateAnalysisPhase(analysisId, 4, "phase3_result", result, webSearchCount);
 
       // Save CompetitorAnalyses to DB/Memory for link references
-      await saveCompetitorAnalyses(analysisId, context.orgId, phase1Result, phase2Result);
+      await saveCompetitorAnalyses(analysisId, context.orgId, phase1Result, phase2Result, identityCard);
 
       // Mark as complete
       await completeAnalysis(analysisId, Date.now() - startTime);
@@ -644,10 +754,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         console.error("Auto report saving failed:", saveErr);
       }
 
-      return { analysisId, phase: 4, status: "complete", stepResult: result, totalSearches: webSearchCount, reportId };
+      return { analysisId, phase: 5, status: "complete", stepResult: result, totalSearches: webSearchCount, reportId };
     }
 
-    // Already past phase 3 without being marked complete/failed — nothing left to run.
+    // Already past phase 4 without being marked complete/failed — nothing left to run.
     return { analysisId, phase: record.phase, status: record.status, stepResult: null, totalSearches: 0 };
   } catch (error: any) {
     console.error(`Analysis step crashed at phase ${record.phase}:`, error);
@@ -735,19 +845,27 @@ async function withAiFallback<T>(
 // PHASE 1/2 PROMPTS (shared between Gemini and Anthropic runners)
 // ----------------------------------------------------
 
-function buildPhase1Prompt(context: AnalysisContext) {
+// Brand hint and search terms are built ENTIRELY from the verified Identity
+// Card (lib/product-identification.ts) — never a hardcoded category. A
+// known-brand hint is only included when the identified category matches
+// a family this app already has real brand knowledge for
+// (lib/known-brands-by-category.ts); otherwise the model searches freely.
+function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard) {
+  const brandHint = getKnownBrandsHint(identity.category);
+  const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
+
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
-Your task: Research up to 6 ESTABLISHED, LARGE market leaders that compete with the user's product.
-You must search ONLY these brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
-For each brand, find their ONE best matching product (prioritize same motor technology first, then closest price to target price point). Return up to 6 products total (one per brand that has a relevant product).
+Your task: Research up to 5 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
+${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
+For each brand, find their ONE best matching product in the SAME category as the identified product (prioritize matching key attributes first, then closest price to target price point). Return up to 5 products total.
 
 CRITICAL RULES:
-1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the user's product. Never use brand overview data.
+1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
-3. If motor type is mentioned, you MUST perform a DIRECT Amazon search using the exact term '[motor type] clipper' (e.g. 'vector motor clipper', 'brushless motor clipper') before selecting competitors. Results from this direct motor-type search must fill slots first.
-- Note: Andis Recon, Supreme Darkstar, and Suprent Fangs are examples of vector motor clippers that should appear when searching for vector motor competitors.
-4. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
+4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term (e.g. "${identity.keyAttributes[0] || identity.subcategory} ${identity.category}") before selecting competitors.
+5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -757,7 +875,7 @@ Return this EXACT JSON schema:
   "competitors": [
     {
       "name": "Full Product Name (specific SKU/Model)",
-      "brand": "Brand Name (must be one of: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco)",
+      "brand": "Brand Name",
       "tier": "legacy",
       "asin": "BXXXXXXXXX",
       "amazon_url": "https://www.amazon.com/dp/BXXXXXXXXX",
@@ -780,34 +898,34 @@ Return this EXACT JSON schema:
   ]
 }`;
 
-  const userPrompt = `Research up to 6 established large brand competitors for this product:
+  const userPrompt = `Research up to 5 established large brand competitors for this identified product:
 
 Product Name: ${context.productName}
-Industry: ${context.industry}
+Identified Category: ${identity.category}
+Identified Subcategory: ${identity.subcategory}
+What it is: ${identity.whatItIs}
+Key Attributes: ${attributesLine}
 Target Market: ${context.targetMarket}
-Description: ${context.description}
-Amazon Category: ${context.category || "Hair Clippers & Trimmers"}
-Target Price Point: ${context.pricePoint || "—"}
-Motor Technology: ${context.motorTech || "—"}
+Target Price Point: ${context.pricePoint || identity.priceObserved?.value || "—"}
 Key Differentiator: ${context.keyDiff || "—"}
 Company Context: ${context.companyContext || "—"}
 
 Instructions:
-1. Search Amazon ONLY for these brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
-2. If motor type (${context.motorTech || "—"}) is mentioned (especially 'vector' or 'brushless'), perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
+1. ${brandHint ? `Check these known brands first: ${brandHint.join(", ")} — then add any other established brand your search finds in this category.` : "Search broadly for established brands in this exact category."}
+2. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
 3. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase1Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context);
+async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase1Claude(context: AnalysisContext, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context);
+async function executePhase1Claude(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity);
 
   const response = await anthropic.messages.create({
     model: ANTHROPIC_MODEL,
@@ -831,18 +949,21 @@ async function executePhase1Claude(context: AnalysisContext, onSearchUsed: (quer
   return JSON.parse(cleanJsonString(text));
 }
 
-function buildPhase2Prompt(context: AnalysisContext) {
+function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard) {
+  const brandHint = getKnownBrandsHint(identity.category);
+  const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
+
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
 
-Your task: Research 5 INDIE, EMERGING, or NEWER brand products that compete with the user's product.
-Exclude the large brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
+Your task: Research 5 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
+${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
 
 CRITICAL RULES:
-1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the user's product. Never use brand overview data.
+1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
-3. If motor type is mentioned, you MUST perform a DIRECT Amazon search using the exact term '[motor type] clipper' (e.g. 'vector motor clipper', 'brushless motor clipper') before selecting competitors. Results from this direct motor-type search must fill slots first.
-- Note: Andis Recon, Supreme Darkstar, and Suprent Fangs are examples of vector motor clippers that should appear when searching for vector motor competitors.
-4. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
+4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term before selecting competitors.
+5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -852,7 +973,7 @@ Return this EXACT JSON schema:
   "competitors": [
     {
       "name": "Full Product Name (specific SKU/Model)",
-      "brand": "Brand Name (do NOT use: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco)",
+      "brand": "Brand Name",
       "tier": "emerging",
       "asin": "BXXXXXXXXX",
       "amazon_url": "https://www.amazon.com/dp/BXXXXXXXXX",
@@ -875,34 +996,34 @@ Return this EXACT JSON schema:
   ]
 }`;
 
-  const userPrompt = `Research 5 indie/emerging competitor products for:
+  const userPrompt = `Research 5 indie/emerging competitor products for this identified product:
 
 Product Name: ${context.productName}
-Industry: ${context.industry}
+Identified Category: ${identity.category}
+Identified Subcategory: ${identity.subcategory}
+What it is: ${identity.whatItIs}
+Key Attributes: ${attributesLine}
 Target Market: ${context.targetMarket}
-Description: ${context.description}
-Amazon Category: ${context.category || "Hair Clippers & Trimmers"}
-Target Price Point: ${context.pricePoint || "—"}
-Motor Technology: ${context.motorTech || "—"}
+Target Price Point: ${context.pricePoint || identity.priceObserved?.value || "—"}
 Key Differentiator: ${context.keyDiff || "—"}
 
 Instructions:
-1. Search Amazon for emerging brand products matching the motor technology (${context.motorTech || "—"}) and key features first, price secondary.
-2. If motor type (${context.motorTech || "—"}) is mentioned, perform a DIRECT Amazon search using the exact term '${context.motorTech || "vector"} motor clipper' first. Under this search, identify qualifying products first.
-3. Exclude the large brands: Wahl, Andis, BaBylissPRO, JRL, TPOB, StyleCraft, Gamma+, Coco.
+1. Search Amazon for emerging brand products matching the identified category and key attributes first, price secondary.
+2. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
+3. ${brandHint ? `Exclude the large brands: ${brandHint.join(", ")}.` : "Exclude any large established brand — focus on indie/newer names."}
 4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase2Claude(context: AnalysisContext, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context);
+async function executePhase2Claude(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity);
 
   const response = await anthropic.messages.create({
     model: ANTHROPIC_MODEL,
@@ -926,8 +1047,8 @@ async function executePhase2Claude(context: AnalysisContext, onSearchUsed: (quer
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase3Gemini(context: AnalysisContext, phase1: any, phase2: any, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, phase1, phase2);
+async function executePhase3Gemini(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, identity, phase1, phase2, extraInstruction);
 
   let usedAnyQuery = false;
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, (q) => {
@@ -935,16 +1056,16 @@ async function executePhase3Gemini(context: AnalysisContext, phase1: any, phase2
     onSearchUsed(q);
   });
   if (!usedAnyQuery) {
-    onSearchUsed(`${context.industry} industry data lookup`);
+    onSearchUsed(`${identity.subcategory || identity.category} market data lookup`);
   }
 
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase3Claude(context: AnalysisContext, phase1: any, phase2: any, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, phase1, phase2);
+async function executePhase3Claude(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, identity, phase1, phase2, extraInstruction);
 
-  onSearchUsed(`${context.industry} industry data lookup`);
+  onSearchUsed(`${identity.subcategory || identity.category} market data lookup`);
 
   const response = await anthropic.messages.create({
     model: ANTHROPIC_MODEL,
@@ -967,8 +1088,8 @@ function cleanJsonString(text: string): string {
 
 // ----------------------------------------------------
 // SMART MOCK GENERATORS FOR OFFLINE / NO-KEY USE
-function generateMockPhase1(context: AnalysisContext) {
-  const dynamicList = getCategoryFallbackCompetitors(context, "legacy");
+function generateMockPhase1(context: AnalysisContext, identity: IdentityCard) {
+  const dynamicList = getCategoryFallbackCompetitors(identity, "legacy");
   return {
     web_searches_performed: 12,
     competitors: dynamicList.map(c => ({
@@ -988,7 +1109,7 @@ function generateMockPhase1(context: AnalysisContext) {
           headline: `${c.brand} High-Performance Core Engine`,
           source: "Amazon",
           attribution: "Per brand marketing:",
-          detail: `Engineered specifically for heavy-duty commercial use in the ${context.category || context.industry || "professional"} sector.`
+          detail: `Engineered specifically for heavy-duty commercial use in the ${identity.subcategory || identity.category || "professional"} sector.`
         },
         {
           headline: "Ergonomic & Durable Build Chassis",
@@ -1013,8 +1134,8 @@ function generateMockPhase1(context: AnalysisContext) {
   };
 }
 
-function generateMockPhase2(context: AnalysisContext) {
-  const dynamicList = getCategoryFallbackCompetitors(context, "emerging");
+function generateMockPhase2(context: AnalysisContext, identity: IdentityCard) {
+  const dynamicList = getCategoryFallbackCompetitors(identity, "emerging");
   return {
     web_searches_performed: 14,
     competitors: dynamicList.map(c => ({
@@ -1034,7 +1155,7 @@ function generateMockPhase2(context: AnalysisContext) {
           headline: `${c.brand} Next-Gen Innovation Module`,
           source: "Amazon",
           attribution: "Per brand marketing:",
-          detail: `Designed to challenge legacy pricing by offering modern ${context.motorTech || "adaptive"} features at an aggressive price point.`
+          detail: `Designed to challenge legacy pricing by offering modern ${identity.keyAttributes[0] || "adaptive"} features at an aggressive price point.`
         },
         {
           headline: "Smart Power Regulation Circuitry",
@@ -1057,8 +1178,8 @@ function generateMockPhase2(context: AnalysisContext) {
   };
 }
 
-function generateMockPhase3(context: AnalysisContext, phase1: any, phase2: any) {
-  const mData = getMarketData(context.industry, context.productName, context.category);
+function generateMockPhase3(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any) {
+  const mData = getMarketData(identity.subcategory || identity.category, context.productName);
 
   const legComps = phase1?.competitors || [];
   const emComps = phase2?.competitors || [];
@@ -1078,7 +1199,8 @@ function generateMockPhase3(context: AnalysisContext, phase1: any, phase2: any) 
     motorTech: context.motorTech || "",
     pricePoint: context.pricePoint || "",
     targetMarket: context.targetMarket,
-    industry: context.industry,
+    category: identity.category,
+    subcategory: identity.subcategory,
     marketData: mData!,
     competitors: allCompetitors,
   });
@@ -1189,16 +1311,16 @@ function generateMockPhase3(context: AnalysisContext, phase1: any, phase2: any) 
   };
 }
 
-async function saveCompetitorAnalyses(analysisId: string, orgId: string, phase1: any, phase2: any) {
+async function saveCompetitorAnalyses(analysisId: string, orgId: string, phase1: any, phase2: any, identity: IdentityCard) {
   const allCompetitors = [...(phase1.competitors || []), ...(phase2.competitors || [])];
-  
+
   for (const c of allCompetitors) {
     const competitorData = {
       analysisId,
       name: c.name,
       tier: c.tier,
       threatScore: c.rating ? Math.round(parseFloat(c.rating) * 20) : 75,
-      category: c.category || "Hair Clippers",
+      category: c.category || identity.category || identity.subcategory || "General",
       tags: c.key_features?.map((f: any) => f.headline.toLowerCase()) || [],
       insight: c.top_feature_summary || null,
       pricePoint: c.price,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle, Loader2, AlertCircle } from "lucide-react";
+import { CheckCircle, Loader2, AlertCircle, HelpCircle } from "lucide-react";
 
 interface PhaseState {
   status: "waiting" | "running" | "complete" | "error";
@@ -9,11 +9,20 @@ interface PhaseState {
   message: string;
 }
 
+// Phase 0 (Product Identification) runs before any competitor search —
+// added so every downstream phase keys off a VERIFIED category instead
+// of a hardcoded default (see lib/analysisEngine.ts / lib/product-identification.ts).
 const PHASE_LABELS = [
+  "Identifying the product",
   "Researching large brand competitors",
   "Researching indie & emerging competitors",
   "Synthesizing market analysis & strategic recommendations",
 ];
+
+interface PendingQuestion {
+  question: string;
+  foundSoFar?: string;
+}
 
 interface Props {
   analysisId: string;
@@ -64,8 +73,13 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   );
   const [totalSearches, setTotalSearches] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [identity, setIdentity] = useState<any>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+  const [answerText, setAnswerText] = useState("");
+  const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
+  const resumeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,19 +98,25 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
 
       try {
         let { analysis } = await fetchJsonWithRetry(`/api/analyses/${analysisId}`, undefined, () => {});
+        if (analysis.phase0_result && Object.keys(analysis.phase0_result).length) {
+          results.identity = analysis.phase0_result;
+          setIdentity(analysis.phase0_result);
+          setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "complete", message: "Complete" } : p)));
+        }
         if (analysis.phase1_result && Object.keys(analysis.phase1_result).length) {
           results.phase1 = analysis.phase1_result;
-          setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "complete", message: "Complete" } : p)));
+          setPhases((prev) => prev.map((p, i) => (i === 1 ? { ...p, status: "complete", message: "Complete" } : p)));
         }
         if (analysis.phase2_result && Object.keys(analysis.phase2_result).length) {
           results.phase2 = analysis.phase2_result;
-          setPhases((prev) => prev.map((p, i) => (i === 1 ? { ...p, status: "complete", message: "Complete" } : p)));
+          setPhases((prev) => prev.map((p, i) => (i === 2 ? { ...p, status: "complete", message: "Complete" } : p)));
         }
 
         while (!cancelled) {
           if (analysis.status === "complete") {
             setPhases((prev) => prev.map((p) => ({ ...p, status: "complete", message: "Complete" })));
             onComplete({
+              identity: results.identity || identity,
               phase1: results.phase1 || {},
               phase2: results.phase2 || {},
               phase3: analysis.phase3_result || results.phase3 || {},
@@ -110,7 +130,19 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             throw new Error(analysis.error_message || "Analysis failed");
           }
 
-          const runningIdx = analysis.phase; // 0, 1, or 2 — the phase about to run
+          // The pipeline can't tell what the product actually is —
+          // pause and let the user answer instead of guessing.
+          if (analysis.pending_question) {
+            setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "running", message: "Waiting for your answer…" } : p)));
+            await new Promise<void>((resolve) => { resumeRef.current = resolve; setPendingQuestion(analysis.pending_question); });
+            if (cancelled) return;
+            setPendingQuestion(null);
+            const refreshed = await fetchJsonWithRetry(`/api/analyses/${analysisId}`, undefined, () => {});
+            analysis = refreshed.analysis;
+            continue;
+          }
+
+          const runningIdx = analysis.phase; // 0, 1, 2, or 3 — the phase about to run
           setPhases((prev) =>
             prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
           );
@@ -132,14 +164,23 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             throw new Error(step.error || "Analysis failed");
           }
 
-          if (step.phase === 1) results.phase1 = step.stepResult;
-          if (step.phase === 2) results.phase2 = step.stepResult;
-          if (step.phase === 4) {
+          if (step.pendingQuestion) {
+            analysis = updated;
+            continue;
+          }
+
+          if (step.phase === 1) {
+            results.identity = step.stepResult;
+            setIdentity(step.stepResult);
+          }
+          if (step.phase === 2) results.phase1 = step.stepResult;
+          if (step.phase === 3) results.phase2 = step.stepResult;
+          if (step.phase === 5) {
             results.phase3 = step.stepResult;
             results.reportId = step.reportId;
           }
 
-          const completedIdx = step.phase === 4 ? 2 : step.phase - 1;
+          const completedIdx = step.phase === 5 ? 3 : step.phase - 1;
           setPhases((prev) =>
             prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
           );
@@ -164,6 +205,25 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
     };
   }, [analysisId]);
 
+  async function submitAnswer() {
+    if (!answerText.trim() || submittingAnswer) return;
+    setSubmittingAnswer(true);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: answerText.trim() }),
+      });
+      if (!res.ok) throw new Error("Failed to submit answer");
+      setAnswerText("");
+      resumeRef.current?.();
+    } catch (err) {
+      // Leave the question visible — the user can retry submitting.
+    } finally {
+      setSubmittingAnswer(false);
+    }
+  }
+
   const formatTime = (s: number) =>
     `${Math.floor(s / 60)}m ${s % 60}s`;
 
@@ -183,6 +243,70 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
           <span>Analyzing…</span>
         </div>
       </div>
+
+      {/* Product Identity Card — shown as soon as Stage 1 completes, so a
+          wrong identification is visible immediately. */}
+      {identity && (identity.category || identity.whatItIs) && (
+        <div className="mx-5 mt-4 p-3 bg-surface-3/30 border border-border rounded-lg">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Identified Product</span>
+            {identity.confidence && (
+              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
+                identity.confidence === "high" ? "bg-success/10 border-success/30 text-success" :
+                identity.confidence === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
+                "bg-danger/10 border-danger/30 text-danger"
+              }`}>{identity.confidence} confidence</span>
+            )}
+          </div>
+          <div className="mt-1 text-[11px] text-text-primary font-semibold">
+            {identity.category}{identity.subcategory && identity.subcategory !== identity.category ? ` / ${identity.subcategory}` : ""}
+          </div>
+          {identity.whatItIs && <p className="mt-1 text-[10px] text-text-secondary leading-relaxed">{identity.whatItIs}</p>}
+          {Array.isArray(identity.evidence) && identity.evidence.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {identity.evidence.slice(0, 3).map((e: any, i: number) => (
+                e.url ? (
+                  <a key={i} href={e.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-accent hover:underline">
+                    source {i + 1}
+                  </a>
+                ) : null
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pause-and-ask: identification couldn't confidently determine the
+          category — never guess, ask the one question needed instead. */}
+      {pendingQuestion && (
+        <div className="mx-5 mt-4 p-3.5 bg-warning/5 border border-warning/25 rounded-lg space-y-2">
+          <div className="flex items-center gap-1.5 text-warning font-bold text-[11px]">
+            <HelpCircle className="w-3.5 h-3.5" />
+            <span>{pendingQuestion.question}</span>
+          </div>
+          {pendingQuestion.foundSoFar && (
+            <p className="text-[10px] text-text-muted italic">What we found so far: {pendingQuestion.foundSoFar}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={answerText}
+              onChange={(e) => setAnswerText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
+              placeholder="e.g. beard trimmer"
+              className="flex-1 px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+              autoFocus
+            />
+            <button
+              onClick={submitAnswer}
+              disabled={!answerText.trim() || submittingAnswer}
+              className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors"
+            >
+              {submittingAnswer ? "Saving…" : "Continue"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Phase list */}
       <div className="phase-list flex flex-col p-5 gap-4">
@@ -212,7 +336,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             <div className="phase-text text-xs leading-normal">
               <div className="phase-label">
                 <span className="phase-counter font-semibold text-text-muted text-[10px] uppercase tracking-wider">
-                  Phase {i + 1} of 3
+                  Phase {i + 1} of {PHASE_LABELS.length}
                 </span>
                 <span className="mx-1.5 text-text-muted">—</span>
                 <span

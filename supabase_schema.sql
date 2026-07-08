@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 -- 2. ANALYSES TABLE
+-- phase0_result holds the mandatory Product Identification step's Identity
+-- Card (see lib/product-identification.ts) — same column-per-phase pattern
+-- as phase1/2/3_result. pending_question is set (and status stays
+-- "running") when identification can't confidently determine the
+-- product's category and the pipeline must pause for user input rather
+-- than guess; its mere presence is the pause signal, checked by the
+-- client and by runAnalysisStep itself before advancing.
 CREATE TABLE IF NOT EXISTS analyses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id VARCHAR(255) NOT NULL,
@@ -37,9 +44,11 @@ CREATE TABLE IF NOT EXISTS analyses (
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     phase INTEGER NOT NULL DEFAULT 1,
     context JSONB DEFAULT '{}'::jsonb,
+    phase0_result JSONB DEFAULT '{}'::jsonb,
     phase1_result JSONB DEFAULT '{}'::jsonb,
     phase2_result JSONB DEFAULT '{}'::jsonb,
     phase3_result JSONB DEFAULT '{}'::jsonb,
+    pending_question JSONB,
     error_message TEXT,
     duration_ms INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
@@ -210,6 +219,11 @@ CREATE TABLE IF NOT EXISTS project_generation_state (
 -- this ASIN, never via `projects.name`.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_url TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS asin VARCHAR(20);
+
+-- Mandatory Product Identification stage (runs before competitor discovery)
+-- added to the existing 3-phase analysis pipeline as a new phase 0.
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS phase0_result JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS pending_question JSONB;
 
 -- Links a doc_type='tds' document to the exact snapshot it was generated
 -- from, so the UI can show "Live snapshot captured {captured_at} from

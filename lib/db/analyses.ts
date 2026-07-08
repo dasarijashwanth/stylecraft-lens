@@ -51,9 +51,11 @@ export async function createAnalysis(userId: string, orgId: string = "dev_org_id
         status: "PENDING" as const,
         phase: 0,
         context: context || {},
+        phase0Result: null,
         phase1Result: null,
         phase2Result: null,
         phase3Result: null,
+        pendingQuestion: null,
         errorMessage: null,
         durationMs: null,
         createdAt: new Date(),
@@ -96,7 +98,7 @@ export async function deleteAnalysis(analysisId: string, userId: string) {
 export async function updateAnalysisPhase(
   analysisId: string,
   phase: number,
-  phaseKey: string, // "phase1_result" | "phase2_result" | "phase3_result"
+  phaseKey: string, // "phase0_result" | "phase1_result" | "phase2_result" | "phase3_result"
   result: object,
   searches: number
 ) {
@@ -114,8 +116,14 @@ export async function updateAnalysisPhase(
 
     if (error) throw error;
   } else {
-    // Local DB/memoryDb Fallback
-    const prismaKey = phaseKey === "phase1_result" ? "phase1Result"
+    // Local DB/memoryDb Fallback. Prisma's schema has no phase0Result
+    // column (the Product Identification stage lives only on
+    // Supabase/memoryDb, same as documents/document_fields/
+    // product_snapshots before it) — the update below throws for
+    // phaseKey="phase0_result" and falls through to memoryDb, same
+    // established pattern as every other branch in this file.
+    const prismaKey = phaseKey === "phase0_result" ? "phase0Result"
+                    : phaseKey === "phase1_result" ? "phase1Result"
                     : phaseKey === "phase2_result" ? "phase2Result"
                     : "phase3Result";
     try {
@@ -133,19 +141,47 @@ export async function updateAnalysisPhase(
       if (mockAnalysis) {
         mockAnalysis.phase = phase;
         mockAnalysis.status = "RUNNING";
-        mockAnalysis[prismaKey as "phase1Result" | "phase2Result" | "phase3Result"] = result;
+        mockAnalysis[prismaKey as "phase0Result" | "phase1Result" | "phase2Result" | "phase3Result"] = result;
       }
     }
   }
 }
 
+// Merges a partial patch into the analysis's context JSONB — used by the
+// answer-question endpoint to record the user's clarifying answer
+// (context.category) without disturbing the rest of the context bag.
+export async function mergeAnalysisContext(analysisId: string, patch: Record<string, any>) {
+  if (isSupabaseConfigured) {
+    const existing = await getAnalysis(analysisId);
+    const merged = { ...(existing?.context || {}), ...patch };
+    const { error } = await supabaseAdmin
+      .from("analyses")
+      .update({ context: merged, pending_question: null })
+      .eq("id", analysisId);
+    if (error) throw error;
+    return merged;
+  }
+
+  const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+  if (mockAnalysis) {
+    mockAnalysis.context = { ...(mockAnalysis.context || {}), ...patch };
+    mockAnalysis.pendingQuestion = null;
+    return mockAnalysis.context;
+  }
+  return patch;
+}
+
+// Terminal stored phase is 5, one past the highest real phase index (4 —
+// synthesis, phase 3 0-indexed) — bumped from the old 3-phase pipeline's
+// terminal value of 4 when Product Identification was inserted as a new
+// phase 0 ahead of the two competitor-discovery phases.
 export async function completeAnalysis(analysisId: string, durationMs: number) {
   if (isSupabaseConfigured) {
     const { error } = await supabaseAdmin
       .from("analyses")
       .update({
         status: "complete",
-        phase: 4,
+        phase: 5,
         completed_at: new Date().toISOString(),
         duration_ms: durationMs,
       })
@@ -159,7 +195,7 @@ export async function completeAnalysis(analysisId: string, durationMs: number) {
         where: { id: analysisId },
         data: {
           status: "COMPLETE",
-          phase: 4,
+          phase: 5,
           completedAt: new Date(),
           durationMs,
         }
@@ -169,12 +205,30 @@ export async function completeAnalysis(analysisId: string, durationMs: number) {
       const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
       if (mockAnalysis) {
         mockAnalysis.status = "COMPLETE";
-        mockAnalysis.phase = 4;
+        mockAnalysis.phase = 5;
         mockAnalysis.completedAt = new Date();
         mockAnalysis.durationMs = durationMs;
       }
     }
   }
+}
+
+// Pauses the pipeline for user input — phase stays where it is (identity
+// couldn't be confirmed), status stays "running", and pending_question's
+// mere presence is what stops runAnalysisStep from advancing until
+// mergeAnalysisContext (via POST /api/analyses/:id/answer) clears it.
+export async function setPendingQuestion(analysisId: string, question: { question: string; foundSoFar?: string }) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin
+      .from("analyses")
+      .update({ pending_question: question })
+      .eq("id", analysisId);
+    if (error) throw error;
+    return;
+  }
+
+  const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+  if (mockAnalysis) mockAnalysis.pendingQuestion = question;
 }
 
 export async function failAnalysis(analysisId: string, errorMessage: string) {
@@ -260,9 +314,11 @@ export async function getAnalysis(analysisId: string) {
         status: mockAnalysis.status.toLowerCase(),
         phase: mockAnalysis.phase,
         context: mockAnalysis.context,
+        phase0_result: mockAnalysis.phase0Result,
         phase1_result: mockAnalysis.phase1Result,
         phase2_result: mockAnalysis.phase2Result,
         phase3_result: mockAnalysis.phase3Result,
+        pending_question: mockAnalysis.pendingQuestion,
         error_message: mockAnalysis.errorMessage,
         duration_ms: mockAnalysis.durationMs,
         created_at: mockAnalysis.createdAt,
@@ -329,4 +385,35 @@ export async function getUserAnalyses(userId: string) {
       }).sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
     }
   }
+}
+
+// For the anti-boilerplate check: recent completed analyses' identified
+// category + positioning text, so a newly-generated Phase 3 synthesis can
+// be compared against what the last few DIFFERENT-category analyses
+// produced — catching generic, could-apply-to-any-category strategy text.
+export async function getRecentAnalysesForBoilerplateCheck(orgId: string, excludeAnalysisId: string, limit = 5) {
+  if (isSupabaseConfigured) {
+    const { data, error } = await supabaseAdmin
+      .from("analyses")
+      .select("id, phase0_result, phase3_result")
+      .eq("org_id", orgId)
+      .eq("status", "complete")
+      .neq("id", excludeAnalysisId)
+      .order("completed_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return (data ?? []).map((a: any) => ({
+      category: a.phase0_result?.category as string | undefined,
+      positioningText: a.phase3_result?.positioning_recommendation as string | undefined,
+    }));
+  }
+
+  return memoryDb.analyses
+    .filter(a => a.orgId === orgId && a.status === "COMPLETE" && a.id !== excludeAnalysisId)
+    .sort((a, b) => (b.completedAt?.getTime() ?? 0) - (a.completedAt?.getTime() ?? 0))
+    .slice(0, limit)
+    .map(a => ({
+      category: (a.phase0Result as any)?.category as string | undefined,
+      positioningText: (a.phase3Result as any)?.positioning_recommendation as string | undefined,
+    }));
 }
