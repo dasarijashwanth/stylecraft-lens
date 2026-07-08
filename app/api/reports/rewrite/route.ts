@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "@/lib/gemini";
+import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "@/lib/anthropic";
 
 export async function POST(request: Request) {
   try {
@@ -22,31 +23,39 @@ export async function POST(request: Request) {
       );
     }
     
-    let rewrittenText = text;
-    
+    const instructions = {
+      improve: "Improve clarity, readability, and professional impact while preserving the core meaning.",
+      shorten: "Shorten the text to approximately half its length, removing wordiness while keeping key facts.",
+      formalize: "Rewrite the text in highly formal, executive-level business consulting report language.",
+    };
+    const prompt = `${instructions[mode as "improve" | "shorten" | "formalize"]} Return ONLY the rewritten text with no introduction, no conversational text, and no quotes. Just the result.\n\nText: ${text}`;
+
+    let rewrittenText: string | null = null;
+
     if (hasGeminiKey) {
       try {
-        const instructions = {
-          improve: "Improve clarity, readability, and professional impact while preserving the core meaning.",
-          shorten: "Shorten the text to approximately half its length, removing wordiness while keeping key facts.",
-          formalize: "Rewrite the text in highly formal, executive-level business consulting report language.",
-        };
-
-        const response = await genAI.models.generateContent({
-          model: GEMINI_MODEL,
-          contents: `${instructions[mode as "improve" | "shorten" | "formalize"]} Return ONLY the rewritten text with no introduction, no conversational text, and no quotes. Just the result.\n\nText: ${text}`,
-        });
-
-        if (response.text) {
-          rewrittenText = response.text.trim();
-        }
+        const response = await genAI.models.generateContent({ model: GEMINI_MODEL, contents: prompt });
+        if (response.text) rewrittenText = response.text.trim();
       } catch (err: any) {
-        console.warn("Gemini AI Rewrite failed, falling back to mock rewrite:", err);
-        rewrittenText = getMockRewrite(text, mode);
+        console.warn("Gemini AI Rewrite failed:", err);
       }
-    } else {
-      // Latency simulation for realistic feel in dev mode
-      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+
+    if (!rewrittenText && hasAnthropicKey) {
+      try {
+        const message = await anthropic.messages.create({
+          model: ANTHROPIC_MODEL,
+          max_tokens: 2048,
+          messages: [{ role: "user", content: prompt }],
+        });
+        const t = message.content.filter(b => b.type === "text").map((b: any) => b.text).join("\n").trim();
+        if (t) rewrittenText = t;
+      } catch (err: any) {
+        console.warn("Anthropic AI Rewrite failed:", err);
+      }
+    }
+
+    if (!rewrittenText) {
       rewrittenText = getMockRewrite(text, mode);
     }
     

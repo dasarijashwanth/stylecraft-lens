@@ -13,4 +13,4 @@ export const hasAnthropicKey =
   process.env.ANTHROPIC_API_KEY !== "sk-ant-..." &&
   process.env.ANTHROPIC_API_KEY !== "";
 
-export const ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022";
+export const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";

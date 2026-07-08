@@ -6,11 +6,15 @@
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "./anthropic";
 
-export async function callAiForFields(
+// Generic Gemini-then-Anthropic JSON call — returns whatever shape the
+// system instruction's schema describes, or null if both providers are
+// unavailable/fail. callAiForFields (below) is the {fieldId:{answer,source}}
+// specialization of this for GTM/TDS field generation.
+export async function callAiForJson<T = any>(
   systemInstruction: string,
   userContent: string,
   label: string
-): Promise<Record<string, { answer: string; source: string }> | null> {
+): Promise<T | null> {
   if (hasGeminiKey) {
     try {
       const message = await genAI.models.generateContent({
@@ -38,4 +42,12 @@ export async function callAiForFields(
     }
   }
   return null;
+}
+
+export async function callAiForFields(
+  systemInstruction: string,
+  userContent: string,
+  label: string
+): Promise<Record<string, { answer: string; source: string }> | null> {
+  return callAiForJson(systemInstruction, userContent, label);
 }

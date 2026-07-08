@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFullProjectContext } from "@/lib/project-context";
-import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
+import { callAiForJson } from "@/lib/ai-json-call";
 
 export const maxDuration = 60;
 
@@ -36,14 +36,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const ctx = await buildFullProjectContext(params.id);
     if (!ctx) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    let kit: any = null;
-
-    if (hasGeminiKey) {
-      try {
-        const message = await genAI.models.generateContent({
-          model: GEMINI_MODEL,
-          config: {
-            systemInstruction: `You are a professional sales copywriter creating a Sales Kit for a product.
+    let kit = await callAiForJson<any>(
+      `You are a professional sales copywriter creating a Sales Kit for a product.
+Write EVERY field specifically about this exact product, its actual category, and its actual named competitors — never generic boilerplate that could apply to any product. Do not mention "battery" or "motor" unless the product description actually says so.
 Return ONLY valid JSON — no markdown, no explanation.
 {
   "tagline": "Short punchy product tagline",
@@ -53,16 +48,15 @@ Return ONLY valid JSON — no markdown, no explanation.
   ],
   "target_customers": ["Customer type 1", "Customer type 2", "Customer type 3"],
   "competitive_advantages": [
-    { "vs": "Competitor name", "advantage": "Why our product wins" }
+    { "vs": "Competitor name", "advantage": "Why our product wins, specific to that competitor's actual price/features" }
   ],
   "objection_handlers": [
-    { "objection": "Common pushback", "response": "How to handle it" }
+    { "objection": "Common pushback specific to this product category", "response": "How to handle it" }
   ],
   "key_messages": ["Message 1", "Message 2", "Message 3"],
   "call_to_action": "Where to buy / next step"
 }`,
-          },
-          contents: `Create a Sales Kit for:
+      `Create a Sales Kit for:
 Product: ${ctx.productName}
 Description: ${ctx.description}
 Price: ${ctx.pricePoint || "Contact for pricing"}
@@ -81,37 +75,32 @@ Positioning: ${ctx.positioning}
 
 Key messages:
 ${(ctx.keyMessages || []).join(", ")}`,
-        });
-
-        const text = message.text || "";
-        kit = JSON.parse(cleanJsonString(text));
-      } catch (err) {
-        console.warn("Gemini Sales Kit generation failed, using fallback:", err);
-      }
-    }
+      "Sales Kit"
+    );
 
     if (!kit) {
+      const motorLine = ctx.motorTech ? ` Powered by ${ctx.motorTech}.` : "";
       kit = {
-        tagline: `${ctx.productName} — Professional Grade Excellence`,
-        elevator_pitch: `${ctx.productName} delivers exceptional performance engineered specifically for ${ctx.targetMarket} environments. Powered by advanced ${ctx.motorTech || "motor technology"}, it combines precision cutting with maximum battery efficiency.`,
+        tagline: `${ctx.productName} — Built for ${ctx.targetMarket || "Professionals"}`,
+        elevator_pitch: `${ctx.productName}${ctx.description ? `: ${ctx.description}` : ""} Engineered for ${ctx.targetMarket || "professional"} use in the ${ctx.industry || "grooming"} market.${motorLine}`,
         key_features: [
-          { headline: ctx.keyDiff || "Advanced Motor Engineering", benefit: "Delivers consistent torque through heavy hair and all-day usage." },
-          { headline: "Ergonomic Balance", benefit: "Reduces wrist fatigue during extended cutting and styling sessions." },
-          { headline: "Long-lasting Power System", benefit: "Extended runtime designed to keep professionals working without downtime." }
+          { headline: ctx.keyDiff || "Key Differentiator", benefit: ctx.description || "Delivers reliable, professional-grade performance." },
+          { headline: "Built for Daily Use", benefit: "Designed to hold up under repeated professional/commercial use." },
+          { headline: "Competitive Value", benefit: `Priced at ${ctx.pricePoint || "a competitive point"} relative to the category.` }
         ],
         target_customers: ["Barbershop Owners", "Master Stylists", "Grooming Enthusiasts"],
         competitive_advantages: (ctx.topCompetitors || []).slice(0, 3).map((c: any) => ({
           vs: c.name || c.brand || "Competitor",
-          advantage: `Superior battery efficiency and customizable ergonomics at a competitive ${ctx.pricePoint || "value"} price point.`
+          advantage: `Competitive positioning at ${ctx.pricePoint || "a comparable"} price point${c.price ? ` vs their ${c.price}` : ""}.`
         })),
         objection_handlers: [
-          { objection: "Why switch from established legacy brands?", response: "Our advanced motor technology and superior runtime offer modern reliability without legacy price inflation." },
-          { objection: "Is the battery life sufficient for full salon shifts?", response: "Yes, verified by professional tests to provide extended operating time with rapid charging support." }
+          { objection: "Why switch from established legacy brands?", response: "Modern engineering and design offer comparable or better reliability without legacy price inflation." },
+          { objection: "How does this compare on price?", response: `At ${ctx.pricePoint || "this price point"}, it offers strong value against the named competitors above.` }
         ],
         key_messages: ctx.keyMessages.length > 0 ? ctx.keyMessages : [
-          "Precision engineered for high-volume performance.",
-          "Unrivaled battery endurance and ergonomic design.",
-          "Trusted choice for modern grooming professionals."
+          `Precision engineered for the ${ctx.industry || "professional"} market.`,
+          "Reliable, professional-grade construction.",
+          "Trusted choice for modern professionals."
         ],
         call_to_action: `Order ${ctx.productName} today or contact sales for volume commercial pricing.`
       };
