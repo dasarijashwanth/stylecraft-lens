@@ -1,9 +1,19 @@
 // lib/db/documents.ts
-// Field-granular document storage (currently doc_type='gtm' only) — see
+// Field-granular document storage — shared by doc_type='gtm' and
+// doc_type='tds' (TDS moved off its old project_outputs blob onto this
+// same model so it gets per-field editing/history/revert for free). See
 // supabase_schema.sql for documents/document_fields/document_field_history.
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockDocumentField } from "@/lib/memoryDb";
-import { GtmFieldAnswer } from "@/lib/gtm-field-schema";
+
+// Structural, not GTM-specific — lib/tds-field-schema.ts's TdsFieldAnswer
+// satisfies this shape too, so one storage layer serves both documents.
+export interface FieldAnswerLike {
+  answer: string;
+  source: string;
+  sourceDetail?: any;
+  flagged?: boolean;
+}
 
 export interface DocumentRow {
   id: string;
@@ -12,6 +22,7 @@ export interface DocumentRow {
   status: string;
   drive_url?: string | null;
   drive_file_id?: string | null;
+  snapshot_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -26,7 +37,31 @@ export interface DocumentFieldRow {
   source: string | null;
   source_detail: any;
   flagged: boolean;
+  owner: string | null;
+  notes: string | null;
   updated_at: string;
+}
+
+// Reshapes a document's field rows into a flat field_id -> answer map —
+// what lib/gtm-derive.ts and lib/gtm-generate.ts consume for TDS-sourced
+// GTM fields, and what the AI prompt's source-text blocks stringify.
+export function flattenDocumentFields(fields: DocumentFieldRow[]): Record<string, string> {
+  const flat: Record<string, string> = {};
+  for (const f of fields) {
+    if (f.answer && f.answer.toUpperCase() !== "N/A" && f.answer !== "Not listed on product page") {
+      flat[f.field_id] = f.answer;
+    }
+  }
+  return flat;
+}
+
+// Convenience for GTM generation: the project's TDS document flattened to
+// field_id -> answer, or null if no TDS has been captured yet.
+export async function getTdsFieldsForProject(projectId: string): Promise<Record<string, string> | null> {
+  const doc = await getDocumentByProject(projectId, "tds");
+  if (!doc) return null;
+  const fields = await getDocumentFields(doc.id);
+  return flattenDocumentFields(fields);
 }
 
 export async function getDocumentByProject(projectId: string, docType: string): Promise<DocumentRow | null> {
@@ -42,7 +77,7 @@ export async function getDocumentByProject(projectId: string, docType: string): 
   }
   const doc = memoryDb.documents.find(d => d.projectId === projectId && d.docType === docType);
   if (!doc) return null;
-  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString() };
+  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null, created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString() };
 }
 
 export async function getOrCreateDocument(projectId: string, docType: string): Promise<DocumentRow> {
@@ -60,9 +95,9 @@ export async function getOrCreateDocument(projectId: string, docType: string): P
   }
 
   const now = new Date();
-  const doc = { id: `doc_${Date.now()}`, projectId, docType, status: "draft", driveUrl: null, driveFileId: null, createdAt: now, updatedAt: now };
+  const doc = { id: `doc_${Date.now()}`, projectId, docType, status: "draft", driveUrl: null, driveFileId: null, snapshotId: null, createdAt: now, updatedAt: now };
   memoryDb.documents.push(doc);
-  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: null, drive_file_id: null, created_at: now.toISOString(), updated_at: now.toISOString() };
+  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: null, drive_file_id: null, snapshot_id: null, created_at: now.toISOString(), updated_at: now.toISOString() };
 }
 
 export async function setDocumentDriveInfo(documentId: string, driveUrl: string, driveFileId: string) {
@@ -75,6 +110,18 @@ export async function setDocumentDriveInfo(documentId: string, driveUrl: string,
   }
 }
 
+// Points a doc_type='tds' document at the snapshot it was (re)generated
+// from — backs the "Live snapshot captured {captured_at}" header.
+export async function setDocumentSnapshot(documentId: string, snapshotId: string) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("documents").update({ snapshot_id: snapshotId, updated_at: new Date().toISOString() }).eq("id", documentId);
+    if (error) throw error;
+  } else {
+    const doc = memoryDb.documents.find(d => d.id === documentId);
+    if (doc) { doc.snapshotId = snapshotId; doc.updatedAt = new Date(); }
+  }
+}
+
 export async function getDocumentById(documentId: string): Promise<DocumentRow | null> {
   if (isSupabaseConfigured) {
     const { data } = await supabaseAdmin.from("documents").select("*").eq("id", documentId).maybeSingle();
@@ -82,7 +129,7 @@ export async function getDocumentById(documentId: string): Promise<DocumentRow |
   }
   const doc = memoryDb.documents.find(d => d.id === documentId);
   if (!doc) return null;
-  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString() };
+  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null, created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString() };
 }
 
 // For the anti-boilerplate check: the most recently updated OTHER project's
@@ -118,7 +165,8 @@ export async function getDocumentFields(documentId: string): Promise<DocumentFie
     .filter(f => f.documentId === documentId)
     .map(f => ({
       id: f.id, document_id: f.documentId, field_id: f.fieldId, section: f.section, question: f.question,
-      answer: f.answer, source: f.source, source_detail: f.sourceDetail, flagged: f.flagged, updated_at: f.updatedAt.toISOString(),
+      answer: f.answer, source: f.source, source_detail: f.sourceDetail, flagged: f.flagged,
+      owner: f.owner ?? "Product Marketing", notes: f.notes ?? null, updated_at: f.updatedAt.toISOString(),
     }));
 }
 
@@ -150,7 +198,7 @@ async function writeHistory(documentFieldId: string, previousAnswer: string | nu
 export async function saveDocumentFields(
   documentId: string,
   fieldsBySchema: { id: string; section: string; question: string }[],
-  answers: Record<string, GtmFieldAnswer>,
+  answers: Record<string, FieldAnswerLike>,
   updatedBy: string | null
 ) {
   const existing = await getDocumentFields(documentId);
@@ -164,6 +212,10 @@ export async function saveDocumentFields(
     const next = answers[f.id];
     if (!next) continue;
     const prior = existingById.get(f.id);
+    // Regenerating/re-saving must never clobber a user-assigned Owner or
+    // Notes — those are independent of the generated answer.
+    const owner = prior?.owner ?? "Product Marketing";
+    const notes = prior?.notes ?? null;
 
     if (prior && prior.answer !== next.answer) {
       historyRows.push({ document_field_id: prior.id, answer: prior.answer, changed_by: updatedBy });
@@ -179,6 +231,8 @@ export async function saveDocumentFields(
         source: next.source,
         source_detail: next.sourceDetail ?? {},
         flagged: !!next.flagged,
+        owner,
+        notes,
         updated_by: updatedBy,
         updated_at: now,
       });
@@ -194,6 +248,8 @@ export async function saveDocumentFields(
         source: next.source,
         sourceDetail: next.sourceDetail ?? {},
         flagged: !!next.flagged,
+        owner,
+        notes,
         updatedBy,
         updatedAt: new Date(),
       };
@@ -266,6 +322,47 @@ export async function updateDocumentField(
     row.updatedAt = new Date();
   }
   return { ...prior, answer: newAnswer, source: update.source, source_detail: update.source_detail, flagged: update.flagged };
+}
+
+// Owner/Notes are metadata about the field, not the generated answer — an
+// edit here is intentionally NOT written to document_field_history (that
+// history is answer-specific), so this never interacts with revert.
+export async function updateDocumentFieldMeta(
+  documentId: string,
+  fieldId: string,
+  opts: { owner?: string; notes?: string },
+  updatedBy: string | null
+): Promise<DocumentFieldRow> {
+  const fields = await getDocumentFields(documentId);
+  const prior = fields.find(f => f.field_id === fieldId);
+  if (!prior) throw new Error("Field not found");
+
+  const update = {
+    owner: opts.owner ?? prior.owner,
+    notes: opts.notes ?? prior.notes,
+    updated_by: updatedBy,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isSupabaseConfigured) {
+    const { data, error } = await supabaseAdmin
+      .from("document_fields")
+      .update(update)
+      .eq("id", prior.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const row = memoryDb.documentFields.find(f => f.id === prior.id);
+  if (row) {
+    row.owner = update.owner;
+    row.notes = update.notes;
+    row.updatedBy = updatedBy;
+    row.updatedAt = new Date();
+  }
+  return { ...prior, owner: update.owner, notes: update.notes };
 }
 
 // Restores the single most recent prior value from history — records the

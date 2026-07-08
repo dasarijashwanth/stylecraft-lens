@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDocumentById, getDocumentFields } from "@/lib/db/documents";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 
+// Reads only `params.id` — same latent Next.js route-handler-cache risk
+// confirmed and fixed in app/api/projects/[id]/pipeline/route.ts.
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const document = await getDocumentById(params.id);

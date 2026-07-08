@@ -71,4 +71,8 @@ export const NewProjectSchema = z.object({
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
   pricePoint: z.string().max(50).optional(),
+  // The product-anchor identity — optional, but when provided drives the
+  // real-time TDS snapshot + auto-fill pipeline (see lib/snapshot-capture.ts).
+  productUrl: z.string().max(500).optional().refine(v => !v || normalizeUrl(v) !== null, "Enter a valid product URL"),
+  asin: z.string().max(20).optional().refine(v => !v || /^[A-Z0-9]{10}$/i.test(v), "ASIN must be exactly 10 letters/digits"),
 });

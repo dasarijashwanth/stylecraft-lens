@@ -14,6 +14,12 @@ interface ProjectInput {
   motorTech?: string;
   keyDiff?: string;
   pricePoint?: string;
+  // The product-anchor identity, captured once at creation. `name` above
+  // stays a free-text reference label only — generation prompts must
+  // identify the product via a captured snapshot / this URL / this ASIN,
+  // never via the project name (see lib/snapshot-capture.ts).
+  productUrl?: string;
+  asin?: string;
 }
 
 // Supabase columns are snake_case, but the rest of this app (Prisma models,
@@ -34,6 +40,8 @@ function toProjectShape(row: any) {
     motorTech: row.motor_tech,
     keyDiff: row.key_diff,
     pricePoint: row.price_point,
+    productUrl: row.product_url,
+    asin: row.asin,
     savedDefaults: row.saved_defaults,
     latestAnalysisId: row.latest_analysis_id,
     latestReportId: row.latest_report_id,
@@ -62,6 +70,8 @@ export async function createProject(userId: string, orgId: string, data: Project
         motor_tech: data.motorTech ?? null,
         key_diff: data.keyDiff ?? null,
         price_point: data.pricePoint ?? null,
+        product_url: data.productUrl ?? null,
+        asin: data.asin ?? null,
         last_used_at: new Date().toISOString(),
       })
       .select()
@@ -105,6 +115,8 @@ export async function createProject(userId: string, orgId: string, data: Project
       motorTech: data.motorTech || null,
       keyDiff: data.keyDiff || null,
       pricePoint: data.pricePoint || null,
+      productUrl: data.productUrl || null,
+      asin: data.asin || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -208,6 +220,8 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   motorTech: "motor_tech",
   keyDiff: "key_diff",
   pricePoint: "price_point",
+  productUrl: "product_url",
+  asin: "asin",
   savedDefaults: "saved_defaults",
   latestAnalysisId: "latest_analysis_id",
   latestReportId: "latest_report_id",

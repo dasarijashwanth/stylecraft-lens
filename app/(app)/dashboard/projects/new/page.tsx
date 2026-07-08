@@ -24,6 +24,12 @@ export default function NewProjectPage() {
   const [motorTech, setMotorTech] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
 
+  // Product anchor — optional, drives the real-time TDS snapshot + GTM
+  // auto-fill pipeline. The project name above stays a reference label
+  // only; this is what actually identifies the product.
+  const [productUrl, setProductUrl] = useState("");
+  const [asin, setAsin] = useState("");
+
   const validate = (): boolean => {
     const errs: { [key: string]: string } = {};
     if (!name.trim()) errs.name = "Project name is required";
@@ -57,11 +63,21 @@ export default function NewProjectPage() {
           companyContext: companyContext.trim() || undefined,
           motorTech: motorTech || undefined,
           keyDiff: keyDiff.trim() || undefined,
+          productUrl: productUrl.trim() || undefined,
+          asin: asin.trim() || undefined,
         })
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
+
+      // Kick off the background snapshot -> TDS -> GTM pipeline if a
+      // product anchor was given. Creation itself already succeeded and
+      // navigation happens regardless — the project page picks up the
+      // in-progress pipeline via ProjectGenerationProgress.
+      if (productUrl.trim() || asin.trim()) {
+        fetch(`/api/projects/${data.project.id}/pipeline/start`, { method: "POST" }).catch(() => {});
+      }
 
       toast.success("Project created");
       router.push(`/dashboard/projects/${data.project.id}`);
@@ -188,6 +204,43 @@ export default function NewProjectPage() {
               }`}
             />
             {errors.description && <p className="text-[10px] text-danger">{errors.description}</p>}
+          </div>
+        </div>
+
+        {/* CARD 1B: Product Anchor — real product identity, drives TDS + GTM auto-fill */}
+        <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4">
+          <div>
+            <h2 className="text-sm font-bold text-text-primary">Product anchor (optional)</h2>
+            <p className="text-[10px] text-text-muted mt-1">
+              Add the official product page URL and/or Amazon ASIN to automatically capture real specs into a live
+              Technical Data Sheet and pre-fill the Go-To-Market sheet. The project name above is just a label — this
+              is what identifies the actual product.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="font-semibold text-text-primary block">Product URL</label>
+              <input
+                type="text"
+                value={productUrl}
+                onChange={(e) => setProductUrl(e.target.value)}
+                placeholder="https://brand.com/products/apex-clipper"
+                className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary placeholder-text-muted outline-none focus:border-accent"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="font-semibold text-text-primary block">Amazon ASIN</label>
+              <input
+                type="text"
+                value={asin}
+                onChange={(e) => setAsin(e.target.value.toUpperCase())}
+                placeholder="e.g. B0DTJLSTYM"
+                maxLength={10}
+                className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary placeholder-text-muted outline-none focus:border-accent font-mono"
+              />
+            </div>
           </div>
         </div>
 

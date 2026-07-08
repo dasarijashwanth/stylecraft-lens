@@ -34,6 +34,8 @@ import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ArtworkTab } from "@/components/project/ArtworkTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS } from "@/lib/gtm-field-schema";
+import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
+import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork";
 
@@ -46,6 +48,7 @@ export default function ProjectDetailPage() {
   const [activeTab, setActiveTab] = useState<Tab>("competitive-analysis");
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [linkingReport, setLinkingReport] = useState(false);
+  const [pipelineState, setPipelineState] = useState<any>(null);
 
   const fetchProjectDetails = async () => {
     try {
@@ -81,6 +84,14 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     if (id) fetchProjectDetails();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    fetch(`/api/projects/${id}/pipeline`)
+      .then(r => r.json())
+      .then(data => setPipelineState(data.state ?? null))
+      .catch(() => {});
   }, [id]);
 
   const handleDeleteProject = async () => {
@@ -229,6 +240,12 @@ export default function ProjectDetailPage() {
 
         {/* Right Side: Linked Reports Workspace (8/12) */}
         <div className="lg:col-span-8 space-y-6">
+          {/* Project Outputs & Document Generators Bar — renders regardless
+              of whether a report is linked; Sales Kit still needs one for
+              its "Active Report" cross-references, but TDS/GTM download
+              and Save-to-Drive buttons work off the project alone. */}
+          <ProjectOutputsBar project={project} report={selectedReport} />
+
           {reports.length === 0 ? (
             /* Empty State */
             <div className="flex flex-col items-center justify-center p-12 bg-surface-2 border border-border border-dashed rounded-xl text-center space-y-4">
@@ -255,9 +272,6 @@ export default function ProjectDetailPage() {
           ) : (
             /* Linked Reports detail area */
             <div className="space-y-4">
-              {/* Project Outputs & Document Generators Bar */}
-              <ProjectOutputsBar project={project} report={selectedReport} />
-
               {/* Report selector and download bar */}
               <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-surface-2 border border-border rounded-xl">
                 <div className="flex items-center gap-3">
@@ -322,6 +336,15 @@ export default function ProjectDetailPage() {
               </div>
             </div>
           )}
+
+          {/* TDS + GTM live independently of whether a report is linked —
+              a brand-new project created via the product-anchor flow has
+              no report yet, but should still show its generated TDS/GTM. */}
+          {pipelineState && pipelineState.status !== "complete" && pipelineState.status !== "failed" && (
+            <ProjectGenerationProgress projectId={id} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
+          )}
+          <TdsKnowledgeSection projectId={id} />
+          <ProductKnowledgeSection projectId={id} />
         </div>
       </div>
 
@@ -874,7 +897,233 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
         </div>
       )}
 
-      {!editing && <ProductKnowledgeSection projectId={projectId} />}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TECHNICAL DATA SHEET (live product snapshot — no AI regenerate)
+// ────────────────────────────────────────────────────────────────────────────
+const TDS_SOURCE_LABELS: Record<string, string> = {
+  amazon: "Amazon",
+  official_site: "Product Page",
+  product_snapshot: "Snapshot",
+  project_record: "Project",
+  manual_edit: "Manual",
+  none: "Not Listed",
+};
+
+function isTdsFieldComplete(answer: string | null | undefined) {
+  const trimmed = (answer || "").trim();
+  return trimmed !== "" && trimmed.toUpperCase() !== "N/A" && trimmed !== "Not listed on product page";
+}
+
+function tdsFlagReason(detail: any): string {
+  if (!detail) return "Flagged";
+  if (detail.reason === "ungrounded") return `Rejected — the extracted answer ("${detail.rejectedAnswer}") wasn't found in the snapshot`;
+  if (detail.conflict) return `Sources disagree: ${detail.conflict.map((c: any) => `${c.source}="${c.answer}"`).join(" vs ")}`;
+  return "Flagged for review";
+}
+
+function snapshotDomain(sourceUrl: string | null | undefined, asin: string | null | undefined): string | null {
+  if (sourceUrl) {
+    try { return new URL(sourceUrl).hostname.replace(/^www\./, ""); } catch { return sourceUrl; }
+  }
+  return asin ? `Amazon (${asin})` : null;
+}
+
+function TdsKnowledgeSection({ projectId }: { projectId: string }) {
+  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [snapshotMeta, setSnapshotMeta] = useState<{ capturedAt: string | null; sourceUrl: string | null; asin: string | null }>({ capturedAt: null, sourceUrl: null, asin: null });
+  const [fields, setFields] = useState<Record<string, FieldRow>>({});
+  const [loading, setLoading] = useState(true);
+  const [capturing, setCapturing] = useState(false);
+  const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/documents/tds?projectId=${projectId}`);
+        const data = await res.json();
+        if (data.document) {
+          setDocumentId(data.document.id);
+          setSnapshotMeta({
+            capturedAt: data.document.snapshot_captured_at ?? null,
+            sourceUrl: data.document.snapshot_source_url ?? null,
+            asin: data.document.snapshot_asin ?? null,
+          });
+          const map: Record<string, FieldRow> = {};
+          for (const f of data.fields) map[f.field_id] = f;
+          setFields(map);
+        }
+      } catch (e) {}
+      setLoading(false);
+    })();
+  }, [projectId]);
+
+  const completedCount = TDS_FIELD_SCHEMA.reduce((n, f) => n + (isTdsFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
+
+  async function handleCapture() {
+    setCapturing(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/snapshot`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Snapshot capture failed");
+      setDocumentId(data.document.id);
+      setSnapshotMeta({
+        capturedAt: data.document.snapshot_captured_at ?? null,
+        sourceUrl: data.document.snapshot_source_url ?? null,
+        asin: data.document.snapshot_asin ?? null,
+      });
+      const map: Record<string, FieldRow> = {};
+      for (const f of data.fields) map[f.field_id] = f;
+      setFields(map);
+      toast.success("Live product snapshot captured");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to capture snapshot");
+    } finally {
+      setCapturing(false);
+    }
+  }
+
+  function handleFieldChange(fieldId: string, value: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], answer: value } }));
+    if (debounceTimers.current[fieldId]) clearTimeout(debounceTimers.current[fieldId]);
+    debounceTimers.current[fieldId] = setTimeout(() => saveField(fieldId, value), 800);
+  }
+
+  async function saveField(fieldId: string, value: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/tds/${documentId}/fields/${fieldId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "saved" }));
+      setTimeout(() => setFieldStatus(prev => (prev[fieldId] === "saved" ? { ...prev, [fieldId]: "idle" } : prev)), 1500);
+    } catch (e) {
+      toast.error("Failed to save field");
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  async function handleRevert(fieldId: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/tds/${documentId}/fields/${fieldId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Nothing to revert to");
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      toast.success("Reverted to previous value");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to revert field");
+    } finally {
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  const hasDocument = !!documentId;
+  const domain = snapshotDomain(snapshotMeta.sourceUrl, snapshotMeta.asin);
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Technical Data Sheet</span>
+          {hasDocument && (
+            <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
+              {completedCount}/{TDS_FIELD_SCHEMA.length} fields completed
+            </span>
+          )}
+          {snapshotMeta.capturedAt && (
+            <span className="text-[10px] text-text-muted italic">
+              Live snapshot captured {new Date(snapshotMeta.capturedAt).toLocaleString()}{domain ? ` from ${domain}` : ""}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleCapture}
+          disabled={capturing || loading}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors shadow"
+        >
+          {capturing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          <span>{hasDocument ? "Re-capture snapshot" : "Capture snapshot"}</span>
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="p-4 text-text-muted text-[11px]">Loading…</p>
+      ) : !hasDocument ? (
+        <p className="p-4 text-text-muted text-[11px]">
+          Capture a live snapshot from the product&apos;s official page and/or Amazon listing to fill this Technical
+          Data Sheet with real, verifiable specs — no AI regeneration, just a real-time capture you can hand-edit.
+          {!snapshotMeta.sourceUrl && !snapshotMeta.asin && " Add a product URL or ASIN to this project first."}
+        </p>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {TDS_SECTIONS.map(section => (
+            <div key={section} className="p-4 space-y-3">
+              <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{section}</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                {TDS_FIELD_SCHEMA.filter(f => f.section === section).map(f => {
+                  const entry = fields[f.id];
+                  const complete = isTdsFieldComplete(entry?.answer);
+                  const status = fieldStatus[f.id] || "idle";
+                  const flagged = !!entry?.flagged;
+                  return (
+                    <div key={f.id} className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="font-semibold text-text-primary text-[11px] flex items-center gap-1">
+                          {f.question}
+                          {flagged && (
+                            <AlertCircle className="w-3 h-3 text-danger shrink-0" aria-label={tdsFlagReason(entry?.source_detail)} />
+                          )}
+                        </label>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                            flagged ? "bg-danger/10 border-danger/30 text-danger" : !complete ? "bg-warning/10 border-warning/25 text-warning" : "bg-surface-3 border-border text-text-muted"
+                          }`}>
+                            {TDS_SOURCE_LABELS[entry?.source || "none"]}
+                          </span>
+                          <button
+                            type="button"
+                            title="Revert to previous value"
+                            onClick={() => handleRevert(f.id)}
+                            className="p-0.5 text-text-muted hover:text-text-primary transition-colors"
+                          >
+                            <Undo2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        rows={2}
+                        value={entry?.answer || ""}
+                        onChange={e => handleFieldChange(f.id, e.target.value)}
+                        title={flagged ? tdsFlagReason(entry?.source_detail) : undefined}
+                        className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
+                          flagged ? "border-danger/40" : "border-border"
+                        }`}
+                      />
+                      <div className="h-3 text-[9px] text-text-muted">
+                        {status === "saving" && "Saving…"}
+                        {status === "saved" && "Saved ✓"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -887,10 +1136,12 @@ const SOURCE_LABELS: Record<string, string> = {
   sales_kit: "Sales Kit",
   tds: "TDS",
   active_report: "Active Report",
-  web: "Web",
+  web: "Web — verify",
   multiple: "Multiple",
   none: "N/A",
 };
+
+const OWNER_OPTIONS = ["Product Marketing", "Marketing", "Sales", "Legal", "Ops"];
 
 function isFieldComplete(answer: string | null | undefined) {
   const trimmed = (answer || "").trim();
@@ -903,6 +1154,8 @@ type FieldRow = {
   source: string | null;
   source_detail: any;
   flagged: boolean;
+  owner?: string | null;
+  notes?: string | null;
 };
 type FieldStatus = "idle" | "saving" | "saved" | "regenerating";
 
@@ -1021,6 +1274,37 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
     }
   }
 
+  function handleOwnerChange(fieldId: string, owner: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], owner } }));
+    saveMeta(fieldId, { owner });
+  }
+
+  function handleNotesChange(fieldId: string, notes: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], notes } }));
+    if (debounceTimers.current[`notes:${fieldId}`]) clearTimeout(debounceTimers.current[`notes:${fieldId}`]);
+    debounceTimers.current[`notes:${fieldId}`] = setTimeout(() => saveMeta(fieldId, { notes }), 800);
+  }
+
+  async function saveMeta(fieldId: string, meta: { owner?: string; notes?: string }) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/gtm/${documentId}/fields/${fieldId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(meta),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "saved" }));
+      setTimeout(() => setFieldStatus(prev => (prev[fieldId] === "saved" ? { ...prev, [fieldId]: "idle" } : prev)), 1500);
+    } catch (e) {
+      toast.error("Failed to save");
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
   const hasDocument = !!documentId;
 
   return (
@@ -1104,6 +1388,23 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
                           flagged ? "border-danger/40" : "border-border"
                         }`}
                       />
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={entry?.owner || "Product Marketing"}
+                          onChange={e => handleOwnerChange(f.id, e.target.value)}
+                          title="Owner"
+                          className="px-1.5 py-1 border border-border rounded-md bg-surface-1 text-text-secondary text-[9px] outline-none focus:border-accent"
+                        >
+                          {OWNER_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                        <input
+                          type="text"
+                          value={entry?.notes || ""}
+                          onChange={e => handleNotesChange(f.id, e.target.value)}
+                          placeholder="Notes…"
+                          className="flex-1 px-1.5 py-1 border border-border rounded-md bg-surface-1 text-text-secondary placeholder-text-muted text-[9px] outline-none focus:border-accent"
+                        />
+                      </div>
                       <div className="h-3 text-[9px] text-text-muted">
                         {status === "saving" && "Saving…"}
                         {status === "saved" && "Saved ✓"}
@@ -1207,10 +1508,11 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
   const [generatedHtml, setGeneratedHtml] = useState<Record<string, string>>({});
   const [driveUrls, setDriveUrls] = useState<Record<string, string | null>>({});
   const [hasGtm, setHasGtm] = useState(false);
+  const [hasTds, setHasTds] = useState(false);
 
   // Preload any previously generated outputs so View/Drive state works without regenerating
   useEffect(() => {
-    (["sales-kit", "tds"] as const).forEach(async (type) => {
+    (["sales-kit"] as const).forEach(async (type) => {
       try {
         const res = await fetch(`/api/projects/${project.id}/${type}`);
         const data = await res.json();
@@ -1224,6 +1526,14 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
         const data = await res.json();
         setHasGtm(!!data.document && (data.fields || []).some((f: any) => f.answer && f.answer.toUpperCase() !== "N/A"));
         setDriveUrls(prev => ({ ...prev, gtm: data.document?.drive_url ?? null }));
+      } catch (e) {}
+    })();
+    (async () => {
+      try {
+        const res = await fetch(`/api/documents/tds?projectId=${project.id}`);
+        const data = await res.json();
+        setHasTds(!!data.document && (data.fields || []).some((f: any) => f.answer && f.answer.toUpperCase() !== "N/A" && f.answer !== "Not listed on product page"));
+        setDriveUrls(prev => ({ ...prev, tds: data.document?.drive_url ?? null }));
       } catch (e) {}
     })();
   }, [project.id]);
@@ -1269,7 +1579,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
     if (win) writeHtmlToTab(win, html);
   }
 
-  async function generateOutput(type: "sales-kit" | "tds") {
+  async function generateOutput(type: "sales-kit") {
     // Open the tab synchronously, inside the click's user-activation window —
     // generation can take 10s+, and window.open() after that await is long
     // past Chrome's user-gesture grace period and gets silently popup-blocked.
@@ -1280,7 +1590,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
 
-      toast.success(`${type === "sales-kit" ? "Sales Kit" : "TDS"} generated!`);
+      toast.success("Sales Kit generated!");
       if (data.html) {
         setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
         if (win) {
@@ -1298,7 +1608,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
     }
   }
 
-  async function viewOutput(type: "sales-kit" | "tds") {
+  async function viewOutput(type: "sales-kit") {
     if (generatedHtml[type]) {
       openHtmlInNewTab(generatedHtml[type]);
       return;
@@ -1315,7 +1625,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
         setGeneratedHtml(prev => ({ ...prev, [type]: data.html }));
         if (win) writeHtmlToTab(win, data.html);
       } else {
-        toast.error(`No ${type === "sales-kit" ? "Sales Kit" : "TDS"} available to view`);
+        toast.error("No Sales Kit available to view");
         if (win) win.close();
       }
     } catch (err: any) {
@@ -1376,42 +1686,31 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
           </div>
         </div>
 
-        {/* Technical Data Sheet Card */}
+        {/* Technical Data Sheet Card — a live snapshot, not a regeneratable
+            document; the editable field grid lives in TdsKnowledgeSection
+            below. No View/Regenerate here, same pattern as the GTM card. */}
         <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
           <div className="space-y-0.5">
             <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
               <span>📄 Technical Data Sheet (TDS)</span>
             </h4>
-            <p className="text-[10px] text-text-muted">Motor RPM, battery mAh, blade specs, dimensions & safety certifications</p>
+            <p className="text-[10px] text-text-muted">Live snapshot of real specs — capture it below, no AI regeneration</p>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
-              onClick={() => viewOutput("tds")}
-              disabled={viewing === "tds"}
-              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
-            >
-              <Eye className="w-3.5 h-3.5" />
-              <span>{viewing === "tds" ? "Loading…" : "View"}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => generateOutput("tds")}
-              disabled={generating === "tds"}
-              className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-all disabled:opacity-50 shadow-sm"
-            >
-              {generating === "tds" ? "Generating…" : "Regenerate"}
-            </button>
-            <button
-              type="button"
               onClick={() => downloadPdf("tds", project.id)}
-              disabled={downloadingPdf === "tds"}
+              disabled={!hasTds || downloadingPdf === "tds"}
               className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
               <span>{downloadingPdf === "tds" ? "Rendering…" : "Download PDF"}</span>
             </button>
-            <SaveToDriveButton docType="tds" id={project.id} initialDriveUrl={driveUrls["tds"]} />
+            {hasTds ? (
+              <SaveToDriveButton docType="tds" id={project.id} initialDriveUrl={driveUrls["tds"]} />
+            ) : (
+              <span className="text-[10px] text-text-muted italic">No snapshot captured yet</span>
+            )}
           </div>
         </div>
 

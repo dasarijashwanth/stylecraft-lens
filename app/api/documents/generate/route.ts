@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { getProjectReports } from "@/lib/db/reports";
-import { getOrCreateDocument, getDocumentFields, saveDocumentFields } from "@/lib/db/documents";
+import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsFieldsForProject } from "@/lib/db/documents";
 import { getLatestOutput } from "@/lib/project-outputs";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 import { generateAllFields, GtmSources } from "@/lib/gtm-generate";
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
     const [salesKit, tds, reports] = await Promise.all([
       getLatestOutput(projectId, "sales_kit"),
-      getLatestOutput(projectId, "tds"),
+      getTdsFieldsForProject(projectId),
       getProjectReports(projectId, session.userId),
     ]);
     const latestReport = reports?.[0];

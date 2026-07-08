@@ -108,6 +108,36 @@ export const styles = StyleSheet.create({
     fontSize: 9,
     lineHeight: 1.4,
   },
+  fourColRow: {
+    flexDirection: "row",
+    borderBottom: "0.5pt solid #dddddd",
+    paddingVertical: 5,
+  },
+  fourColItem: {
+    width: "28%",
+    fontSize: 9,
+    fontWeight: 700,
+    paddingRight: 6,
+    color: "#333333",
+  },
+  fourColOwner: {
+    width: "14%",
+    fontSize: 8,
+    color: "#666666",
+    paddingRight: 6,
+  },
+  fourColAnswer: {
+    width: "36%",
+    fontSize: 9,
+    color: "#111111",
+    paddingRight: 6,
+  },
+  fourColNotes: {
+    width: "22%",
+    fontSize: 8,
+    color: "#666666",
+    fontStyle: "italic",
+  },
 });
 
 export function formatDate(d: Date = new Date()) {
@@ -161,6 +191,46 @@ export function TwoColRow({ question, answer, badge }: { question: string; answe
         <Text>{answer || "—"}</Text>
         {badge && <Text style={styles.sourceBadge}>{badge}</Text>}
       </View>
+    </View>
+  );
+}
+
+// The internal-sheet-style 4-column row (Item | Owner | Answer | Notes)
+// used by both GTM and TDS PDFs. `badge` renders under the Answer cell —
+// a source footnote (e.g. "Web-sourced — verify") for web-sourced answers.
+export function FourColRow({
+  item,
+  owner,
+  answer,
+  notes,
+  badge,
+}: {
+  item: string;
+  owner?: string | null;
+  answer: string;
+  notes?: string | null;
+  badge?: string;
+}) {
+  return (
+    <View style={styles.fourColRow} wrap={false}>
+      <Text style={styles.fourColItem}>{item}</Text>
+      <Text style={styles.fourColOwner}>{owner || "—"}</Text>
+      <View style={styles.fourColAnswer}>
+        <Text>{answer || "—"}</Text>
+        {badge && <Text style={styles.sourceBadge}>{badge}</Text>}
+      </View>
+      <Text style={styles.fourColNotes}>{notes || ""}</Text>
+    </View>
+  );
+}
+
+export function FourColHeader() {
+  return (
+    <View style={[styles.fourColRow, { borderBottom: "1pt solid #111111", paddingVertical: 3 }]} wrap={false}>
+      <Text style={[styles.fourColItem, { fontSize: 7, textTransform: "uppercase", letterSpacing: 0.5, color: "#888888" }]}>Item</Text>
+      <Text style={[styles.fourColOwner, { fontSize: 7, textTransform: "uppercase", letterSpacing: 0.5, color: "#888888" }]}>Owner</Text>
+      <Text style={[styles.fourColAnswer, { fontSize: 7, textTransform: "uppercase", letterSpacing: 0.5, color: "#888888" }]}>Answer</Text>
+      <Text style={[styles.fourColNotes, { fontSize: 7, textTransform: "uppercase", letterSpacing: 0.5, color: "#888888", fontStyle: "normal" }]}>Notes</Text>
     </View>
   );
 }

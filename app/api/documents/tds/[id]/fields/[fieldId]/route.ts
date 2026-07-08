@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { updateDocumentField, updateDocumentFieldMeta, revertDocumentField } from "@/lib/db/documents";
 
+// Mirrors app/api/documents/gtm/[id]/fields/[fieldId]/route.ts. Deliberately
+// NO sibling regenerate/route.ts next to this one — TDS fields are a live
+// snapshot, editable by hand, never AI-regenerated one at a time.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string; fieldId: string } }) {
   try {
     const session = await getAuthSession();
@@ -17,8 +20,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-// Restores the field's previous value from its history — a manual revert
-// action, distinct from the AI regeneration endpoint.
+// Restores the field's previous value from its history.
 export async function DELETE(req: NextRequest, { params }: { params: { id: string; fieldId: string } }) {
   try {
     const session = await getAuthSession();

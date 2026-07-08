@@ -173,6 +173,55 @@ CREATE TABLE IF NOT EXISTS document_field_history (
     changed_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- 9. PRODUCT SNAPSHOTS
+-- A raw, timestamped capture of the real product (official site scrape
+-- and/or Amazon listing via Rainforest) taken at project creation or an
+-- explicit "re-capture". TDS is generated ONLY from this data — never
+-- from a project's typed-in description — and re-capturing creates a NEW
+-- row here (never overwrites) so the TDS document's `snapshot_id` always
+-- points at exactly the data it was generated from.
+CREATE TABLE IF NOT EXISTS product_snapshots (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE NOT NULL,
+    source_url TEXT,
+    asin VARCHAR(20),
+    raw_data JSONB DEFAULT '{}'::jsonb NOT NULL,
+    captured_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS product_snapshots_project_captured_idx ON product_snapshots(project_id, captured_at DESC);
+
+-- 10. PROJECT GENERATION STATE
+-- Backs the resumable background pipeline (scrape snapshot -> generate TDS
+-- -> generate GTM) kicked off when a project is created with a product
+-- anchor. One row per project, advanced one phase per
+-- /api/projects/:id/pipeline/continue call — same resumable-step shape as
+-- the `analyses` table's phase/status columns.
+CREATE TABLE IF NOT EXISTS project_generation_state (
+    project_id UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    phase VARCHAR(20) NOT NULL DEFAULT 'pending',
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Product-anchor identity, captured once at project creation. The project
+-- NAME stays a free-text reference label only — every generation prompt
+-- must identify the product via the scraped snapshot title / this URL /
+-- this ASIN, never via `projects.name`.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_url TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS asin VARCHAR(20);
+
+-- Links a doc_type='tds' document to the exact snapshot it was generated
+-- from, so the UI can show "Live snapshot captured {captured_at} from
+-- {domain}". Null for doc_type='gtm'.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS snapshot_id UUID REFERENCES product_snapshots(id);
+
+-- Shared by GTM and TDS field rows. `owner` mirrors the internal sheet's
+-- Owner column (Product Marketing/Marketing/Sales/Legal/Ops); `notes` is
+-- free-text, independent of the field's `answer`/history.
+ALTER TABLE document_fields ADD COLUMN IF NOT EXISTS owner TEXT DEFAULT 'Product Marketing';
+ALTER TABLE document_fields ADD COLUMN IF NOT EXISTS notes TEXT;
+
 -- Enable RLS on all tables
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE analyses ENABLE ROW LEVEL SECURITY;
@@ -184,6 +233,8 @@ ALTER TABLE amazon_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_fields ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_field_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_generation_state ENABLE ROW LEVEL SECURITY;
 
 -- Create Permissive RLS Policies (allows anyone to query/insert/update/delete for prototype stage)
 CREATE POLICY "Allow all operations for projects" ON projects FOR ALL USING (true) WITH CHECK (true);
@@ -196,3 +247,5 @@ CREATE POLICY "Allow all operations for project_outputs" ON project_outputs FOR 
 CREATE POLICY "Allow all operations for documents" ON documents FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for document_fields" ON document_fields FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for document_field_history" ON document_field_history FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for product_snapshots" ON product_snapshots FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for project_generation_state" ON project_generation_state FOR ALL USING (true) WITH CHECK (true);

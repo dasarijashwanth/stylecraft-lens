@@ -43,6 +43,8 @@ export interface MockProject {
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;
+  productUrl?: string | null;
+  asin?: string | null;
   savedDefaults?: any;
   latestAnalysisId?: string | null;
   latestReportId?: string | null;
@@ -133,6 +135,7 @@ export interface MockDocument {
   status: string;
   driveUrl?: string | null;
   driveFileId?: string | null;
+  snapshotId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -147,6 +150,8 @@ export interface MockDocumentField {
   source: string | null;
   sourceDetail: any;
   flagged: boolean;
+  owner: string | null;
+  notes: string | null;
   updatedBy: string | null;
   updatedAt: Date;
 }
@@ -157,6 +162,23 @@ export interface MockDocumentFieldHistory {
   answer: string | null;
   changedBy: string | null;
   changedAt: Date;
+}
+
+export interface MockProductSnapshot {
+  id: string;
+  projectId: string;
+  sourceUrl: string | null;
+  asin: string | null;
+  rawData: any;
+  capturedAt: Date;
+}
+
+export interface MockProjectGenerationState {
+  projectId: string;
+  phase: string;
+  status: string;
+  errorMessage: string | null;
+  updatedAt: Date;
 }
 
 export interface MockNote {
@@ -204,6 +226,8 @@ class MemoryDatabase {
   documents: MockDocument[] = [];
   documentFields: MockDocumentField[] = [];
   documentFieldHistory: MockDocumentFieldHistory[] = [];
+  productSnapshots: MockProductSnapshot[] = [];
+  projectGenerationState: MockProjectGenerationState[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {

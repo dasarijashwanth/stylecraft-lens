@@ -2,6 +2,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { getProject } from "@/lib/db/projects";
 import { getReport } from "@/lib/db/reports";
 import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
+import { getSnapshotById } from "@/lib/db/snapshots";
 import { getLatestOutput } from "@/lib/project-outputs";
 import { UserSession } from "@/lib/auth";
 import { SalesKitPdf } from "./SalesKitPdf";
@@ -10,10 +11,17 @@ import { GtmPdf } from "./GtmPdf";
 import { ActiveReportPdf } from "./ActiveReportPdf";
 
 export type DocType = "sales-kit" | "tds" | "gtm" | "active-report";
-const OUTPUT_TYPE_MAP: Record<string, "sales_kit" | "tds"> = { "sales-kit": "sales_kit", tds: "tds" };
 
 export class DocumentNotFoundError extends Error {
   status = 404;
+}
+
+function safeDomain(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
 }
 
 export function pdfFileNameFor(docType: DocType, productName: string) {
@@ -35,18 +43,41 @@ export async function renderDocumentPdf(
   let productName = "Product";
   let projectName: string | undefined;
 
-  if (docType === "sales-kit" || docType === "tds") {
+  if (docType === "sales-kit") {
     const project = await getProject(id, session.orgId);
     if (!project) throw new DocumentNotFoundError("Project not found");
     productName = project.productName;
     projectName = project.name;
 
-    const content = await getLatestOutput(id, OUTPUT_TYPE_MAP[docType]);
-    if (!content) throw new DocumentNotFoundError(`No ${docType} generated for this project yet`);
+    const content = await getLatestOutput(id, "sales_kit");
+    if (!content) throw new DocumentNotFoundError("No sales-kit generated for this project yet");
 
-    element = docType === "sales-kit"
-      ? <SalesKitPdf productName={productName} projectName={projectName} kit={content} />
-      : <TdsPdf productName={productName} projectName={projectName} tds={content} />;
+    element = <SalesKitPdf productName={productName} projectName={projectName} kit={content} />;
+  } else if (docType === "tds") {
+    const project = await getProject(id, session.orgId);
+    if (!project) throw new DocumentNotFoundError("Project not found");
+    productName = project.productName;
+    projectName = project.name;
+
+    const doc = await getDocumentByProject(id, "tds");
+    const rows = doc ? await getDocumentFields(doc.id) : [];
+    if (rows.length === 0) {
+      throw new DocumentNotFoundError("No TDS snapshot captured for this project yet");
+    }
+    const fields: Record<string, { answer: string; source: string; owner?: string | null; notes?: string | null }> = {};
+    for (const r of rows) fields[r.field_id] = { answer: r.answer || "Not listed on product page", source: r.source || "none", owner: r.owner, notes: r.notes };
+
+    let capturedAt: string | null = null;
+    let sourceDomain: string | null = null;
+    if (doc?.snapshot_id) {
+      const snapshot = await getSnapshotById(doc.snapshot_id);
+      if (snapshot) {
+        capturedAt = snapshot.captured_at;
+        sourceDomain = snapshot.source_url ? safeDomain(snapshot.source_url) : (snapshot.asin ? `Amazon (${snapshot.asin})` : null);
+      }
+    }
+
+    element = <TdsPdf productName={productName} projectName={projectName} capturedAt={capturedAt} sourceDomain={sourceDomain} fields={fields} />;
   } else if (docType === "gtm") {
     const project = await getProject(id, session.orgId);
     if (!project) throw new DocumentNotFoundError("Project not found");
@@ -58,8 +89,8 @@ export async function renderDocumentPdf(
     if (rows.length === 0) {
       throw new DocumentNotFoundError("No Go-To-Market data generated for this project yet");
     }
-    const fields: Record<string, { answer: string; source: string }> = {};
-    for (const r of rows) fields[r.field_id] = { answer: r.answer || "N/A", source: r.source || "none" };
+    const fields: Record<string, { answer: string; source: string; owner?: string | null; notes?: string | null }> = {};
+    for (const r of rows) fields[r.field_id] = { answer: r.answer || "N/A", source: r.source || "none", owner: r.owner, notes: r.notes };
     element = <GtmPdf productName={productName} projectName={projectName} productKnowledge={{ fields }} />;
   } else if (docType === "active-report") {
     const report = await getReport(id, session.userId);
