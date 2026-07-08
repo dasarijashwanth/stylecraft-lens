@@ -2,7 +2,7 @@ import { prisma } from "./db";
 import { memoryDb } from "./memoryDb";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
 import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "./anthropic";
-import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey } from "./rainforest";
+import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey, searchAmazonCategory } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
 import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck } from "./db/analyses";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
@@ -214,7 +214,7 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
           {
             name: "Andis Recon Professional Vector Motor Clipper",
             brand: "Andis",
-            asin: "B0C1234RECON",
+            asin: "B0DTJLSTYM",
             price: "$199.99",
             rating: "4.5",
             reviewCount: "820",
@@ -314,7 +314,7 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
           {
             name: "Caliber 9mm Magnetic Clipper",
             brand: "Caliber",
-            asin: "B09KGBM3R4",
+            asin: "B0BLDG2X1K",
             price: "$119.00",
             rating: "4.4",
             reviewCount: "412",
@@ -416,8 +416,14 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
       let rating = incoming.rating || "";
       let amazonUrl = incoming.amazon_url || "";
 
-      const isAsinPlaceholder = !asin || asin.includes("X") || asin.includes("000000");
-      const isUrlPlaceholder = !amazonUrl || amazonUrl.includes("X") || amazonUrl.includes("000000");
+      // Matches the LITERAL "BXXXXXXXXX" placeholder pattern from the
+      // prompt's own schema example (3+ consecutive X's), not just any
+      // ASIN containing the letter X — real ASINs commonly contain X
+      // (e.g. "B0DMXJPM4T", confirmed live via Rainforest), and a plain
+      // substring check was discarding perfectly valid, freshly-verified
+      // real ASINs and replacing them with stale fallback data.
+      const isAsinPlaceholder = !asin || /X{3,}/i.test(asin) || asin.includes("000000") || !/^[A-Z0-9]{10}$/i.test(asin);
+      const isUrlPlaceholder = !amazonUrl || /X{3,}/i.test(amazonUrl) || amazonUrl.includes("000000");
 
       if (isAsinPlaceholder || isUrlPlaceholder) {
         asin = fallback.asin;
@@ -468,18 +474,45 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
   return cleaned;
 }
 
+// Runs `fn` over `items` with at most `limit` in flight at once — Rainforest
+// enforces a concurrent-request cap on some plans, and firing all 10
+// competitors' lookups (each up to 2 sequential Rainforest calls) via a
+// single Promise.all could burst well past that, causing MORE competitors
+// to fail verification than a real per-account rate limit would otherwise
+// allow. Small batches keep this well under any reasonable concurrency cap.
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 // Overwrite AI-discovered competitor price/rating/review data with real,
 // verified live Amazon data from Rainforest. Tries the AI-provided ASIN
-// first; if that doesn't resolve to a real listing, searches Amazon by
-// product title + brand to find the real ASIN before giving up. Competitors
-// that can't be verified either way are explicitly flagged (never left
-// pointing at a fabricated /dp/{asin} link) so the UI can show them as
-// unverified instead of rendering fabricated data as if it were real.
+// first; if that doesn't resolve to a real listing (common — hardcoded
+// fallback/mock ASINs go stale as real listings get delisted or replaced),
+// searches Amazon by product title + brand to find the CURRENT real ASIN
+// before giving up. Competitors that can't be verified either way have
+// their price/rating/ASIN explicitly cleared (never left showing a stale
+// or fabricated value as if it were current) and point at a live Amazon
+// search instead of a fabricated /dp/{asin} link.
 async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[]> {
   if (!hasRainforestKey) return competitors;
 
-  return Promise.all(
-    competitors.map(async (c) => {
+  return mapWithConcurrency(competitors, 3, async (c) => {
+      // Already live-verified by discoverCompetitorsLive (a `type=search`
+      // result, already real/current) — re-checking via a second,
+      // independent `type=product` lookup here is redundant and, if that
+      // second call has a transient failure, would wrongly overwrite
+      // already-good data with "unverified" placeholders.
+      if (c.verified_by_rainforest === true) return c;
+
       let product = await getAmazonProduct(c.asin);
 
       if (!product) {
@@ -492,6 +525,10 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
       if (!product) {
         return {
           ...c,
+          asin: null,
+          price: "—",
+          rating: "—",
+          review_count: "—",
           verified_by_rainforest: false,
           amazon_url: `https://www.amazon.com/s?k=${encodeURIComponent(`${c.brand || ""} ${c.name}`.trim())}`,
         };
@@ -521,8 +558,7 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
         key_features: realFeatures.length > 0 ? realFeatures : c.key_features,
         verified_by_rainforest: true,
       };
-    })
-  );
+  });
 }
 
 export interface AnalysisStepResult {
@@ -664,7 +700,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         "Phase 2",
         hasGeminiKey ? () => executePhase2Gemini(context, identityCard, onSearchUsed) : null,
         hasAnthropicKey ? () => executePhase2Claude(context, identityCard, onSearchUsed) : null,
-        () => generateMockPhase2(context, identityCard)
+        () => generateMockPhase2(context, identityCard, phase1Result)
       );
 
       result.competitors = cleanCompetitors(result.competitors, "emerging", identityCard);
@@ -821,7 +857,7 @@ async function withAiFallback<T>(
   label: string,
   geminiCall: (() => Promise<T>) | null,
   anthropicCall: (() => Promise<T>) | null,
-  mockCall: () => T
+  mockCall: () => T | Promise<T>
 ): Promise<T> {
   if (geminiCall) {
     try {
@@ -838,7 +874,7 @@ async function withAiFallback<T>(
       console.warn(`Anthropic ${label} fallback also failed, falling back to mock:`, err?.message || err);
     }
   }
-  return mockCall();
+  return await mockCall();
 }
 
 // ----------------------------------------------------
@@ -1087,8 +1123,85 @@ function cleanJsonString(text: string): string {
 }
 
 // ----------------------------------------------------
+// LIVE FALLBACK DISCOVERY — real Amazon products via Rainforest search when
+// no AI provider is available. This is what actually answers "I analyse
+// NEW products, I need NEW REAL products from Amazon" for a category with
+// no hardcoded mock dataset (e.g. hair crimpers) instead of falling
+// through to fabricated placeholder brand names ("Apex Global", etc.).
+// Runs whenever Rainforest is configured, regardless of category — the
+// static getCategoryFallbackCompetitors data is now a last-resort only,
+// used solely when Rainforest itself is unavailable/fails outright.
+async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", excludeNames: string[] = []): Promise<any[]> {
+  if (!hasRainforestKey) return [];
+  const category = identity.subcategory || identity.category;
+  if (!category) return [];
+
+  const brandHint = getKnownBrandsHint(identity.category) || [];
+  const searchTerms: string[] = [];
+  if (brandHint.length) {
+    const slice = tier === "legacy" ? brandHint.slice(0, 5) : brandHint.slice(-5);
+    for (const b of slice) searchTerms.push(`${b} ${category}`);
+  }
+  // Multiple phrasings widen the pool of distinct real products found —
+  // a single search term (especially for a niche category with no known
+  // brand hint) often can't fill all 5 slots after de-duplication against
+  // the other tier's results, leaving slots to fall back to generic
+  // placeholder brands unnecessarily.
+  if (tier === "legacy") {
+    searchTerms.push(`best ${category}`, `top ${category} brands`, `professional ${category}`, category);
+  } else {
+    searchTerms.push(`${category} new brand`, `budget ${category}`, `affordable ${category}`, category);
+  }
+
+  const seenAsins = new Set<string>();
+  const seenTitleFragments = new Set(excludeNames.map(n => n.toLowerCase().slice(0, 24)));
+  const collected: any[] = [];
+
+  for (const term of searchTerms) {
+    if (collected.length >= 5) break;
+    const results = await searchAmazonCategory(term, 8);
+    for (const r of results) {
+      if (collected.length >= 5) break;
+      if (seenAsins.has(r.asin)) continue;
+      const titleLower = r.title.toLowerCase();
+      if (Array.from(seenTitleFragments).some(f => f && titleLower.includes(f))) continue;
+      if (!competitorMatchesCategory(r.title, identity.category, identity.subcategory)) continue;
+
+      seenAsins.add(r.asin);
+      seenTitleFragments.add(titleLower.slice(0, 24));
+      const brand = (r.title.split(/[\s,]+/)[0] || "Unknown").replace(/[^\w-]/g, "");
+      collected.push({
+        name: r.title.length > 100 ? `${r.title.slice(0, 100)}…` : r.title,
+        brand,
+        tier,
+        asin: r.asin,
+        amazon_url: `https://www.amazon.com/dp/${r.asin}`,
+        price: r.price,
+        rating: r.rating,
+        review_count: r.reviewsTotal,
+        monthly_sales: r.monthlyStr,
+        bsr_rank: null,
+        initials: brand.slice(0, 2).toUpperCase(),
+        key_features: [],
+        strengths: [],
+        weaknesses: [],
+        recent_news: [],
+        top_feature_summary: "",
+        verified_by_rainforest: true,
+      });
+    }
+  }
+  return collected;
+}
+
+// ----------------------------------------------------
 // SMART MOCK GENERATORS FOR OFFLINE / NO-KEY USE
-function generateMockPhase1(context: AnalysisContext, identity: IdentityCard) {
+async function generateMockPhase1(context: AnalysisContext, identity: IdentityCard) {
+  const live = await discoverCompetitorsLive(identity, "legacy");
+  if (live.length > 0) {
+    return { web_searches_performed: live.length, competitors: live };
+  }
+
   const dynamicList = getCategoryFallbackCompetitors(identity, "legacy");
   return {
     web_searches_performed: 12,
@@ -1134,7 +1247,13 @@ function generateMockPhase1(context: AnalysisContext, identity: IdentityCard) {
   };
 }
 
-function generateMockPhase2(context: AnalysisContext, identity: IdentityCard) {
+async function generateMockPhase2(context: AnalysisContext, identity: IdentityCard, phase1?: any) {
+  const excludeNames = (phase1?.competitors || []).map((c: any) => c.name as string);
+  const live = await discoverCompetitorsLive(identity, "emerging", excludeNames);
+  if (live.length > 0) {
+    return { web_searches_performed: live.length, competitors: live };
+  }
+
   const dynamicList = getCategoryFallbackCompetitors(identity, "emerging");
   return {
     web_searches_performed: 14,

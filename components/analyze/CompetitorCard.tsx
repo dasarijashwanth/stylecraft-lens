@@ -21,6 +21,10 @@ interface Competitor {
   weaknesses:         string[];
   recent_news:        string[];
   top_feature_summary?: string;
+  // Set server-side by enrichCompetitorsWithRainforest (lib/analysisEngine.ts)
+  // — when true, price/rating/asin above are ALREADY live/fresh data, so
+  // this card should trust them as-is rather than re-fetching.
+  verified_by_rainforest?: boolean;
 }
 
 interface CompetitorCardProps {
@@ -38,8 +42,14 @@ export function CompetitorCard({ competitor: c }: CompetitorCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [reviewAnalysis, setReviewAnalysis] = useState<ReviewAnalysisState>({ status: "idle" });
 
-  // Fetch real-time data from Rainforest API using hook
-  const { data: live, loading, error } = useAmazonProduct(c.asin);
+  // Fetch real-time data from Rainforest API using hook — skipped when the
+  // server already ran this exact verification (enrichCompetitorsWithRainforest):
+  // re-fetching all 10 cards' ASINs again client-side, all at once on page
+  // render, is redundant load that risks a transient rate-limit/network
+  // failure making already-fresh, already-verified data look "stale" for
+  // no reason. Only competitors the server never got to verify (Rainforest
+  // unconfigured) fall back to this client-side attempt.
+  const { data: live, loading, error } = useAmazonProduct(c.verified_by_rainforest === undefined ? c.asin : null);
 
   const isValidAsinForReviews = /^[A-Z0-9]{10}$/i.test(c.asin ?? "");
 
@@ -165,6 +175,11 @@ export function CompetitorCard({ competitor: c }: CompetitorCardProps) {
           {error && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-danger-bg border border-danger/20 text-danger" title={error}>
               Stale Data
+            </span>
+          )}
+          {c.verified_by_rainforest === false && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="Could not confirm a live Amazon listing for this competitor — use the search link above to look it up directly.">
+              Unverified — see search link
             </span>
           )}
         </div>

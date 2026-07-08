@@ -228,6 +228,53 @@ async function fetchAsinMatch(searchTerm: string, title: string, brand?: string)
   }
 }
 
+export interface CategorySearchResult {
+  asin: string;
+  title: string;
+  price: string;
+  rating: string;
+  reviewsTotal: string;
+  monthlyStr: string | null;
+  image: string | null;
+}
+
+// Real, currently-listed Amazon products for an arbitrary category search
+// term — used as the competitor-discovery fallback when no AI provider is
+// available (see lib/analysisEngine.ts's discoverCompetitorsLive). Unlike
+// resolveAsinBySearch (which finds the ONE best match for a specific known
+// product), this returns up to `limit` organic results as-is, so a
+// category with no hardcoded mock data still gets real, current
+// competitors instead of fabricated placeholder brand names.
+export async function searchAmazonCategory(searchTerm: string, limit = 8): Promise<CategorySearchResult[]> {
+  if (!hasRainforestKey) return [];
+  try {
+    const url = new URL("https://api.rainforestapi.com/request");
+    url.searchParams.set("api_key", process.env.RAINFOREST_API_KEY!);
+    url.searchParams.set("type", "search");
+    url.searchParams.set("amazon_domain", "amazon.com");
+    url.searchParams.set("search_term", searchTerm);
+
+    const data = await fetchWithRetry(url.toString());
+    const results: any[] = (data.search_results || []).filter((r: any) => !r.sponsored && r.asin && r.title);
+
+    return results.slice(0, limit).map((r: any) => {
+      const priceEntry = Array.isArray(r.prices) ? r.prices[0] : null;
+      return {
+        asin: r.asin,
+        title: r.title,
+        price: priceEntry?.raw || (typeof priceEntry?.value === "number" ? `$${priceEntry.value}` : "—"),
+        rating: typeof r.rating === "number" ? String(r.rating) : "—",
+        reviewsTotal: typeof r.ratings_total === "number" ? r.ratings_total.toLocaleString() : "—",
+        monthlyStr: r.recent_sales || null,
+        image: r.image || null,
+      };
+    });
+  } catch (err) {
+    console.warn(`Rainforest category search failed for "${searchTerm}":`, err);
+    return [];
+  }
+}
+
 // Fetches real customer reviews for an ASIN — the ONLY source strengths,
 // weaknesses, and recent-buyer-sentiment analysis is allowed to draw from
 // (see lib/amazon-review-analysis.ts). Pulls up to 2 pages of the most

@@ -14,12 +14,25 @@ const CATEGORY_SYNONYMS: { keys: string[]; synonyms: string[] }[] = [
   { keys: ["brush"], synonyms: ["brush", "hot brush", "styling brush"] },
 ];
 
+const STOP_WORDS = new Set(["hair", "and", "the", "for", "pro", "professional", "with", "new"]);
+
 function synonymsFor(category: string): string[] {
   const key = category.toLowerCase().trim();
   for (const entry of CATEGORY_SYNONYMS) {
     if (entry.keys.some(k => key.includes(k))) return entry.synonyms;
   }
-  return key ? [key] : [];
+  if (!key) return [];
+
+  // No dedicated synonym entry for this category (e.g. "hair crimpers",
+  // "curling wands") — matching the category phrase VERBATIM fails for
+  // almost any real product title, since titles rarely repeat the exact
+  // phrase back (singular vs plural, "crimper" vs "crimping", word order).
+  // Fall back to a short stem of each significant word instead of the
+  // full word/phrase, so "Hair Crimpers" -> "crimp" matches "Crimper",
+  // "Crimping Iron", "Crimps" etc. as a substring.
+  const words = key.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
+  const stems = words.map(w => w.replace(/s$/, "").slice(0, Math.max(4, w.length - 2)));
+  return stems.length ? stems : [key];
 }
 
 // True if the competitor's own name/description text contains the
