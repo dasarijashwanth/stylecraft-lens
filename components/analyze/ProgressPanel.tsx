@@ -29,6 +29,31 @@ async function fetchJson(url: string, init?: RequestInit) {
   return data;
 }
 
+// A single phase step occasionally runs long enough (slow AI/Rainforest
+// calls, a cold serverless start) to get killed by the platform's function
+// timeout before it returns a response — the fetch() just fails with a
+// network error, even though the step may have partially succeeded. Retrying
+// is safe: /continue always re-reads the current persisted phase and only
+// ever advances it by one, so a retry either resumes cleanly or repeats a
+// no-op. Without this, a single transient timeout permanently stranded the
+// analysis (confirmed happening in production — analyses stuck mid-phase
+// with no error recorded, since the failure never reached the server).
+async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, onRetry: (attempt: number) => void, retries = 2): Promise<any> {
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchJson(url, init);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        onRetry(attempt + 1);
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export function ProgressPanel({ analysisId, productName, onComplete, onError }: Props) {
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({
@@ -58,7 +83,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
       let searchesSoFar = 0;
 
       try {
-        let { analysis } = await fetchJson(`/api/analyses/${analysisId}`);
+        let { analysis } = await fetchJsonWithRetry(`/api/analyses/${analysisId}`, undefined, () => {});
         if (analysis.phase1_result && Object.keys(analysis.phase1_result).length) {
           results.phase1 = analysis.phase1_result;
           setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "complete", message: "Complete" } : p)));
@@ -90,9 +115,14 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
           );
 
-          const { analysis: updated, step } = await fetchJson(`/api/analyses/${analysisId}/continue`, {
-            method: "POST",
-          });
+          const { analysis: updated, step } = await fetchJsonWithRetry(
+            `/api/analyses/${analysisId}/continue`,
+            { method: "POST" },
+            (attempt) =>
+              setPhases((prev) =>
+                prev.map((p, i) => (i === runningIdx ? { ...p, message: `Connection dropped — retrying (${attempt})…` } : p))
+              )
+          );
           if (cancelled) return;
 
           searchesSoFar += step.totalSearches || 0;

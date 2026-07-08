@@ -92,34 +92,41 @@ export default function AnalyzePage() {
     }
   }, [projectIdParam]);
 
-  // Load past analysis if id is passed
+  // Load past analysis if id is passed — resumes it via the ProgressPanel if
+  // still in progress (or stuck mid-phase from an earlier dropped
+  // connection) instead of only handling the already-complete case.
   useEffect(() => {
     if (pastAnalysisId) {
       fetch(`/api/analyses/${pastAnalysisId}`)
         .then((r) => r.json())
         .then((data) => {
-          if (data.analysis && data.analysis.status === "COMPLETE") {
-            setAnalysisId(data.analysis.id);
-            setProductName(data.analysis.project?.productName || "Product Analysis");
-            
-            const p1 = data.analysis.phase1Result || {};
-            const p2 = data.analysis.phase2Result || {};
-            const p3 = data.analysis.phase3Result || {};
+          const analysis = data.analysis;
+          if (!analysis) {
+            toast.error("Analysis not found");
+            return;
+          }
+
+          const name = analysis.projects?.product_name || analysis.context?.productName || "Product Analysis";
+          setProductName(name);
+
+          if (analysis.status === "complete") {
+            const p1 = analysis.phase1_result || {};
+            const p2 = analysis.phase2_result || {};
+            const p3 = analysis.phase3_result || {};
             const searches = (p1.web_searches_performed || 0) + (p2.web_searches_performed || 0) + (p3.web_searches_performed || 0);
 
-            setAnalysisResult({
-              phase1: p1,
-              phase2: p2,
-              phase3: p3,
-              productName: data.analysis.project?.productName || "Product Analysis",
-              totalSearches: searches
-            });
+            setAnalysisId(analysis.id);
+            setAnalysisResult({ phase1: p1, phase2: p2, phase3: p3, productName: name, totalSearches: searches });
             setViewState("results");
+          } else if (analysis.status === "failed") {
+            toast.error(analysis.error_message || "This analysis failed");
           } else {
-            toast.error("Analysis not found or incomplete");
+            // pending/running — resume from whatever phase is persisted.
+            setAnalysisId(analysis.id);
+            setViewState("running");
           }
         })
-        .catch(() => {});
+        .catch(() => toast.error("Failed to load analysis"));
     }
   }, [pastAnalysisId]);
 
