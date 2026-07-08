@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadToDrive } from "@/lib/google-drive";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
-import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
 import { getAuthSession } from "@/lib/auth";
 import { renderDocumentPdf, DocType, DocumentNotFoundError } from "@/lib/pdf/render";
-import { getProjectReports } from "@/lib/db/reports";
+import { getDocumentByProject, setDocumentDriveInfo } from "@/lib/db/documents";
 
 export const maxDuration = 30;
 
@@ -20,10 +19,7 @@ const OUTPUT_TYPE_MAP: Record<string, "sales_kit" | "tds"> = { "sales-kit": "sal
 type DriveTarget =
   | { kind: "output"; rowId: string; existingFileId: string | null; memory?: boolean }
   | { kind: "report"; rowId: string; existingFileId: string | null; memory?: boolean }
-  // GTM shares its `reports` row with Active Report, so its Drive info can't
-  // live in that row's own drive_url/drive_file_id columns (saving one would
-  // clobber the other's link) — it's nested inside product_knowledge instead.
-  | { kind: "gtm"; rowId: string; existingFileId: string | null; productKnowledge: any; memory?: boolean };
+  | { kind: "document"; rowId: string; existingFileId: string | null };
 
 async function resolveDriveTarget(docType: DocType, id: string, userId: string): Promise<DriveTarget | null> {
   if (docType === "sales-kit" || docType === "tds") {
@@ -46,16 +42,9 @@ async function resolveDriveTarget(docType: DocType, id: string, userId: string):
   }
 
   if (docType === "gtm") {
-    const reportId = (await getProjectReports(id, userId))?.[0]?.id;
-    if (!reportId) return null;
-    if (isSupabaseConfigured) {
-      const { data } = await supabaseAdmin.from("reports").select("id, product_knowledge").eq("id", reportId).maybeSingle();
-      if (!data) return null;
-      return { kind: "gtm", rowId: data.id, existingFileId: data.product_knowledge?.driveFileId ?? null, productKnowledge: data.product_knowledge };
-    }
-    const report = memoryDb.reports.find(r => r.id === reportId);
-    if (!report) return null;
-    return { kind: "gtm", rowId: report.id, existingFileId: report.product_knowledge?.driveFileId ?? null, productKnowledge: report.product_knowledge, memory: true };
+    const doc = await getDocumentByProject(id, "gtm");
+    if (!doc) return null;
+    return { kind: "document", rowId: doc.id, existingFileId: doc.drive_file_id ?? null };
   }
 
   // active-report
@@ -84,15 +73,8 @@ async function persistDriveInfo(target: DriveTarget, driveUrl: string, driveFile
       const { error } = await supabaseAdmin.from("reports").update({ drive_url: driveUrl, drive_file_id: driveFileId }).eq("id", target.rowId);
       if (error) throw error;
     }
-  } else if (target.kind === "gtm") {
-    const updatedPK = { ...target.productKnowledge, driveUrl, driveFileId };
-    if (target.memory) {
-      const report = memoryDb.reports.find(r => r.id === target.rowId);
-      if (report) report.product_knowledge = updatedPK;
-    } else {
-      const { error } = await supabaseAdmin.from("reports").update({ product_knowledge: updatedPK }).eq("id", target.rowId);
-      if (error) throw error;
-    }
+  } else if (target.kind === "document") {
+    await setDocumentDriveInfo(target.rowId, driveUrl, driveFileId);
   }
 }
 

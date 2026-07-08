@@ -1,8 +1,8 @@
 import { renderToBuffer } from "@react-pdf/renderer";
-import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
-import { memoryDb } from "@/lib/memoryDb";
 import { getProject } from "@/lib/db/projects";
-import { getProjectReports, getReport } from "@/lib/db/reports";
+import { getReport } from "@/lib/db/reports";
+import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
+import { getLatestOutput } from "@/lib/project-outputs";
 import { UserSession } from "@/lib/auth";
 import { SalesKitPdf } from "./SalesKitPdf";
 import { TdsPdf } from "./TdsPdf";
@@ -14,24 +14,6 @@ const OUTPUT_TYPE_MAP: Record<string, "sales_kit" | "tds"> = { "sales-kit": "sal
 
 export class DocumentNotFoundError extends Error {
   status = 404;
-}
-
-async function getOutputContent(projectId: string, outputType: "sales_kit" | "tds"): Promise<any | null> {
-  if (isSupabaseConfigured) {
-    const { data } = await supabaseAdmin
-      .from("project_outputs")
-      .select("content")
-      .eq("project_id", projectId)
-      .eq("output_type", outputType)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    return data?.content ?? null;
-  }
-  const latest = memoryDb.outputs
-    .filter(o => o.projectId === projectId && o.outputType === outputType)
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
-  return latest?.content ?? null;
 }
 
 export function pdfFileNameFor(docType: DocType, productName: string) {
@@ -59,7 +41,7 @@ export async function renderDocumentPdf(
     productName = project.productName;
     projectName = project.name;
 
-    const content = await getOutputContent(id, OUTPUT_TYPE_MAP[docType]);
+    const content = await getLatestOutput(id, OUTPUT_TYPE_MAP[docType]);
     if (!content) throw new DocumentNotFoundError(`No ${docType} generated for this project yet`);
 
     element = docType === "sales-kit"
@@ -71,12 +53,14 @@ export async function renderDocumentPdf(
     productName = project.productName;
     projectName = project.name;
 
-    const reports = await getProjectReports(id, session.userId);
-    const productKnowledge = reports?.[0]?.product_knowledge;
-    if (!productKnowledge || !productKnowledge.fields) {
+    const doc = await getDocumentByProject(id, "gtm");
+    const rows = doc ? await getDocumentFields(doc.id) : [];
+    if (rows.length === 0) {
       throw new DocumentNotFoundError("No Go-To-Market data generated for this project yet");
     }
-    element = <GtmPdf productName={productName} projectName={projectName} productKnowledge={productKnowledge} />;
+    const fields: Record<string, { answer: string; source: string }> = {};
+    for (const r of rows) fields[r.field_id] = { answer: r.answer || "N/A", source: r.source || "none" };
+    element = <GtmPdf productName={productName} projectName={projectName} productKnowledge={{ fields }} />;
   } else if (docType === "active-report") {
     const report = await getReport(id, session.userId);
     if (!report) throw new DocumentNotFoundError("Report not found");

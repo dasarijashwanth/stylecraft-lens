@@ -126,6 +126,39 @@ export interface MockOutput {
   createdAt: Date;
 }
 
+export interface MockDocument {
+  id: string;
+  projectId: string;
+  docType: string;
+  status: string;
+  driveUrl?: string | null;
+  driveFileId?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockDocumentField {
+  id: string;
+  documentId: string;
+  fieldId: string;
+  section: string;
+  question: string;
+  answer: string | null;
+  source: string | null;
+  sourceDetail: any;
+  flagged: boolean;
+  updatedBy: string | null;
+  updatedAt: Date;
+}
+
+export interface MockDocumentFieldHistory {
+  id: string;
+  documentFieldId: string;
+  answer: string | null;
+  changedBy: string | null;
+  changedAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -168,6 +201,9 @@ class MemoryDatabase {
   notes: MockNote[] = [];
   artwork: MockArtwork[] = [];
   outputs: MockOutput[] = [];
+  documents: MockDocument[] = [];
+  documentFields: MockDocumentField[] = [];
+  documentFieldHistory: MockDocumentFieldHistory[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {

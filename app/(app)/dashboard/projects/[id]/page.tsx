@@ -1,17 +1,17 @@
 // app/(app)/dashboard/projects/[id]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
-import { 
-  ArrowLeft, 
-  Sparkles, 
-  FileText, 
-  Plus, 
-  Trash2, 
-  ChevronRight, 
-  Loader2, 
+import {
+  ArrowLeft,
+  Sparkles,
+  FileText,
+  Plus,
+  Trash2,
+  ChevronRight,
+  Loader2,
   Briefcase,
   TrendingUp,
   AlertTriangle,
@@ -23,7 +23,10 @@ import {
   Globe,
   Sliders,
   Target,
-  Eye
+  Eye,
+  RefreshCw,
+  Undo2,
+  AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
@@ -472,7 +475,6 @@ function ReportTabContent({
           editing={editing}
           localData={localData}
           setLocalData={setLocalData}
-          report={report}
           projectId={projectId}
         />
       )}
@@ -769,7 +771,7 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
 // ────────────────────────────────────────────────────────────────────────────
 // GO TO MARKET TAB VIEW & EDIT
 // ────────────────────────────────────────────────────────────────────────────
-function GoToMarketTab({ data, editing, localData, setLocalData, report, projectId }: any) {
+function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: any) {
   const [recsOpen, setRecsOpen] = useState(false);
 
   const editBlock = editing && (
@@ -872,7 +874,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, report, project
         </div>
       )}
 
-      {!editing && <ProductKnowledgeSection report={report} projectId={projectId} />}
+      {!editing && <ProductKnowledgeSection projectId={projectId} />}
     </div>
   );
 }
@@ -881,40 +883,78 @@ function GoToMarketTab({ data, editing, localData, setLocalData, report, project
 // PRODUCT KNOWLEDGE (74-field GTM generator)
 // ────────────────────────────────────────────────────────────────────────────
 const SOURCE_LABELS: Record<string, string> = {
+  project_record: "Project",
   sales_kit: "Sales Kit",
   tds: "TDS",
   active_report: "Active Report",
+  web: "Web",
   multiple: "Multiple",
   none: "N/A",
 };
 
-function isFieldComplete(answer: string | undefined) {
+function isFieldComplete(answer: string | null | undefined) {
   const trimmed = (answer || "").trim();
   return trimmed !== "" && trimmed.toUpperCase() !== "N/A";
 }
 
-function ProductKnowledgeSection({ report, projectId }: { report: any; projectId: string }) {
-  const [pk, setPk] = useState<any>(report?.product_knowledge || null);
+type FieldRow = {
+  field_id: string;
+  answer: string | null;
+  source: string | null;
+  source_detail: any;
+  flagged: boolean;
+};
+type FieldStatus = "idle" | "saving" | "saved" | "regenerating";
+
+function flagReason(detail: any): string {
+  if (!detail) return "Flagged";
+  if (detail.reason === "ungrounded") return `Rejected — AI's answer ("${detail.rejectedAnswer}") wasn't found in any source`;
+  if (detail.reason === "boilerplate") return `Too similar to another product's answer for this field: "${detail.similarTo}"`;
+  if (detail.conflict) return `Sources disagree: ${detail.conflict.map((c: any) => `${c.source}="${c.answer}"`).join(" vs ")}`;
+  return "Flagged for review";
+}
+
+function ProductKnowledgeSection({ projectId }: { projectId: string }) {
+  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [fields, setFields] = useState<Record<string, FieldRow>>({});
+  const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [savingField, setSavingField] = useState<string | null>(null);
-  const [reportId, setReportId] = useState<string | null>(report?.id || null);
+  const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
-    setPk(report?.product_knowledge || null);
-    setReportId(report?.id || null);
-  }, [report?.id]);
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/documents/gtm?projectId=${projectId}`);
+        const data = await res.json();
+        if (data.document) {
+          setDocumentId(data.document.id);
+          const map: Record<string, FieldRow> = {};
+          for (const f of data.fields) map[f.field_id] = f;
+          setFields(map);
+        }
+      } catch (e) {}
+      setLoading(false);
+    })();
+  }, [projectId]);
 
-  const fields = pk?.fields || {};
   const completedCount = GTM_FIELD_SCHEMA.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
 
   async function handleGenerate() {
     setGenerating(true);
     try {
-      const res = await fetch(`/api/projects/${projectId}/gtm`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Generation failed");
-      setPk(json.productKnowledge);
-      setReportId(json.reportId);
+      const res = await fetch("/api/documents/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, docType: "gtm" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+      setDocumentId(data.document.id);
+      const map: Record<string, FieldRow> = {};
+      for (const f of data.fields) map[f.field_id] = f;
+      setFields(map);
       toast.success("Go-To-Market product knowledge generated");
     } catch (err: any) {
       toast.error(err.message || "Failed to generate Go-To-Market data");
@@ -923,37 +963,72 @@ function ProductKnowledgeSection({ report, projectId }: { report: any; projectId
     }
   }
 
-  async function handleFieldBlur(fieldId: string, value: string) {
-    if (!reportId || !pk) return;
-    const current = fields[fieldId];
-    if (current?.answer === value) return; // no change, skip the write
+  function handleFieldChange(fieldId: string, value: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], answer: value } }));
+    if (debounceTimers.current[fieldId]) clearTimeout(debounceTimers.current[fieldId]);
+    debounceTimers.current[fieldId] = setTimeout(() => saveField(fieldId, value), 800);
+  }
 
-    const updated = {
-      ...pk,
-      fields: { ...fields, [fieldId]: { answer: value, source: current?.source || "none" } },
-    };
-    setPk(updated);
-    setSavingField(fieldId);
+  async function saveField(fieldId: string, value: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
     try {
-      const res = await fetch(`/api/reports/${reportId}`, {
+      const res = await fetch(`/api/documents/gtm/${documentId}/fields/${fieldId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product_knowledge: updated }),
+        body: JSON.stringify({ answer: value }),
       });
-      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "saved" }));
+      setTimeout(() => setFieldStatus(prev => (prev[fieldId] === "saved" ? { ...prev, [fieldId]: "idle" } : prev)), 1500);
     } catch (e) {
       toast.error("Failed to save field");
-    } finally {
-      setSavingField(null);
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
     }
   }
+
+  async function handleRegenerate(fieldId: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "regenerating" }));
+    try {
+      const res = await fetch(`/api/documents/gtm/${documentId}/fields/${fieldId}/regenerate`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Regeneration failed");
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      toast.success("Field regenerated");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to regenerate field");
+    } finally {
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  async function handleRevert(fieldId: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/gtm/${documentId}/fields/${fieldId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Nothing to revert to");
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      toast.success("Reverted to previous value");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to revert field");
+    } finally {
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  const hasDocument = !!documentId;
 
   return (
     <div className="border border-border rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Product Knowledge</span>
-          {pk && (
+          {hasDocument && (
             <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
               {completedCount}/{GTM_FIELD_SCHEMA.length} fields completed
             </span>
@@ -961,15 +1036,17 @@ function ProductKnowledgeSection({ report, projectId }: { report: any; projectId
         </div>
         <button
           onClick={handleGenerate}
-          disabled={generating}
+          disabled={generating || loading}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors shadow"
         >
           {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-          <span>{pk ? "Regenerate Go-To-Market" : "Generate Go-To-Market"}</span>
+          <span>{hasDocument ? "Regenerate Go-To-Market" : "Generate Go-To-Market"}</span>
         </button>
       </div>
 
-      {!pk ? (
+      {loading ? (
+        <p className="p-4 text-text-muted text-[11px]">Loading…</p>
+      ) : !hasDocument ? (
         <p className="p-4 text-text-muted text-[11px]">
           Generate the 74-field product knowledge sheet from this project&apos;s Sales Kit, TDS, and Active Report.
         </p>
@@ -982,24 +1059,56 @@ function ProductKnowledgeSection({ report, projectId }: { report: any; projectId
                 {GTM_FIELD_SCHEMA.filter(f => f.section === section).map(f => {
                   const entry = fields[f.id];
                   const complete = isFieldComplete(entry?.answer);
+                  const status = fieldStatus[f.id] || "idle";
+                  const flagged = !!entry?.flagged;
                   return (
                     <div key={f.id} className="flex flex-col gap-1">
                       <div className="flex items-center justify-between gap-2">
-                        <label className="font-semibold text-text-primary text-[11px]">{f.question}</label>
-                        <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border shrink-0 ${
-                          !complete ? "bg-warning/10 border-warning/25 text-warning" : "bg-surface-3 border-border text-text-muted"
-                        }`}>
-                          {SOURCE_LABELS[entry?.source || "none"]}
-                          {savingField === f.id && "…"}
-                        </span>
+                        <label className="font-semibold text-text-primary text-[11px] flex items-center gap-1">
+                          {f.question}
+                          {flagged && (
+                            <AlertCircle className="w-3 h-3 text-danger shrink-0" aria-label={flagReason(entry?.source_detail)} />
+                          )}
+                        </label>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                            flagged ? "bg-danger/10 border-danger/30 text-danger" : !complete ? "bg-warning/10 border-warning/25 text-warning" : "bg-surface-3 border-border text-text-muted"
+                          }`}>
+                            {SOURCE_LABELS[entry?.source || "none"]}
+                          </span>
+                          <button
+                            type="button"
+                            title="Regenerate this field"
+                            onClick={() => handleRegenerate(f.id)}
+                            disabled={status === "regenerating"}
+                            className="p-0.5 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${status === "regenerating" ? "animate-spin" : ""}`} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Revert to previous value"
+                            onClick={() => handleRevert(f.id)}
+                            className="p-0.5 text-text-muted hover:text-text-primary transition-colors"
+                          >
+                            <Undo2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
                       <textarea
-                        key={`${f.id}-${pk?.generatedAt || "empty"}`}
                         rows={2}
-                        defaultValue={entry?.answer || ""}
-                        onBlur={e => handleFieldBlur(f.id, e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px]"
+                        value={entry?.answer || ""}
+                        onChange={e => handleFieldChange(f.id, e.target.value)}
+                        title={flagged ? flagReason(entry?.source_detail) : undefined}
+                        className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
+                          flagged ? "border-danger/40" : "border-border"
+                        }`}
                       />
+                      <div className="h-3 text-[9px] text-text-muted">
+                        {status === "saving" && "Saving…"}
+                        {status === "saved" && "Saved ✓"}
+                        {status === "regenerating" && "Regenerating…"}
+                      </div>
                     </div>
                   );
                 })}
@@ -1111,10 +1220,10 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
     });
     (async () => {
       try {
-        const res = await fetch(`/api/projects/${project.id}/gtm`);
+        const res = await fetch(`/api/documents/gtm?projectId=${project.id}`);
         const data = await res.json();
-        setHasGtm(!!data.productKnowledge?.fields && Object.keys(data.productKnowledge.fields).length > 0);
-        setDriveUrls(prev => ({ ...prev, gtm: data.productKnowledge?.driveUrl ?? null }));
+        setHasGtm(!!data.document && (data.fields || []).some((f: any) => f.answer && f.answer.toUpperCase() !== "N/A"));
+        setDriveUrls(prev => ({ ...prev, gtm: data.document?.drive_url ?? null }));
       } catch (e) {}
     })();
   }, [project.id]);

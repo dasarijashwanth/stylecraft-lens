@@ -133,6 +133,46 @@ CREATE TABLE IF NOT EXISTS amazon_cache (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS amazon_cache_asin_type_idx ON amazon_cache(asin, cache_type);
 
+-- 8. DOCUMENTS / DOCUMENT FIELDS / DOCUMENT FIELD HISTORY
+-- Field-granular generated documents (currently: doc_type = 'gtm' only).
+-- One row per (project, doc_type) — regenerating updates fields in place
+-- rather than creating a duplicate document. There is no separate products
+-- table: project_id IS the product identifier (one product per project).
+CREATE TABLE IF NOT EXISTS documents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE NOT NULL,
+    doc_type VARCHAR(30) NOT NULL,
+    status VARCHAR(20) DEFAULT 'draft',
+    drive_url VARCHAR(500),
+    drive_file_id VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE (project_id, doc_type)
+);
+
+CREATE TABLE IF NOT EXISTS document_fields (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID REFERENCES documents(id) ON DELETE CASCADE NOT NULL,
+    field_id TEXT NOT NULL,
+    section TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT,
+    source TEXT,
+    source_detail JSONB DEFAULT '{}'::jsonb,
+    flagged BOOLEAN DEFAULT false,
+    updated_by TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE (document_id, field_id)
+);
+
+CREATE TABLE IF NOT EXISTS document_field_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_field_id UUID REFERENCES document_fields(id) ON DELETE CASCADE NOT NULL,
+    answer TEXT,
+    changed_by TEXT,
+    changed_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- Enable RLS on all tables
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE analyses ENABLE ROW LEVEL SECURITY;
@@ -141,6 +181,9 @@ ALTER TABLE competitors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE analysis_competitors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_outputs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE amazon_cache ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_fields ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_field_history ENABLE ROW LEVEL SECURITY;
 
 -- Create Permissive RLS Policies (allows anyone to query/insert/update/delete for prototype stage)
 CREATE POLICY "Allow all operations for projects" ON projects FOR ALL USING (true) WITH CHECK (true);
@@ -150,3 +193,6 @@ CREATE POLICY "Allow all operations for reports" ON reports FOR ALL USING (true)
 CREATE POLICY "Allow all operations for competitors" ON competitors FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for analysis_competitors" ON analysis_competitors FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for project_outputs" ON project_outputs FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for documents" ON documents FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for document_fields" ON document_fields FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for document_field_history" ON document_field_history FOR ALL USING (true) WITH CHECK (true);
