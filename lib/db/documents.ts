@@ -140,6 +140,13 @@ async function writeHistory(documentFieldId: string, previousAnswer: string | nu
 // exists with a different answer, its OLD value is written to history
 // before the row is updated — so every real change (not just edits) is
 // captured in the audit trail.
+// Batches all 74 field writes into (at most) two round trips instead of
+// one upsert + one history-insert per field. The sequential per-field
+// version was issuing 74-148 individual Supabase requests in a sitting
+// `for` loop — measured at 80+ seconds by itself, which is what was
+// pushing full GTM generation past Vercel's fixed 60s function timeout
+// and surfacing to the user as a raw "FUNCTION_INVOCATION_TIMEOUT" page
+// that the frontend then failed to JSON.parse.
 export async function saveDocumentFields(
   documentId: string,
   fieldsBySchema: { id: string; section: string; question: string }[],
@@ -148,6 +155,10 @@ export async function saveDocumentFields(
 ) {
   const existing = await getDocumentFields(documentId);
   const existingById = new Map(existing.map(f => [f.field_id, f]));
+  const now = new Date().toISOString();
+
+  const historyRows: { document_field_id: string; answer: string | null; changed_by: string | null }[] = [];
+  const upsertRows: any[] = [];
 
   for (const f of fieldsBySchema) {
     const next = answers[f.id];
@@ -155,25 +166,22 @@ export async function saveDocumentFields(
     const prior = existingById.get(f.id);
 
     if (prior && prior.answer !== next.answer) {
-      await writeHistory(prior.id, prior.answer, updatedBy);
+      historyRows.push({ document_field_id: prior.id, answer: prior.answer, changed_by: updatedBy });
     }
 
     if (isSupabaseConfigured) {
-      await supabaseAdmin.from("document_fields").upsert(
-        {
-          document_id: documentId,
-          field_id: f.id,
-          section: f.section,
-          question: f.question,
-          answer: next.answer,
-          source: next.source,
-          source_detail: next.sourceDetail ?? {},
-          flagged: !!next.flagged,
-          updated_by: updatedBy,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "document_id,field_id" }
-      );
+      upsertRows.push({
+        document_id: documentId,
+        field_id: f.id,
+        section: f.section,
+        question: f.question,
+        answer: next.answer,
+        source: next.source,
+        source_detail: next.sourceDetail ?? {},
+        flagged: !!next.flagged,
+        updated_by: updatedBy,
+        updated_at: now,
+      });
     } else {
       const idx = memoryDb.documentFields.findIndex(x => x.documentId === documentId && x.fieldId === f.id);
       const row: MockDocumentField = {
@@ -195,7 +203,15 @@ export async function saveDocumentFields(
   }
 
   if (isSupabaseConfigured) {
-    await supabaseAdmin.from("documents").update({ updated_at: new Date().toISOString() }).eq("id", documentId);
+    if (historyRows.length) {
+      const { error } = await supabaseAdmin.from("document_field_history").insert(historyRows);
+      if (error) throw error;
+    }
+    if (upsertRows.length) {
+      const { error } = await supabaseAdmin.from("document_fields").upsert(upsertRows, { onConflict: "document_id,field_id" });
+      if (error) throw error;
+    }
+    await supabaseAdmin.from("documents").update({ updated_at: now }).eq("id", documentId);
   } else {
     const doc = memoryDb.documents.find(d => d.id === documentId);
     if (doc) doc.updatedAt = new Date();

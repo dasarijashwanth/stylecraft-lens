@@ -10,6 +10,12 @@ import { verifyGrounding, checkConsistency, SourceTexts } from "./gtm-grounding"
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
 
+// Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
+// This leaves headroom for the DB writes that still happen after
+// generateAllFields returns, so the boilerplate-guard retry pass below
+// bails out before actually hitting the platform limit.
+const PIPELINE_TIME_BUDGET_MS = 45_000;
+
 export interface GtmSources {
   project: ProjectRecord;
   salesKit: any | null;
@@ -127,6 +133,7 @@ function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: strin
 // produces false rejections whenever the derivation formats/joins multiple
 // sub-fields (e.g. warranty duration + coverage joined with " — ").
 export async function generateAllFields(productName: string, sources: GtmSources, projectId: string): Promise<Record<string, GtmFieldAnswer>> {
+  const pipelineStart = Date.now();
   const schema = GTM_FIELD_SCHEMA;
   const sourceTexts = buildSourceTexts(sources);
   const systemInstruction = buildSystemInstruction(productName, schema);
@@ -157,7 +164,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
     }
   }
 
-  await guardWrittenFieldsAgainstBoilerplate(grounded, schema, sources, productName, projectId);
+  await guardWrittenFieldsAgainstBoilerplate(grounded, schema, sources, productName, projectId, pipelineStart);
 
   return grounded;
 }
@@ -180,7 +187,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
 
   if (schemaField.kind === "written") {
     const guarded = { [fieldId]: grounded };
-    await guardWrittenFieldsAgainstBoilerplate(guarded, [schemaField], sources, productName, projectId);
+    await guardWrittenFieldsAgainstBoilerplate(guarded, [schemaField], sources, productName, projectId, Date.now());
     return guarded[fieldId];
   }
 
@@ -191,12 +198,21 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
 // Jaccard) to the same field on the most recently generated OTHER project
 // gets one regeneration attempt with an explicit "too generic" instruction;
 // still too similar after that -> flagged, kept as-is.
+//
+// All retries fire concurrently (Promise.all), not one-at-a-time — with up
+// to 9 written fields, a sequential loop of individual AI round-trips was
+// blowing well past Vercel's fixed 60s function timeout on top of the
+// initial full-document generation call, producing a hard 504 instead of
+// a JSON response. If the pipeline is already close to the time budget
+// (e.g. the main generation call itself ran long), retries are skipped
+// entirely and the fields are just flagged — never silently exceed the cap.
 async function guardWrittenFieldsAgainstBoilerplate(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
   sources: GtmSources,
   productName: string,
-  projectId: string
+  projectId: string,
+  pipelineStart: number
 ) {
   const writtenFields = schema.filter(f => f.kind === "written");
   if (writtenFields.length === 0) return;
@@ -209,23 +225,39 @@ async function guardWrittenFieldsAgainstBoilerplate(
     .filter(Boolean)
     .map(v => String(v));
 
-  for (const f of writtenFields) {
+  const needsRetry = writtenFields.filter(f => {
     const current = fields[f.id];
     const other = otherByFieldId.get(f.id);
-    if (!current?.answer || !other?.answer) continue;
-    if (current.answer.toUpperCase() === "N/A" || other.answer.toUpperCase() === "N/A") continue;
+    if (!current?.answer || !other?.answer) return false;
+    if (current.answer.toUpperCase() === "N/A" || other.answer.toUpperCase() === "N/A") return false;
+    return textSimilarity(current.answer, other.answer) > BOILERPLATE_SIMILARITY_THRESHOLD;
+  });
+  if (needsRetry.length === 0) return;
 
-    const similarity = textSimilarity(current.answer, other.answer);
-    if (similarity <= BOILERPLATE_SIMILARITY_THRESHOLD) continue;
-
-    const retryInstruction = `${buildSystemInstruction(productName, [f])}\n\nThe previous draft was too generic — it closely matched another product's copy for this field. Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
-    const retryRaw = await callAi(retryInstruction, buildUserContent(buildSourceTexts(sources)));
-    const retryAnswer = retryRaw?.[f.id]?.answer?.trim();
-
-    if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && textSimilarity(retryAnswer, other.answer) <= BOILERPLATE_SIMILARITY_THRESHOLD) {
-      fields[f.id] = { answer: retryAnswer, source: (retryRaw?.[f.id]?.source as GtmFieldSource) || current.source };
-    } else {
-      fields[f.id] = { ...current, flagged: true, sourceDetail: { ...(current.sourceDetail || {}), reason: "boilerplate", similarTo: other.answer } };
+  if (Date.now() - pipelineStart > PIPELINE_TIME_BUDGET_MS) {
+    for (const f of needsRetry) {
+      const other = otherByFieldId.get(f.id)!;
+      fields[f.id] = { ...fields[f.id], flagged: true, sourceDetail: { ...(fields[f.id].sourceDetail || {}), reason: "boilerplate-retry-skipped-timeout", similarTo: other.answer } };
     }
+    return;
   }
+
+  const sourceTexts = buildSourceTexts(sources);
+  const userContent = buildUserContent(sourceTexts);
+
+  await Promise.all(
+    needsRetry.map(async (f) => {
+      const current = fields[f.id];
+      const other = otherByFieldId.get(f.id)!;
+      const retryInstruction = `${buildSystemInstruction(productName, [f])}\n\nThe previous draft was too generic — it closely matched another product's copy for this field. Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
+      const retryRaw = await callAi(retryInstruction, userContent);
+      const retryAnswer = retryRaw?.[f.id]?.answer?.trim();
+
+      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && textSimilarity(retryAnswer, other.answer!) <= BOILERPLATE_SIMILARITY_THRESHOLD) {
+        fields[f.id] = { answer: retryAnswer, source: (retryRaw?.[f.id]?.source as GtmFieldSource) || current.source };
+      } else {
+        fields[f.id] = { ...current, flagged: true, sourceDetail: { ...(current.sourceDetail || {}), reason: "boilerplate", similarTo: other.answer } };
+      }
+    })
+  );
 }
