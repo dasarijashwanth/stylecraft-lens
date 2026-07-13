@@ -230,6 +230,13 @@ ALTER TABLE analyses ADD COLUMN IF NOT EXISTS pending_question JSONB;
 -- {domain}". Null for doc_type='gtm'.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS snapshot_id UUID REFERENCES product_snapshots(id);
 
+-- Structured, citation-verified Key Features / Strengths / Weaknesses &
+-- Sentiment / News data per competitor (lib/citations.ts's Claim shape).
+-- Additive only — the existing key_features/strengths/weaknesses/recent_news
+-- TEXT[] columns above stay as-is; this JSONB column is where the richer,
+-- source-cited evidence objects live once populated.
+ALTER TABLE analysis_competitors ADD COLUMN IF NOT EXISTS evidence JSONB;
+
 -- Shared by GTM and TDS field rows. `owner` mirrors the internal sheet's
 -- Owner column (Product Marketing/Marketing/Sales/Legal/Ops); `notes` is
 -- free-text, independent of the field's `answer`/history.

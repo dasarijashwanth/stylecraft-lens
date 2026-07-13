@@ -1,5 +1,5 @@
 import { Document, Page, View, Text } from "@react-pdf/renderer";
-import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList } from "./shared";
+import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, CitationList } from "./shared";
 
 export function ActiveReportPdf({
   productName,
@@ -25,6 +25,7 @@ export function ActiveReportPdf({
   const prices = pricing.competitor_prices || [];
   const recs = gtm.recommendations || [];
   const wins = gtm.quick_wins || [];
+  const citations = ca.citations || [];
 
   return (
     <Document>
@@ -100,6 +101,13 @@ export function ActiveReportPdf({
 
         <PageFooter />
       </Page>
+
+      {citations.length > 0 && (
+        <Page size="A4" style={styles.page}>
+          <CitationList claims={citations} />
+          <PageFooter />
+        </Page>
+      )}
     </Document>
   );
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "@/lib/gemini";
-import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "@/lib/anthropic";
+import { openai, hasOpenAIKey, OPENAI_MODEL } from "@/lib/openai";
 
 export async function POST(request: Request) {
   try {
@@ -32,26 +32,26 @@ export async function POST(request: Request) {
 
     let rewrittenText: string | null = null;
 
-    if (hasGeminiKey) {
+    if (hasOpenAIKey) {
+      try {
+        const response: any = await openai.responses.create(
+          { model: OPENAI_MODEL, reasoning: { effort: "low" }, input: prompt },
+          { timeout: 20_000 }
+        );
+        const message = (response.output || []).find((o: any) => o.type === "message");
+        const t = (message?.content?.find((c: any) => c.type === "output_text")?.text || response.output_text || "").trim();
+        if (t) rewrittenText = t;
+      } catch (err: any) {
+        console.warn("OpenAI AI Rewrite failed:", err);
+      }
+    }
+
+    if (!rewrittenText && hasGeminiKey) {
       try {
         const response = await genAI.models.generateContent({ model: GEMINI_MODEL, contents: prompt });
         if (response.text) rewrittenText = response.text.trim();
       } catch (err: any) {
         console.warn("Gemini AI Rewrite failed:", err);
-      }
-    }
-
-    if (!rewrittenText && hasAnthropicKey) {
-      try {
-        const message = await anthropic.messages.create({
-          model: ANTHROPIC_MODEL,
-          max_tokens: 2048,
-          messages: [{ role: "user", content: prompt }],
-        });
-        const t = message.content.filter(b => b.type === "text").map((b: any) => b.text).join("\n").trim();
-        if (t) rewrittenText = t;
-      } catch (err: any) {
-        console.warn("Anthropic AI Rewrite failed:", err);
       }
     }
 

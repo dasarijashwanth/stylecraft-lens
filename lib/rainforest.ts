@@ -293,7 +293,11 @@ export async function getAmazonReviews(asin: string): Promise<AmazonReview[] | n
 // (ok: false — caller should surface "Live Amazon data unavailable", never
 // substitute anything) from "the request succeeded and there just aren't
 // many reviews" (ok: true, reviews: []) — those must not be treated the same.
-async function fetchReviewsPage(cleanAsin: string, page: number): Promise<{ ok: boolean; reviews: AmazonReview[] }> {
+// `reviewStars` (Rainforest's own param, e.g. "five_star,four_star" or
+// "one_star,two_star") lets callers pull a specific sentiment slice instead
+// of the default unfiltered most-recent stream — used by the Strengths
+// (positive) and Weaknesses (negative) passes in amazon-review-analysis.ts.
+async function fetchReviewsPage(cleanAsin: string, page: number, reviewStars?: string): Promise<{ ok: boolean; reviews: AmazonReview[] }> {
   try {
     const url = new URL("https://api.rainforestapi.com/request");
     url.searchParams.set("api_key", process.env.RAINFOREST_API_KEY!);
@@ -302,6 +306,7 @@ async function fetchReviewsPage(cleanAsin: string, page: number): Promise<{ ok: 
     url.searchParams.set("amazon_domain", "amazon.com");
     url.searchParams.set("sort_by", "most_recent");
     url.searchParams.set("page", String(page));
+    if (reviewStars) url.searchParams.set("review_stars", reviewStars);
 
     const data = await fetchWithRetry(url.toString());
     if (!data.request_info?.success || !Array.isArray(data.reviews)) {
@@ -332,4 +337,60 @@ async function fetchAllReviews(cleanAsin: string): Promise<AmazonReview[] | null
   const [page1, page2] = await Promise.all([fetchReviewsPage(cleanAsin, 1), fetchReviewsPage(cleanAsin, 2)]);
   if (!page1.ok && !page2.ok) return null;
   return [...page1.reviews, ...page2.reviews];
+}
+
+// Star-filtered pass — used for the Strengths (four_star,five_star) and
+// Weaknesses (one_star,two_star) sections so each is analyzed from
+// genuinely positive/negative reviews rather than a single mixed
+// most-recent stream. Not cached under the same key as the unfiltered
+// fetch (different Rainforest query = different result set).
+export async function getAmazonReviewsByStars(asin: string, reviewStars: string, pages = 2): Promise<AmazonReview[] | null> {
+  if (!hasRainforestKey) return null;
+  if (!asin || !/^[A-Z0-9]{10}$/i.test(asin)) return null;
+  const cleanAsin = asin.toUpperCase();
+
+  const pageNumbers = Array.from({ length: pages }, (_, i) => i + 1);
+  const results = await Promise.all(pageNumbers.map(p => fetchReviewsPage(cleanAsin, p, reviewStars)));
+  if (results.every(r => !r.ok)) return null;
+  return results.flatMap(r => r.reviews);
+}
+
+// Fetches most-recent reviews across enough pages to cover the last 90
+// days, bounded to MAX_PAGES so a slow-moving listing (few reviews/day)
+// can't turn this into an unbounded crawl. Stops early once a page's
+// oldest review already falls outside the window.
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_RECENT_SENTIMENT_PAGES = 5;
+
+export async function getRecentReviews(asin: string, referenceDate: Date): Promise<AmazonReview[] | null> {
+  if (!hasRainforestKey) return null;
+  if (!asin || !/^[A-Z0-9]{10}$/i.test(asin)) return null;
+  const cleanAsin = asin.toUpperCase();
+  const cutoff = referenceDate.getTime() - NINETY_DAYS_MS;
+
+  const collected: AmazonReview[] = [];
+  let anyPageOk = false;
+  for (let page = 1; page <= MAX_RECENT_SENTIMENT_PAGES; page++) {
+    const result = await fetchReviewsPage(cleanAsin, page);
+    if (!result.ok) {
+      if (page === 1) return null; // endpoint itself unavailable
+      break; // later page failed after earlier ones succeeded — stop, keep what we have
+    }
+    anyPageOk = true;
+    if (result.reviews.length === 0) break;
+    collected.push(...result.reviews);
+
+    const oldestOnPage = result.reviews
+      .map(r => (r.date ? new Date(r.date).getTime() : NaN))
+      .filter(t => !isNaN(t))
+      .sort((a, b) => a - b)[0];
+    if (oldestOnPage !== undefined && oldestOnPage < cutoff) break;
+  }
+
+  if (!anyPageOk) return null;
+  return collected.filter(r => {
+    if (!r.date) return false;
+    const t = new Date(r.date).getTime();
+    return !isNaN(t) && t >= cutoff;
+  });
 }

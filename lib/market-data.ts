@@ -238,7 +238,17 @@ export const MARKET_DATA: Record<string, MarketData> = {
 // market data regardless of the actual product. The keyword checks below
 // plus the fully category-agnostic dynamic-calculation fallback are
 // sufficient without that industry fallback.
-export function getMarketData(category?: string, productName?: string): MarketData {
+// Returns null for any category outside the curated set above — there is
+// no real data to return. This function previously fabricated a market
+// size for uncurated categories by hashing the product name into a
+// plausible-looking number, dressed up with a fake source name and a
+// non-existent URL ("https://www.marketresearch.com") — exactly the kind
+// of confidently-wrong, fake-cited statistic the citation system elsewhere
+// in this app exists to prevent. Callers must handle null by either
+// getting Claude to find and cite a real figure via web search, or
+// rendering the honest "no verifiable public figure found" message —
+// never regenerating a fabricated number here.
+export function getMarketData(category?: string, productName?: string): MarketData | null {
   const combined = `${category || ""} ${productName || ""}`.toLowerCase();
 
   if (combined.includes("trimmer") || combined.includes("edger") || combined.includes("outliner")) {
@@ -260,37 +270,5 @@ export function getMarketData(category?: string, productName?: string): MarketDa
     return MARKET_DATA["clippers"];
   }
 
-  // Dynamic calculation for custom categories
-  const nameHash = (productName || category || "product").split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const baseSize = 1.5 + (nameHash % 25) * 0.4;
-  const forecastSize = baseSize * (1.5 + (nameHash % 10) * 0.05);
-  const cagrVal = (4.2 + (nameHash % 30) * 0.1).toFixed(1);
-  const label = category || productName || "Specialty Equipment";
-
-  return {
-    industry_label: label,
-    market_size_2025: `$${(baseSize * 0.95).toFixed(1)}B`,
-    market_size_2026: `$${baseSize.toFixed(1)}B`,
-    market_size_forecast: `$${forecastSize.toFixed(1)}B`,
-    forecast_year: "2034",
-    cagr: `${cagrVal}%`,
-    cagr_period: "2026–2034",
-    source: "Global Industry Analysts & Market Research, 2025",
-    source_url: "https://www.marketresearch.com",
-    key_segments: [
-      { label: "Commercial / Pro segment", share: "58%", note: "Leading revenue driver" },
-      { label: "Direct-to-Consumer (DTC)", share: "42%", note: "Fastest growing channel" }
-    ],
-    market_leaders: [
-      { name: "Global Leader Corp", share: "22%" },
-      { name: "NextGen Technologies", share: "14%" }
-    ],
-    verified_trends: [
-      {
-        name: "Component efficiency innovation",
-        description: "Next-generation drive systems reducing operational energy consumption and heat dissipation",
-        data_point: `Market expanding at ${cagrVal}% CAGR through 2034`
-      }
-    ]
-  };
+  return null;
 }

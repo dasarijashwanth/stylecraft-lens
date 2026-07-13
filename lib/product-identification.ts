@@ -7,6 +7,7 @@
 // off the IdentityCard this produces, never off a hardcoded default.
 import type { AnalysisContext } from "./analysisEngine";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
+import { callOpenAiForJson, hasOpenAIKey } from "./openai";
 import { getAmazonProduct } from "./rainforest";
 import { scrapeProductPage } from "./scrape";
 import { getProject } from "./db/projects";
@@ -28,6 +29,8 @@ export interface IdentityCard {
 }
 
 const SYSTEM_PROMPT = `You are identifying a real-world product before any competitive research happens. You have access to web search. Use it.
+
+Do not narrate your search process or explain what you're doing — search silently, then respond with ONLY the final JSON object below. No preamble, no commentary, no "I'll search for..." text.
 
 Identify what this product is using ONLY the search results and any provided product-page/Amazon data below. Do not assume the category. Do not default to any product type — a hair clipper, trimmer, dryer, straightener, shaver, or anything else are all equally likely until the evidence says otherwise.
 
@@ -130,22 +133,30 @@ export async function identifyProduct(context: AnalysisContext): Promise<Identit
     }
   }
 
-  if (!hasGeminiKey) {
-    return fallbackIdentity(context);
+  const userPrompt = buildUserPrompt(context, snapshotText);
+
+  // OpenAI is primary (its own native web_search tool handles the live
+  // lookup here, same as Phase 1/2/3's executePhaseN) — Gemini is the
+  // fallback if OpenAI is unavailable/fails.
+  if (hasOpenAIKey) {
+    const card = await callOpenAiForJson(SYSTEM_PROMPT, userPrompt, "product identification", { webSearch: true, maxToolCalls: 4, timeoutMs: 30_000 });
+    if (card) return normalizeIdentityCard(card, context);
   }
 
-  try {
-    const userPrompt = buildUserPrompt(context, snapshotText);
-    const response = await genAI.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: userPrompt,
-      config: { systemInstruction: SYSTEM_PROMPT, tools: [{ googleSearch: {} }], maxOutputTokens: 2048 },
-    });
-    if (!response.text) throw new Error(`Empty identification response (finishReason: ${response.candidates?.[0]?.finishReason})`);
-    const card = JSON.parse(cleanJsonString(response.text));
-    return normalizeIdentityCard(card, context);
-  } catch (err) {
-    console.warn("Product identification failed, falling back to context-derived identity:", err);
-    return fallbackIdentity(context);
+  if (hasGeminiKey) {
+    try {
+      const response = await genAI.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: userPrompt,
+        config: { systemInstruction: SYSTEM_PROMPT, tools: [{ googleSearch: {} }], maxOutputTokens: 2048 },
+      });
+      if (!response.text) throw new Error(`Empty identification response (finishReason: ${response.candidates?.[0]?.finishReason})`);
+      const card = JSON.parse(cleanJsonString(response.text));
+      return normalizeIdentityCard(card, context);
+    } catch (err) {
+      console.warn("Gemini product identification failed, falling back to context-derived identity:", err);
+    }
   }
+
+  return fallbackIdentity(context);
 }

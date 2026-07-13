@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
-import { getAmazonProduct, getAmazonReviews, hasRainforestKey } from "@/lib/rainforest";
+import { getAmazonProduct, hasRainforestKey } from "@/lib/rainforest";
 import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
 
 export const maxDuration = 45;
@@ -46,27 +46,21 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     return NextResponse.json({ error: "Live Amazon data unavailable — Rainforest API key not configured" }, { status: 503 });
   }
 
+  // Refresh button (Strengths/Weaknesses & Recent Sentiment section) —
+  // bypasses the 24h cache to force a fresh Rainforest + AI pass.
+  const forceRefresh = req.nextUrl.searchParams.get("refresh") === "true";
+
   try {
-    const cached = await getCachedAnalysis(asin);
-    if (cached) {
-      return NextResponse.json({ ...cached.analysis, retrievedAt: cached.fetchedAt, cached: true });
+    if (!forceRefresh) {
+      const cached = await getCachedAnalysis(asin);
+      if (cached) {
+        return NextResponse.json({ ...cached.analysis, retrievedAt: cached.fetchedAt, cached: true });
+      }
     }
 
     const product = await getAmazonProduct(asin);
-    const reviews = await getAmazonReviews(asin);
+    const analysis = await analyzeReviews(asin, product?.title || asin);
 
-    if (reviews === null) {
-      // This means the Rainforest "reviews" request type itself failed —
-      // distinct from the AI being unavailable. On this account it has been
-      // returning "reviews request type is temporarily unavailable" —
-      // check the Rainforest plan/dashboard if this persists.
-      return NextResponse.json(
-        { error: "Amazon reviews are temporarily unavailable from the data provider (Rainforest) — retry later" },
-        { status: 503 }
-      );
-    }
-
-    const analysis = await analyzeReviews(asin, product?.title || asin, reviews);
     // Don't cache an "AI unavailable" result for 24h — that's a transient
     // provider outage, not a real answer, and should be retried freely.
     if (!analysis.aiUnavailable) {

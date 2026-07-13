@@ -251,3 +251,48 @@ export function BulletList({ items }: { items: string[] }) {
     </View>
   );
 }
+
+export interface PdfClaim {
+  claimId: string;
+  text: string;
+  type: string;
+  verification: "verified" | "unverified" | "model_estimate";
+  sources: { url: string; title: string; publisher: string; quote: string; retrievedAt: string }[];
+}
+
+// Full References section for a document's PDF export (lib/citations.ts's
+// Claim shape) — numbered, real URLs for verified claims; a distinctly
+// styled warning row for anything that couldn't be verified, so the label
+// survives into the exported document and isn't just a web-only UI touch.
+export function CitationList({ claims }: { claims: PdfClaim[] }) {
+  if (!claims || claims.length === 0) return null;
+  const verified = claims.filter(c => c.verification === "verified");
+  const unverified = claims.filter(c => c.verification !== "verified");
+
+  return (
+    <View>
+      <SectionHeader title="References" />
+      {verified.map((c, i) => (
+        <View key={c.claimId} style={{ marginBottom: 6 }} wrap={false}>
+          <Text style={{ fontSize: 9 }}>
+            <Text style={{ fontWeight: 700 }}>[{i + 1}] </Text>
+            {c.text}
+          </Text>
+          {c.sources.map((s, si) => (
+            <Text key={si} style={{ fontSize: 7, color: "#4F46E5", marginTop: 1 }}>
+              {s.publisher || s.title || s.url} — {s.url} (retrieved {s.retrievedAt.slice(0, 10)})
+            </Text>
+          ))}
+        </View>
+      ))}
+      {unverified.map(c => (
+        <View key={c.claimId} style={{ marginBottom: 6, backgroundColor: "#fffbeb", border: "0.5pt solid #fde68a", borderRadius: 4, padding: 6 }} wrap={false}>
+          <Text style={{ fontSize: 9 }}>{c.text}</Text>
+          <Text style={{ fontSize: 8, fontWeight: 700, color: "#92400e", marginTop: 2 }}>
+            ⚠ No verifiable source found — treat as unverified estimate
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}

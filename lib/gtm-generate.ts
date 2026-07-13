@@ -4,6 +4,7 @@
 // deferred — see WEB_ELIGIBLE_FIELD_IDS in gtm-field-schema.ts).
 import { callAiForFields } from "./ai-json-call";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
+import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { GTM_FIELD_SCHEMA, GtmField, GtmFieldAnswer, GtmFieldSource, WEB_ELIGIBLE_FIELD_IDS } from "./gtm-field-schema";
 import { deriveFieldsFromSources, ProjectRecord } from "./gtm-derive";
 import { verifyGrounding, checkConsistency, SourceTexts } from "./gtm-grounding";
@@ -207,17 +208,58 @@ async function applyWebSearchFallback(
   pipelineStart: number
 ) {
   const eligible = schema.filter(f => WEB_ELIGIBLE_FIELD_IDS.has(f.id) && (!fields[f.id] || fields[f.id].source === "none" || fields[f.id].answer.toUpperCase() === "N/A"));
-  if (eligible.length === 0 || !hasGeminiKey) return;
+  if (eligible.length === 0 || (!hasOpenAIKey && !hasGeminiKey)) return;
   if (Date.now() - pipelineStart > PIPELINE_TIME_BUDGET_MS) return;
 
   const fieldList = eligible.map(f => `- ${f.id}: ${f.question}`).join("\n");
   const systemInstruction = `Search the web for verifiable public information about the product "${productName}" to answer the fields below. Use ONLY information you find via search — never guess or use general knowledge about similar products. If nothing reliable is found for a field, return "N/A".
+
+Do not narrate your search process — search silently, then respond with ONLY the final JSON object. No preamble, no commentary.
 
 Return ONLY valid JSON, no markdown, keyed by field id: { "<field_id>": { "answer": "..." } }
 
 FIELDS:
 ${fieldList}`;
 
+  // OpenAI is primary — its own native web_search tool handles the lookup.
+  // Gemini's googleSearch is the fallback if OpenAI is unavailable/fails.
+  if (hasOpenAIKey) {
+    try {
+      const response: any = await openai.responses.create(
+        {
+          model: OPENAI_MODEL,
+          reasoning: { effort: "low" },
+          // max_tool_calls bounds search chaining; without it a single call
+          // can run away (see lib/analysisEngine.ts's runOpenAiWebSearch for
+          // the same lesson learned from the prior, now-removed Anthropic
+          // integration).
+          tools: [{ type: "web_search" as any }],
+          max_tool_calls: 5,
+          instructions: systemInstruction,
+          input: `Product: ${productName}`,
+        } as any,
+        { timeout: 25_000 }
+      );
+      const queries: string[] = (response.output || [])
+        .filter((o: any) => o.type === "web_search_call")
+        .flatMap((o: any) => o.action?.queries || (o.action?.query ? [o.action.query] : []));
+      const message = (response.output || []).find((o: any) => o.type === "message");
+      const text: string = message?.content?.find((c: any) => c.type === "output_text")?.text || response.output_text || "";
+      const parsed = JSON.parse(cleanJsonString(text || "{}"));
+
+      for (const f of eligible) {
+        const answer = parsed?.[f.id]?.answer?.trim();
+        if (answer && answer.toUpperCase() !== "N/A") {
+          fields[f.id] = { answer, source: "web", sourceDetail: { webSearchQueries: queries }, flagged: false };
+        }
+      }
+      return;
+    } catch (err) {
+      console.warn("OpenAI GTM web-search fallback failed, trying Gemini:", err);
+    }
+  }
+
+  if (!hasGeminiKey) return;
   try {
     const response = await genAI.models.generateContent({
       model: GEMINI_MODEL,

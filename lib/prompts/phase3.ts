@@ -28,7 +28,10 @@ export async function buildPhase3Prompt(
     })),
   ];
 
-  // Generate the overview paragraph IN CODE — not by the AI model
+  // Generate the overview paragraph IN CODE — not by the AI model. When
+  // marketData is null (no curated data for this category — see
+  // lib/market-data.ts), buildOverviewParagraph renders the honest
+  // "no verifiable public figure found" text instead of a number.
   const overviewParagraph = buildOverviewParagraph({
     productName: ctx.productName,
     motorTech: ctx.motorTech ?? "",
@@ -36,7 +39,7 @@ export async function buildPhase3Prompt(
     targetMarket: ctx.targetMarket,
     category: identity.category,
     subcategory: identity.subcategory,
-    marketData: marketData!,
+    marketData,
     competitors: allCompetitors,
   });
 
@@ -67,15 +70,22 @@ ${allCompetitors.map((c: any) =>
 You have live Google Search available — use it to verify current market size, CAGR, and trend data for this category and price tier before writing the analysis.
 `.trim();
 
+  const marketDataInstruction = marketData
+    ? `Pre-verified market data for this category is provided below in the template — use those exact figures, do not search for or invent different ones.`
+    : `No pre-verified market data exists for this category. You MUST search the web for a real, current, citable market size figure. If you find one from a credible source, add it to "citations" with type "market_stat" and the exact URL + a short verbatim quote from the page. If you cannot find a reliable figure, leave "citations" without a market_stat entry — do NOT invent a number. Set every market_snapshot numeric field to null in that case; the app will render an honest "no verifiable public figure found" message instead of guessing.`;
+
   const systemText = `You are a market analyst. You MUST write analysis that is SPECIFIC to this exact product and its category (${identity.category} / ${identity.subcategory}) — never any other product category.
+
+Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary.
 
 ABSOLUTE RULES:
 1. DO NOT change or rewrite the overview_paragraph provided in the template. Use it EXACTLY as provided.
-2. Every trend MUST use a real data point — search for it if you don't already have a verified figure.
-3. Threats MUST name specific competitors with their real prices (e.g. "BaBylissPRO at $149.99").
-4. Opportunities MUST reference this product's specific price gap vs named competitors.
-5. CITE sources in trends, threats, and opportunities.
-6. Do not include analysis of any other product category. Do not reuse boilerplate from previous analyses — every claim must trace to the competitor data or category above.
+2. ${marketDataInstruction}
+3. Every trend MUST use a real data point — search for it if you don't already have a verified figure, and add it to "citations".
+4. Threats MUST name specific competitors with their real prices (e.g. "BaBylissPRO at $149.99").
+5. Opportunities MUST reference this product's specific price gap vs named competitors.
+6. Every factual claim that isn't directly restating the competitor price data already provided above MUST have a matching entry in "citations" with a real URL and a short VERBATIM quote from that page — a quote you paraphrase or invent will fail server-side verification and be discarded. If you cannot find a citable source for a claim, omit the claim rather than stating it uncited.
+7. Do not include analysis of any other product category. Do not reuse boilerplate from previous analyses — every claim must trace to the competitor data or category above.
 ${extraInstruction ? `\n${extraInstruction}\n` : ""}
 Return ONLY valid JSON. No markdown.`;
 
@@ -86,17 +96,17 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
 {
   "web_searches_performed": 4,
   "amazon_category": "${identity.category} / ${identity.subcategory}",
-  "data_sources_used": ["${marketData?.source ?? "Verified Market Research"}", "Amazon product research (Phase 1/2)", "Google Search grounding"],
+  "data_sources_used": ["${marketData?.source ?? "Amazon product research (Phase 1/2)"}", "Amazon product research (Phase 1/2)", "Google Search grounding"],
   "market_snapshot": {
-    "market_size_current": "${marketData?.market_size_2026 ?? "$1.5B"}",
+    "market_size_current": ${marketData ? `"${marketData.market_size_2026}"` : "null /* only fill if a market_stat citation backs it */"},
     "market_size_year": "2026",
-    "market_size_forecast": "${marketData?.market_size_forecast ?? "$2.5B"}",
-    "forecast_year": "${marketData?.forecast_year ?? "2034"}",
-    "cagr_percent": "${marketData?.cagr ?? "5.0%"}",
-    "cagr_period": "${marketData?.cagr_period ?? "2026–2034"}",
-    "data_source": "${marketData?.source ?? "Market Intelligence Research"}",
-    "headline_stat_label": "growth",
-    "headline_stat_value": "${marketData?.market_size_2026 ?? "$1.5B"} ${marketData?.industry_label ?? "Market"} snapshot (2026)",
+    "market_size_forecast": ${marketData ? `"${marketData.market_size_forecast}"` : "null"},
+    "forecast_year": ${marketData ? `"${marketData.forecast_year}"` : "null"},
+    "cagr_percent": ${marketData ? `"${marketData.cagr}"` : "null"},
+    "cagr_period": ${marketData ? `"${marketData.cagr_period}"` : "null"},
+    "data_source": ${marketData ? `"${marketData.source}"` : "null"},
+    "headline_stat_label": "${marketData ? "growth" : "unavailable"}",
+    "headline_stat_value": ${marketData ? `"${marketData.market_size_2026} ${marketData.industry_label} snapshot (2026)"` : "null"},
     "overview_paragraph": "${overviewParagraph.replace(/"/g, '\\"')}"
   },
   "key_trends": [
@@ -132,6 +142,15 @@ Return this exact JSON. The overview_paragraph is already written — copy it ex
   ],
   "quick_wins": [
     "Reference specific competitor ASIN and name from the data provided"
+  ],
+  "citations": [
+    {
+      "text": "The specific factual claim this citation backs (e.g. the market size figure, or a trend's data point)",
+      "type": "market_stat",
+      "sources": [
+        { "url": "https://real-source-url", "title": "Page title", "publisher": "Publisher/site name", "quote": "Short VERBATIM fragment actually on that page" }
+      ]
+    }
   ]
 }`;
 

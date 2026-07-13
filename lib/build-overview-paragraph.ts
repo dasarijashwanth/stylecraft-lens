@@ -16,7 +16,10 @@ export interface ParagraphInput {
   targetMarket: string;
   category: string;
   subcategory: string;
-  marketData: MarketData;
+  // null when no curated or web-verified market data exists for this
+  // category — see lib/market-data.ts's getMarketData for why this must
+  // never be silently filled with a fabricated number.
+  marketData: MarketData | null;
   competitors: CompetitorSummary[];
 }
 
@@ -113,13 +116,17 @@ function buildPriceSentence(
 export function buildOverviewParagraph(input: ParagraphInput): string {
   const { motorTech, pricePoint, marketData, competitors, category, subcategory } = input;
 
-  // Sentence 1: Market size (always from verified data, always cited)
-  const s1 = `The global ${marketData.industry_label} market was valued at ${marketData.market_size_2025} in 2025 and is projected to reach ${marketData.market_size_2026} in 2026, expanding to ${marketData.market_size_forecast} by ${marketData.forecast_year} at a ${marketData.cagr} CAGR (${marketData.source}).`;
+  // Sentence 1 & 2: market size and segment structure — ONLY when backed
+  // by real, curated (or web-verified) data. No fabricated numbers: when
+  // marketData is null, say so plainly instead of inventing a figure.
+  const s1 = marketData
+    ? `The global ${marketData.industry_label} market was valued at ${marketData.market_size_2025} in 2025 and is projected to reach ${marketData.market_size_2026} in 2026, expanding to ${marketData.market_size_forecast} by ${marketData.forecast_year} at a ${marketData.cagr} CAGR (${marketData.source}).`
+    : `Market size: no verifiable public figure found as of ${new Date().toISOString().slice(0, 10)}.`;
 
-  // Sentence 2: Market segment structure fact (from verified data)
-  const topSeg = marketData.key_segments?.[0];
-  const segText = topSeg ? `${topSeg.label} represent ${topSeg.share} of market activity (${topSeg.note})` : `Commercial and professional use account for the majority of market revenue`;
-  const s2 = `${segText}, with continuous growth expanding across key retail and professional channels (${marketData.source}).`;
+  const topSeg = marketData?.key_segments?.[0];
+  const s2 = marketData
+    ? `${topSeg ? `${topSeg.label} represent ${topSeg.share} of market activity (${topSeg.note})` : `Commercial and professional use account for the majority of market revenue`}, with continuous growth expanding across key retail and professional channels (${marketData.source}).`
+    : `Segment breakdown: no verifiable public figure found for the ${subcategory || category} category.`;
 
   // Sentence 3: Motor-specific context (from our hard-coded research map),
   // gated to the clipper/trimmer/barbering family it's actually about.

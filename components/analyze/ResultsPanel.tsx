@@ -4,6 +4,7 @@ import { useState } from "react";
 import { CompetitorCard } from "./CompetitorCard";
 import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
+import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 
 interface ResultsPanelProps {
   analysis: {
@@ -57,6 +58,10 @@ interface ResultsPanelProps {
         explanation: string;
       }>;
       quick_wins: string[];
+      // Server-verified claims (lib/citations.ts) — every factual claim
+      // this analysis makes that isn't already directly backed by the
+      // Phase 1/2 Amazon data above. Absent/empty when nothing was cited.
+      citations?: Claim[];
     };
   };
   onSaveAsReport: () => void;
@@ -86,6 +91,7 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
           positioning_recommendation: phase3.positioning_recommendation,
           strategic_recommendations: phase3.strategic_recommendations,
           quick_wins: phase3.quick_wins,
+          citations: phase3.citations || [],
         },
         pricing_analysis: {
           competitors_pricing: [
@@ -247,9 +253,13 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-start pt-2">
             {/* Growth Stat Card */}
             <div className="growth-stat-card p-4 border border-border bg-surface-3/20 rounded-xl space-y-1.5 md:col-span-1">
-              <span className="growth-label inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold bg-success-bg border border-success/20 text-success uppercase tracking-wider">
-                growth
-              </span>
+              {(phase3.market_snapshot as any)?.headline_stat_label === "unavailable" ? (
+                <UnverifiedBadge title="No verifiable public market-size figure was found for this category — showing this honestly instead of an invented number." />
+              ) : (
+                <span className="growth-label inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold bg-success-bg border border-success/20 text-success uppercase tracking-wider">
+                  growth
+                </span>
+              )}
               <p className="growth-value text-sm font-black text-text-primary leading-tight">
                 {phase3.market_snapshot?.headline_stat_value || "Market Growth Analysis"}
               </p>
@@ -345,6 +355,8 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
           </h3>
           <p className="text-xs text-text-secondary leading-relaxed">{phase3.positioning_recommendation}</p>
         </div>
+
+        <CitationsSection claims={phase3.citations || []} />
       </section>
 
       {/* 2. STRATEGIC RECOMMENDATIONS SECTION */}

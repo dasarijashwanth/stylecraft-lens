@@ -6,6 +6,7 @@
 // tradeoff (Amazon via lib/rainforest.ts is the primary reliable source);
 // this never throws and never estimates missing data.
 import * as cheerio from "cheerio";
+import { hasOpenAIKey, searchAndExtractJson } from "./openai";
 
 export interface ScrapedProduct {
   title?: string;
@@ -18,6 +19,11 @@ export interface ScrapedProduct {
     ogTags?: Record<string, string>;
     bodyTextSample?: string;
   };
+  // Set when the plain fetch+cheerio result was sparse and OpenAI's
+  // web_search tool filled the gaps by actually opening the page (or
+  // finding it via search) — distinguishes AI-assisted fields from the
+  // ones cheerio parsed directly out of the page's own markup.
+  source?: "cheerio" | "cheerio+openai_search";
 }
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -82,16 +88,59 @@ export async function scrapeProductPage(url: string): Promise<ScrapedProduct | n
   result.description = result.description || og("description") || $('meta[name="description"]').attr("content") || undefined;
   result.image = result.image || og("image") || undefined;
 
-  // 3. Price regex as a last resort.
+  // 3. Price regex as a last resort — matches the FIRST dollar amount
+  // anywhere in the page text, which is unreliable (confirmed in testing:
+  // it matched "$99" out of a "FREE SHIPPING OVER $99" marketing banner on
+  // a page with no actual product price). Kept as better-than-nothing raw
+  // data, but flagged separately so callers (the sparse-data fallback
+  // below) don't mistake it for a real, trustworthy price the way a
+  // JSON-LD-sourced price is.
+  let priceIsRegexGuess = false;
   if (!result.price) {
     const bodyText = $("body").text();
     const match = bodyText.match(/\$\s?\d[\d,]*(\.\d{2})?/);
-    if (match) result.price = match[0].replace(/\s+/g, "");
+    if (match) {
+      result.price = match[0].replace(/\s+/g, "");
+      priceIsRegexGuess = true;
+    }
   }
 
   // Fallback grounding text — lets verifyGrounding substring-check a spec
   // value even when structured extraction above missed it.
   result.raw.bodyTextSample = $("body").text().replace(/\s+/g, " ").trim().slice(0, 8000);
+  result.source = "cheerio";
+
+  // Heavily JS-hydrated storefronts leave cheerio with little/nothing to
+  // parse (the historical limitation this file's header comment accepts as
+  // a tradeoff). If the key fields are still missing and an OpenAI key is
+  // configured, fall back to a real search+read agent instead of just
+  // returning a sparse result — it opens the actual page (or finds it via
+  // search if this URL didn't render) and only fills in what cheerio
+  // missed, never overwriting data cheerio already found directly in the
+  // page's own markup.
+  const isSparse = !result.title || !result.price || priceIsRegexGuess;
+  if (isSparse && hasOpenAIKey) {
+    try {
+      const { data } = await searchAndExtractJson<{
+        title?: string; description?: string; brand?: string; price?: string;
+      }>(
+        `Extract this exact product's title, description, brand, and price from the given URL. Open the URL directly if you can; if it doesn't render useful content, search for the product and use the official/retailer listing you find instead. Use ONLY what you actually find — never guess or invent a price/spec. Return ONLY valid JSON: {"title": "...", "description": "...", "brand": "...", "price": "$XX.XX"} — omit any field you can't verify.`,
+        `URL: ${url}`,
+        20_000
+      );
+      if (data) {
+        // A verified search-derived price replaces the regex guess (which
+        // was never trustworthy) but never overwrites a JSON-LD price.
+        result.title = result.title || data.title;
+        result.description = result.description || data.description;
+        result.brand = result.brand || data.brand;
+        result.price = (!result.price || priceIsRegexGuess) ? (data.price || result.price) : result.price;
+        result.source = "cheerio+openai_search";
+      }
+    } catch (err) {
+      console.warn("OpenAI search fallback for scrapeProductPage failed:", err);
+    }
+  }
 
   return result;
 }

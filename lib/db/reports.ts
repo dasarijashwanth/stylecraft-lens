@@ -135,6 +135,7 @@ export function buildReportSections(analysis: {
   const positioning = analysis.phase3?.positioning_recommendation || "";
   const recommendations = analysis.phase3?.strategic_recommendations || [];
   const wins = analysis.phase3?.quick_wins || [];
+  const citations = analysis.phase3?.citations || [];
 
   const catalogProduct = matchCatalogProduct(analysis.productName);
   const legacyPrices = p1Comps.map((c: any) => c.price).filter(Boolean);
@@ -152,6 +153,7 @@ export function buildReportSections(analysis: {
       positioning_recommendation: positioning,
       strategic_recommendations: recommendations,
       quick_wins: wins,
+      citations,
     },
     pricing_analysis: {
       competitors_pricing: [

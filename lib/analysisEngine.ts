@@ -1,7 +1,7 @@
 import { prisma } from "./db";
 import { memoryDb } from "./memoryDb";
-import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
-import { anthropic, hasAnthropicKey, ANTHROPIC_MODEL } from "./anthropic";
+import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
+import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey, searchAmazonCategory } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
 import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck } from "./db/analyses";
@@ -13,6 +13,7 @@ import { buildOverviewParagraph } from "./build-overview-paragraph";
 import { identifyProduct, needsUserInput, IdentityCard } from "./product-identification";
 import { getKnownBrandsHint } from "./known-brands-by-category";
 import { competitorMatchesCategory } from "./category-synonyms";
+import { finalizeCitations } from "./citations";
 
 export interface AnalysisContext {
   id: string;
@@ -356,35 +357,17 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
         ];
   }
 
-  // Fallback for categories with no dedicated mock data above
-  const basePrice = identity.priceObserved?.value || 99;
-  const prodName = identity.productName || identity.category || "Product";
-  const catName = identity.category || "General";
-
-  const legacyBrands = ["Apex Global", "Vanguard Corp", "Prime Tech", "Heritage Brand", "OmniPro", "Elite Core"];
-  const emergingBrands = ["NovaDyne", "Flux DTC", "Zenith Lab", "Kuro Tech", "Aura Pro"];
-
-  const brands = defaultTier === "legacy" ? legacyBrands : emergingBrands;
-  const multipliers = defaultTier === "legacy" ? [1.2, 1.4, 0.9, 1.1, 1.5, 1.0] : [0.7, 0.85, 0.95, 1.05, 1.15];
-
-  return brands.map((b, idx) => {
-    const p = (basePrice * multipliers[idx % multipliers.length]).toFixed(2);
-    const asin = `B0${(10000000 + idx * 8921 + prodName.length * 43).toString(36).toUpperCase()}`.slice(0, 10);
-    return {
-      name: `${b} ${prodName} ${defaultTier === "legacy" ? "Pro" : "Series"}`,
-      brand: b,
-      asin: asin.length === 10 ? asin : `B09KGBM${idx}R${idx}`,
-      price: `$${p}`,
-      rating: (4.1 + (idx % 4) * 0.2).toFixed(1),
-      reviewCount: `${(150 + idx * 420).toLocaleString()}`,
-      sales: `${200 + idx * 150}+ bought in past month`,
-      bsr: `#${(5000 + idx * 3100).toLocaleString()} in ${catName}`,
-      initials: b.slice(0, 2).toUpperCase(),
-      top_positive_review_themes: ["Reliable operational run", "High build quality", "Fulfills expectations"],
-      top_negative_review_themes: ["Price premium barrier", "Heavier handling weight", "Standard feature set"],
-      confirmed_technical_specs: { motor_type: identity.keyAttributes[0] || "Brushless DC", rpm: "6,500 RPM", run_time: "150 min", charging_time: "90 min", blade_material: "Steel", body_material: "Composite" }
-    };
-  });
+  // No dedicated curated mock data for this category. This used to
+  // fabricate entirely fake companies here ("Apex Global", "Vanguard
+  // Corp", etc. — the exact fake-brand names reported as a bug) with
+  // invented prices/ASINs/ratings computed from a hash of the product
+  // name. Confirmed live that this was still reachable via
+  // cleanCompetitors's per-slot backfill even after discoverCompetitorsLive
+  // was added elsewhere as the preferred live-data path. Returning fewer
+  // real competitors is correct; inventing fake ones is not — so this now
+  // returns nothing, and cleanCompetitors below simply omits any slot it
+  // can't fill with real (AI-returned or live-discovered) data.
+  return [];
 }
 
 // `cleaned` also drops any AI-returned competitor whose own name/feature
@@ -400,13 +383,29 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
 
   const count = Math.max(incomingList.length, limit);
 
+  // A real competitor's name never contains the analyzed product's own
+  // name — that's the exact fabrication pattern confirmed live from OpenAI
+  // (gpt-5) when it runs out of real search results but still tries to
+  // fill the requested count: entries like "Vanguard Corp StyleCraft Twist
+  // Hair Crimper Pro Pro" (a fake company name with our own product name
+  // pasted on). These pass the category-match check below (they literally
+  // repeat our category text) so a dedicated check is needed here.
+  const ownProductNameLower = (identity.productName || "").toLowerCase().trim();
+  function isNamedAfterOwnProduct(name: string): boolean {
+    if (!ownProductNameLower || ownProductNameLower.length < 6) return false;
+    return name.toLowerCase().includes(ownProductNameLower);
+  }
+
   for (let i = 0; i < count; i++) {
     const fallback = fallbackCompetitors[i % fallbackCompetitors.length];
     const rawIncoming = incomingList[i];
     // Category-match validation guardrail: a competitor for a beard
     // trimmer must actually be a trimmer — drop (treat as absent, backfill
     // from same-category fallback data) anything that doesn't match.
-    const incoming = rawIncoming && competitorMatchesCategory(`${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`, identity.category, identity.subcategory)
+    // Also drop anything named after our own product (see comment above).
+    const incoming = rawIncoming
+      && competitorMatchesCategory(`${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`, identity.category, identity.subcategory)
+      && !isNamedAfterOwnProduct(rawIncoming.name || "")
       ? rawIncoming
       : undefined;
 
@@ -425,23 +424,33 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
       const isAsinPlaceholder = !asin || /X{3,}/i.test(asin) || asin.includes("000000") || !/^[A-Z0-9]{10}$/i.test(asin);
       const isUrlPlaceholder = !amazonUrl || /X{3,}/i.test(amazonUrl) || amazonUrl.includes("000000");
 
-      if (isAsinPlaceholder || isUrlPlaceholder) {
+      // Only curated fallback data (real brands for known categories) is
+      // trustworthy enough to borrow into a real AI-returned name — when
+      // there's no curated fallback for this category, leave the
+      // placeholder asin/url as null/empty; enrichCompetitorsWithRainforest
+      // will try to resolve a real ASIN via live search next, and if that
+      // fails too, the competitor card shows the honest "Unverified" badge
+      // rather than a fabricated ASIN.
+      if ((isAsinPlaceholder || isUrlPlaceholder) && fallback) {
         asin = fallback.asin;
         price = fallback.price;
         rating = fallback.rating;
         amazonUrl = `https://www.amazon.com/dp/${asin}`;
-      } else {
+      } else if (!isAsinPlaceholder) {
         amazonUrl = `https://www.amazon.com/dp/${asin}`;
+      } else {
+        asin = "";
+        amazonUrl = "";
       }
 
       cleaned.push({
         ...incoming,
         asin,
         amazon_url: amazonUrl,
-        price: price && price !== "—" ? price : fallback.price,
-        rating: rating && rating !== "—" ? rating : fallback.rating,
+        price: price && price !== "—" ? price : (fallback?.price ?? "—"),
+        rating: rating && rating !== "—" ? rating : (fallback?.rating ?? "—"),
         tier: defaultTier,
-        initials: incoming.initials || incoming.name.split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase() || fallback.initials,
+        initials: incoming.initials || incoming.name.split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase() || fallback?.initials,
         // Strengths/weaknesses/recent buyer sentiment are never AI-generated —
         // populated on demand from real Amazon reviews via
         // /api/amazon/reviews-analysis/[asin] (see CompetitorCard).
@@ -449,7 +458,12 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
         weaknesses: [],
         recent_news: [],
       });
-    } else {
+    } else if (fallback) {
+      // Only reachable for categories with real curated fallback data
+      // (lib/analysisEngine.ts's known-category branches above) — the
+      // generic/uncurated branch now returns [] rather than fabricating
+      // companies, so `fallback` is undefined below for those categories
+      // and this slot is skipped entirely (see comment there for why).
       cleaned.push({
         name: fallback.name,
         brand: fallback.brand,
@@ -469,6 +483,9 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
         top_feature_summary: "",
       });
     }
+    // else: no real incoming competitor and no curated fallback for this
+    // slot — skip it. Returning fewer real competitors is correct;
+    // inventing a fake one to fill the slot is not.
   }
 
   return cleaned;
@@ -676,7 +693,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const result: any = await withAiFallback(
         "Phase 1",
         hasGeminiKey ? () => executePhase1Gemini(context, identityCard, onSearchUsed) : null,
-        hasAnthropicKey ? () => executePhase1Claude(context, identityCard, onSearchUsed) : null,
+        hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, onSearchUsed) : null,
         () => generateMockPhase1(context, identityCard)
       );
 
@@ -699,7 +716,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const result: any = await withAiFallback(
         "Phase 2",
         hasGeminiKey ? () => executePhase2Gemini(context, identityCard, onSearchUsed) : null,
-        hasAnthropicKey ? () => executePhase2Claude(context, identityCard, onSearchUsed) : null,
+        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, onSearchUsed) : null,
         () => generateMockPhase2(context, identityCard, phase1Result)
       );
 
@@ -724,7 +741,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       let result: any = await withAiFallback(
         "Phase 3",
         hasGeminiKey ? () => executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
-        hasAnthropicKey ? () => executePhase3Claude(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
+        hasOpenAIKey ? () => executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
         () => generateMockPhase3(context, identityCard, phase1Result, phase2Result)
       );
       webSearchCount += result.web_searches_performed || 0;
@@ -736,7 +753,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // retry-with-facts pattern already proven in lib/gtm-generate.ts.
       try {
         const positioningText = typeof result.positioning_recommendation === "string" ? result.positioning_recommendation : "";
-        if (positioningText && hasGeminiKey) {
+        if (positioningText && (hasOpenAIKey || hasGeminiKey)) {
           const recent = await getRecentAnalysesForBoilerplateCheck(context.orgId, analysisId);
           const boilerplateMatch = recent.find(r =>
             r.category && r.category.toLowerCase() !== identityCard.category.toLowerCase() &&
@@ -747,7 +764,9 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
               .slice(0, 3)
               .map((c: any) => `${c.name} at ${c.price || "an unlisted price"}`);
             const extraInstruction = `The draft was generic. Rewrite strictly about ${identityCard.subcategory} using these specific competitor facts: ${facts.join("; ") || "the competitor data above"}.`;
-            const retried = await executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction);
+            const retried = hasOpenAIKey
+              ? await executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction)
+              : await executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction);
             if (retried && typeof retried.positioning_recommendation === "string") {
               result = retried;
             }
@@ -755,6 +774,38 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         }
       } catch (err) {
         console.warn("Phase 3 anti-boilerplate check failed (non-fatal, keeping original result):", err);
+      }
+
+      // Universal citation verification: independently fetch every URL the
+      // model cited and downgrade any claim whose quote doesn't actually
+      // appear on that page — never trust the model's own citation as-is.
+      // Applied uniformly regardless of which provider produced `result`
+      // (OpenAI, Gemini, or mock all go through the same check).
+      try {
+        const rawCitations = Array.isArray(result.citations) ? result.citations : [];
+        result.citations = await finalizeCitations(rawCitations, analysisId);
+      } catch (err) {
+        console.warn("Phase 3 citation verification failed (non-fatal, treating as no citations):", err);
+        result.citations = [];
+      }
+
+      // Market size is the highest-risk hallucination surface: if this
+      // category has no curated market data (lib/market-data.ts) AND no
+      // verified market_stat citation survived the check above, force the
+      // honest fallback regardless of whatever number the model wrote —
+      // never let an uncited figure reach the UI/PDF.
+      const hasCuratedMarketData = !!getMarketData(identityCard.subcategory || identityCard.category, context.productName);
+      const hasVerifiedMarketStat = (result.citations || []).some((c: any) => c.type === "market_stat" && c.verification === "verified");
+      if (!hasCuratedMarketData && !hasVerifiedMarketStat && result.market_snapshot) {
+        const noDataDate = new Date().toISOString().slice(0, 10);
+        result.market_snapshot.market_size_current = null;
+        result.market_snapshot.market_size_forecast = null;
+        result.market_snapshot.forecast_year = null;
+        result.market_snapshot.cagr_percent = null;
+        result.market_snapshot.cagr_period = null;
+        result.market_snapshot.data_source = null;
+        result.market_snapshot.headline_stat_label = "unavailable";
+        result.market_snapshot.headline_stat_value = `Market size: no verifiable public figure found as of ${noDataDate}`;
       }
 
       result.analysis_label = `Analysis of ${identityCard.productName} (${identityCard.subcategory}) — competitors verified ${new Date().toISOString()}`;
@@ -804,13 +855,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 }
 
 // ----------------------------------------------------
-// AI PROVIDER FALLBACK: try Gemini first, then Anthropic, then mock data.
+// AI PROVIDER FALLBACK: try OpenAI first, then Gemini, then mock data.
 // ----------------------------------------------------
 
 // Google Search grounding has its own quota separate from plain generation —
 // it can be exhausted while plain calls still work fine. Retry ungrounded
 // (no live search, but still real AI reasoning) before giving up on Gemini
-// entirely and falling through to Anthropic/mock.
+// entirely and falling through to OpenAI/mock.
 async function generateWithGeminiFallback(
   systemPrompt: string,
   userPrompt: string,
@@ -856,29 +907,77 @@ async function generateWithGeminiFallback(
 async function withAiFallback<T>(
   label: string,
   geminiCall: (() => Promise<T>) | null,
-  anthropicCall: (() => Promise<T>) | null,
+  openAiCall: (() => Promise<T>) | null,
   mockCall: () => T | Promise<T>
 ): Promise<T> {
-  if (geminiCall) {
+  // OpenAI is primary — its own native web-search tool handles the
+  // live-data step, so no Gemini call is needed first. Gemini remains the
+  // fallback if OpenAI is unavailable/fails.
+  if (openAiCall) {
     try {
-      return await geminiCall();
+      return await openAiCall();
     } catch (err: any) {
-      console.warn(`Gemini ${label} failed:`, err?.message || err);
+      console.warn(`OpenAI ${label} failed:`, err?.message || err);
     }
   }
-  if (anthropicCall) {
+  if (geminiCall) {
     try {
-      console.warn(`Falling back to Anthropic for ${label}...`);
-      return await anthropicCall();
+      console.warn(`Falling back to Gemini for ${label}...`);
+      return await geminiCall();
     } catch (err: any) {
-      console.warn(`Anthropic ${label} fallback also failed, falling back to mock:`, err?.message || err);
+      console.warn(`Gemini ${label} fallback also failed, falling back to mock:`, err?.message || err);
     }
   }
   return await mockCall();
 }
 
+// Shared OpenAI web-search call for Phase 1/2/3 — max_tool_calls bounds
+// search/page-open iterations (the same lesson learned from the prior,
+// now-removed Anthropic integration: an uncapped web-search call once ran
+// 30+ minutes in testing, which would always blow through Vercel's 60s
+// function cap). Returns both the raw response text (schema JSON) and the
+// list of search queries actually issued, for the onSearchUsed callback.
+//
+// Tuning note (confirmed in extensive live testing): thorough research for
+// 5 established + 5 emerging real competitors with prices/ASINs is
+// genuinely slow with reasoning-model web search — successful runs took
+// 20-46s, and even generous budgets (46s, 8 tool calls) sometimes still
+// returned an empty result. Faster non-reasoning models (gpt-4.1) return
+// in ~6-10s but are shallow (1 search, gives up early) and unreliable for
+// this multi-brand task. There is no configuration that is reliably both
+// fast and thorough within Vercel's 60s cap — 45s here is the practical
+// ceiling that leaves the rest of the route (Rainforest enrichment,
+// citation verification, DB writes) enough headroom. When this times out
+// or comes back empty, the pipeline falls through to Gemini, then to the
+// live Rainforest-search fallback / honest mock data — never fake data.
+const OPENAI_REQUEST_TIMEOUT_MS = 45_000;
+
+async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Promise<{ text: string; queries: string[] }> {
+  const response: any = await openai.responses.create(
+    {
+      model: OPENAI_MODEL,
+      reasoning: { effort: "low" },
+      tools: [{ type: "web_search" as any }],
+      max_tool_calls: 5,
+      instructions: systemPrompt,
+      input: userPrompt,
+    } as any,
+    { timeout: OPENAI_REQUEST_TIMEOUT_MS }
+  );
+
+  const queries: string[] = (response.output || [])
+    .filter((o: any) => o.type === "web_search_call")
+    .flatMap((o: any) => o.action?.queries || (o.action?.query ? [o.action.query] : []));
+
+  const message = (response.output || []).find((o: any) => o.type === "message");
+  const text: string = message?.content?.find((c: any) => c.type === "output_text")?.text || response.output_text || "";
+  if (!text) throw new Error("Empty response from OpenAI web search call");
+
+  return { text, queries };
+}
+
 // ----------------------------------------------------
-// PHASE 1/2 PROMPTS (shared between Gemini and Anthropic runners)
+// PHASE 1/2 PROMPTS (shared between Gemini and OpenAI runners)
 // ----------------------------------------------------
 
 // Brand hint and search terms are built ENTIRELY from the verified Identity
@@ -892,6 +991,8 @@ function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard) {
 
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
+Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
+
 Your task: Research up to 5 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
 For each brand, find their ONE best matching product in the SAME category as the identified product (prioritize matching key attributes first, then closest price to target price point). Return up to 5 products total.
@@ -901,7 +1002,8 @@ CRITICAL RULES:
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
 3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
 4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term (e.g. "${identity.keyAttributes[0] || identity.subcategory} ${identity.category}") before selecting competitors.
-5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+5. NEVER invent a filler/placeholder company to reach 5 results (e.g. generic-sounding names like "Vanguard Corp", "Prime Tech", "Heritage Brand", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up 1-3 real competitors, return only those 1-3. Returning fewer real results is correct; inventing fake ones is not.
+6. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -957,32 +1059,27 @@ Instructions:
 async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
   const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
-  return JSON.parse(cleanJsonString(text));
+  return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase1Claude(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
+// A model call that "succeeds" (valid JSON, no exception) but returns zero
+// competitors is not actually a success — confirmed in testing: gpt-5 can
+// return {"competitors":[]} after tens of seconds of searching instead of
+// throwing. Without this check, withAiFallback would treat that as the
+// final answer and skip Gemini/mock entirely, silently producing an
+// analysis with no competitors for that phase.
+function assertHasCompetitors(parsed: any): any {
+  if (!Array.isArray(parsed?.competitors) || parsed.competitors.length === 0) {
+    throw new Error("Model returned zero competitors — treating as a failed attempt");
+  }
+  return parsed;
+}
+
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
   const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity);
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
-    max_tokens: 4000,
-    tools: [{ type: "web_search_20250305" as any, name: "web_search" }],
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  response.content.forEach((block) => {
-    if (block.type === "tool_use" && block.name === "web_search") {
-      onSearchUsed((block.input as any).query);
-    }
-  });
-
-  const text = response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
-
-  return JSON.parse(cleanJsonString(text));
+  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
+  queries.forEach(onSearchUsed);
+  return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
 function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard) {
@@ -990,6 +1087,8 @@ function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard) {
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
 
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
+
+Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
 Your task: Research 5 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
@@ -999,7 +1098,8 @@ CRITICAL RULES:
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
 3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
 4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term before selecting competitors.
-5. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+5. NEVER invent a filler/placeholder company to reach 5 results (e.g. generic-sounding names like "NovaDyne", "Flux DTC", "Zenith Lab", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up 1-3 real competitors, return only those 1-3. Returning fewer real results is correct; inventing fake ones is not.
+6. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -1055,32 +1155,14 @@ Instructions:
 async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
   const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
-  return JSON.parse(cleanJsonString(text));
+  return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2Claude(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
   const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity);
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
-    max_tokens: 4000,
-    tools: [{ type: "web_search_20250305" as any, name: "web_search" }],
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  response.content.forEach((block) => {
-    if (block.type === "tool_use" && block.name === "web_search") {
-      onSearchUsed((block.input as any).query);
-    }
-  });
-
-  const text = response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
-
-  return JSON.parse(cleanJsonString(text));
+  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
+  queries.forEach(onSearchUsed);
+  return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
 async function executePhase3Gemini(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string) {
@@ -1098,28 +1180,20 @@ async function executePhase3Gemini(context: AnalysisContext, identity: IdentityC
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase3Claude(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string) {
+async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string) {
   const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, identity, phase1, phase2, extraInstruction);
 
-  onSearchUsed(`${identity.subcategory || identity.category} market data lookup`);
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
-    max_tokens: 4000,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const text = response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
+  // Needed so the model can actually search when marketData is null (see
+  // buildPhase3Prompt's marketDataInstruction) — runOpenAiWebSearch always
+  // attaches the web_search tool, so "search the web" has something to call.
+  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
+  if (queries.length > 0) {
+    queries.forEach(onSearchUsed);
+  } else {
+    onSearchUsed(`${identity.subcategory || identity.category} market data lookup`);
+  }
 
   return JSON.parse(cleanJsonString(text));
-}
-
-function cleanJsonString(text: string): string {
-  return text.replace(/```json|```/g, "").trim();
 }
 
 // ----------------------------------------------------
@@ -1320,7 +1394,7 @@ function generateMockPhase3(context: AnalysisContext, identity: IdentityCard, ph
     targetMarket: context.targetMarket,
     category: identity.category,
     subcategory: identity.subcategory,
-    marketData: mData!,
+    marketData: mData,
     competitors: allCompetitors,
   });
 
@@ -1395,26 +1469,28 @@ function generateMockPhase3(context: AnalysisContext, identity: IdentityCard, ph
     `Launch targeted Amazon Sponsored campaigns against ASIN ${em1.asin || "B000000003"} (${em1.name}) and ASIN ${leg1.asin || "B000000001"} (${leg1.name}).`
   ];
 
+  const noDataDate = new Date().toISOString().slice(0, 10);
+
   return {
     web_searches_performed: 4,
     amazon_category: context.category || "General Marketplace",
-    data_sources_used: [mData?.source || "Verified Industry Analytics", "Simulated market data (no AI key configured)"],
+    data_sources_used: mData ? [mData.source, "Simulated market data (no AI key configured)"] : ["Simulated market data (no AI key configured)"],
     market_snapshot: {
-      market_size_current: mData?.market_size_2026 || "$1.5B",
+      market_size_current: mData?.market_size_2026 || null,
       market_size_year: "2026",
-      market_size_forecast: mData?.market_size_forecast || "$2.5B",
-      forecast_year: mData?.forecast_year || "2034",
-      cagr_percent: mData?.cagr || "5.0%",
-      cagr_period: mData?.cagr_period || "2026–2034",
-      data_source: mData?.source || "Market Intelligence Research",
-      headline_stat_label: "growth",
-      headline_stat_value: `${mData?.market_size_2026 || "$1.5B"} ${mData?.industry_label || "Market"} snapshot (2026)`,
+      market_size_forecast: mData?.market_size_forecast || null,
+      forecast_year: mData?.forecast_year || null,
+      cagr_percent: mData?.cagr || null,
+      cagr_period: mData?.cagr_period || null,
+      data_source: mData?.source || null,
+      headline_stat_label: mData ? "growth" : "unavailable",
+      headline_stat_value: mData ? `${mData.market_size_2026} ${mData.industry_label} snapshot (2026)` : `Market size: no verifiable public figure found as of ${noDataDate}`,
       overview_paragraph: overviewParagraph
     },
     key_trends: (mData?.verified_trends || []).map(t => ({
       trend_name: t.name,
       description: `${t.description} [Data Point: ${t.data_point}]`,
-      source: mData?.source || "Industry Reports"
+      source: mData!.source
     })),
     market_gaps: [
       `Gaps in verified ${context.motorTech || "advanced tech"} offerings at the ${context.pricePoint || "target"} price tier`,
