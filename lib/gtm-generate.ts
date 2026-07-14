@@ -10,7 +10,7 @@
 import { callAiForFields } from "./ai-json-call";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
-import { GTM_FIELD_SCHEMA, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
 import { deriveFieldsFromSources, ProjectRecord } from "./gtm-derive";
 import { verifyGrounding, checkConsistency, SourceTexts } from "./gtm-grounding";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
@@ -24,15 +24,17 @@ import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documen
 // bails out before actually hitting the platform limit.
 const PIPELINE_TIME_BUDGET_MS = 45_000;
 
-// The main call now carries real web search across all 74 fields (not the
-// old docs-only, 25s-timeout call) — confirmed live that 25s was too tight
-// even for the docs-only version and was silently truncating/timing out,
-// with every failure swallowed into a misleading "N/A" (callOpenAiForJson
-// catches all errors and returns null — see lib/openai.ts). 38s leaves
-// real room, within the 60s route budget, for the second-chance web
-// fallback pass and the written-field quality-guard retry pass that both
-// still need to run afterward, plus the DB writes back in the route handler.
-const MAIN_CALL_TIMEOUT_MS = 38_000;
+// A single call covering all 74 fields with web search enabled was
+// confirmed live to time out even at 38s (OpenAI's own request timeout) —
+// once genuine web search is involved across that many fields, one call
+// can't reliably finish inside any budget that still leaves room for the
+// fallback/quality-guard passes and DB writes within the route's 60s
+// ceiling. Split into one concurrent call PER SECTION instead (10
+// sections, ~7 fields each) — each section's own scope is small enough to
+// realistically finish well inside its timeout, and running them via
+// Promise.all means total wall-clock is bounded by the slowest section,
+// not the sum of all ten.
+const SECTION_CALL_TIMEOUT_MS = 45_000;
 
 export interface GtmSources {
   project: ProjectRecord;
@@ -116,15 +118,40 @@ ${sourceTexts.salesKit}
 </SALES_KIT>`;
 }
 
-function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number }) {
-  // maxToolCalls: 10 — up to 74 fields can each need their own search;
-  // bounded so one call can't run away the way an uncapped web_search call
-  // did in the prior (now-removed) Anthropic integration.
+function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number; maxToolCalls?: number }) {
   return callAiForFields(systemInstruction, userContent, "GTM", {
     webSearch: true,
-    maxToolCalls: 10,
-    timeoutMs: opts?.timeoutMs ?? MAIN_CALL_TIMEOUT_MS,
+    maxToolCalls: opts?.maxToolCalls ?? 4,
+    timeoutMs: opts?.timeoutMs ?? SECTION_CALL_TIMEOUT_MS,
   });
+}
+
+// Runs one concurrent AI call per section (~7 fields each) instead of one
+// call for all 74 — see SECTION_CALL_TIMEOUT_MS above for why. Merges into
+// the same {fieldId: {answer, source}} shape the rest of the pipeline
+// already expects, so nothing downstream needs to know the call was split.
+async function callAiPerSection(productName: string, schema: GtmField[], userContent: string): Promise<Record<string, { answer: string; source: string }> | null> {
+  const bySection = new Map<string, GtmField[]>();
+  for (const f of schema) {
+    if (!bySection.has(f.section)) bySection.set(f.section, []);
+    bySection.get(f.section)!.push(f);
+  }
+
+  const results = await Promise.all(
+    Array.from(bySection.entries()).map(async ([section, fields]) => {
+      const raw = await callAi(buildSystemInstruction(productName, fields), userContent, { maxToolCalls: 6 });
+      return raw;
+    })
+  );
+
+  const merged: Record<string, { answer: string; source: string }> = {};
+  let anySucceeded = false;
+  for (const raw of results) {
+    if (!raw) continue;
+    anySucceeded = true;
+    Object.assign(merged, raw);
+  }
+  return anySucceeded ? merged : null;
 }
 
 function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: string; source: string }> | null, derived: Record<string, GtmFieldAnswer>): { field: GtmFieldAnswer; fromAi: boolean } {
@@ -152,10 +179,9 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const pipelineStart = Date.now();
   const schema = GTM_FIELD_SCHEMA;
   const sourceTexts = buildSourceTexts(sources);
-  const systemInstruction = buildSystemInstruction(productName, schema);
   const userContent = buildUserContent(sourceTexts);
 
-  const aiRaw = await callAi(systemInstruction, userContent);
+  const aiRaw = await callAiPerSection(productName, schema, userContent);
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   const merged: Record<string, GtmFieldAnswer> = {};
