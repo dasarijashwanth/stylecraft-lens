@@ -149,6 +149,39 @@ export async function getFailedTaskKeys(jobId: string): Promise<string[]> {
   return (data ?? []).map((r: any) => r.task_key);
 }
 
+// A task stuck "running" past this long almost certainly means the
+// underlying Vercel function invocation was killed mid-flight (hit its own
+// maxDuration) before any catch block could ever mark it done/failed —
+// confirmed live: a stuck synthesize task sat at "running" for 40+ minutes
+// with no error ever recorded, since a hard platform kill never lets error-
+// handling code run at all. Every task type in this app runs inside a
+// function capped at 60s (app/api/inngest/route.ts's maxDuration), so
+// anything still "running" well past that genuinely died, not just slow.
+const STALE_RUNNING_MS = 90_000;
+
+// Self-healing safety net: called on every status-poll and retry request,
+// so a task abandoned by a killed function invocation gets flipped to
+// "failed" (and therefore retryable / correctly reported to the UI)
+// automatically, rather than staying stuck "running" forever with nothing
+// to ever notice it died.
+export async function sweepStaleTasks(jobId: string): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const cutoff = new Date(Date.now() - STALE_RUNNING_MS).toISOString();
+  const { error } = await supabaseAdmin
+    .from("analysis_tasks")
+    .update({
+      status: "failed",
+      error: "Task stopped responding, likely killed by a platform timeout mid-run — retry to resume.",
+      error_class: "timeout",
+      updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+    })
+    .eq("job_id", jobId)
+    .eq("status", "running")
+    .lt("updated_at", cutoff);
+  if (error) throw error;
+}
+
 export interface JobTaskSummary {
   done: number;
   running: number;

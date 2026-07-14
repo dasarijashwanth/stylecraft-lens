@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
-import { getFailedTaskKeys, resetTasksForRetry } from "@/lib/db/analysis-tasks";
+import { getFailedTaskKeys, resetTasksForRetry, sweepStaleTasks } from "@/lib/db/analysis-tasks";
 import { inngest } from "@/lib/inngest/client";
 
 // Re-enqueues ONLY the failed task(s) — omitting taskKeys resolves to "all
@@ -30,6 +30,12 @@ export async function POST(request: Request, { params }: { params: { jobId: stri
     } catch {
       // empty body is valid — falls through to "retry all failed"
     }
+
+    // Catches a task abandoned by a killed function invocation (see
+    // lib/db/analysis-tasks.ts's sweepStaleTasks) before deciding what
+    // "all failed" means — otherwise a stuck-but-not-yet-swept task
+    // wouldn't be included in a "Retry all failed" click.
+    await sweepStaleTasks(jobId);
 
     const taskKeys = body.taskKeys && body.taskKeys.length > 0 ? body.taskKeys : await getFailedTaskKeys(jobId);
     if (taskKeys.length === 0) {

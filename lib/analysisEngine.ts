@@ -751,9 +751,21 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // almost certainly generic could-apply-to-anything strategy text —
       // one regeneration attempt with the real competitor facts, same
       // retry-with-facts pattern already proven in lib/gtm-generate.ts.
+      //
+      // Skipped once the main synthesis call has already eaten most of the
+      // step's safe time budget: this whole step runs inside a single
+      // Vercel function invocation capped at 60s (app/api/inngest/route.ts's
+      // maxDuration), and the main call above already has its own 45s
+      // timeout. Stacking a second full synthesis call on top of a slow
+      // first one reliably blew past 60s and got hard-killed mid-flight —
+      // confirmed live: a stuck analysis_tasks row left permanently
+      // "running" (no error ever recorded, since a Vercel timeout kill
+      // doesn't let any catch block run) is exactly what that looks like.
+      const elapsedSoFar = Date.now() - startTime;
+      const ANTI_BOILERPLATE_TIME_BUDGET_MS = 35_000;
       try {
         const positioningText = typeof result.positioning_recommendation === "string" ? result.positioning_recommendation : "";
-        if (positioningText && (hasOpenAIKey || hasGeminiKey)) {
+        if (positioningText && (hasOpenAIKey || hasGeminiKey) && elapsedSoFar < ANTI_BOILERPLATE_TIME_BUDGET_MS) {
           const recent = await getRecentAnalysesForBoilerplateCheck(context.orgId, analysisId);
           const boilerplateMatch = recent.find(r =>
             r.category && r.category.toLowerCase() !== identityCard.category.toLowerCase() &&

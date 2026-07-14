@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
-import { getTasksForJob, summarizeTasks } from "@/lib/db/analysis-tasks";
+import { getTasksForJob, summarizeTasks, sweepStaleTasks } from "@/lib/db/analysis-tasks";
 
 // Polled every ~2.5s by components/analyze/ProgressPanel.tsx — deliberately
 // a plain DB read (analyses + analysis_tasks), not a call into Inngest's own
@@ -26,9 +26,23 @@ export async function GET(request: Request, { params }: { params: { jobId: strin
       return NextResponse.json({ error: "NOT_FOUND", message: "Analysis not found" }, { status: 404 });
     }
 
+    // Self-heals any task abandoned by a killed function invocation
+    // (see lib/db/analysis-tasks.ts's sweepStaleTasks) before this poll
+    // reads task state — otherwise a step that died without recording
+    // anything would leave the UI spinning on "running" forever.
+    await sweepStaleTasks(jobId);
+
     const tasks = await getTasksForJob(jobId);
     const summary = summarizeTasks(tasks);
     const phase4Tasks = tasks.filter(t => t.task_key.startsWith("phase4:"));
+    // Sequential phase0-3 tasks ("phase:N:...") — checked separately from
+    // analysis.status because a hard platform kill (the exact failure mode
+    // the sweeper above targets) never gives lib/analysisEngine.ts's own
+    // catch block a chance to call failAnalysis(), so that legacy column
+    // can be stuck reading "running" even after the sweeper has correctly
+    // marked the actual task as failed.
+    const sequentialTasks = tasks.filter(t => t.task_key.startsWith("phase:"));
+    const sequentialFailed = sequentialTasks.some(t => t.status === "failed");
 
     // Derived live from the task list on every poll rather than trusting
     // the DB-persisted job_status column — that column is only written
@@ -39,7 +53,7 @@ export async function GET(request: Request, { params }: { params: { jobId: strin
     // genuinely in flight (they run in parallel, not after synthesis), so
     // a stale job_status read would report "complete" too early.
     let status: "running" | "partial_complete" | "complete" | "failed";
-    if (analysis.status === "failed") {
+    if (analysis.status === "failed" || sequentialFailed) {
       status = "failed";
     } else if (analysis.status !== "complete") {
       status = "running";
