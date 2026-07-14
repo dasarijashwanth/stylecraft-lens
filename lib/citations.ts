@@ -18,7 +18,10 @@ import * as cheerio from "cheerio";
 const FETCH_TIMEOUT_MS = 6_000;
 const USER_AGENT = "StylecraftLensBot/1.0 (+https://stylecraft-lens.vercel.app; citation verification)";
 
-async function fetchPageText(url: string): Promise<string | null> {
+// Exported for reuse by any resolver that needs plain fetched body text for
+// an arbitrary article/review/forum page (lib/key-features-resolver.ts,
+// lib/amazon-review-analysis.ts's web tiers) — not just Phase 3 citations.
+export async function fetchPageText(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
@@ -26,7 +29,14 @@ async function fetchPageText(url: string): Promise<string | null> {
     });
     if (!res.ok) return null;
     const html = await res.text();
-    return cheerio.load(html)("body").text().replace(/\s+/g, " ").trim();
+    const $ = cheerio.load(html);
+    // cheerio's .text() concatenates ALL descendant text nodes regardless of
+    // tag — including inline JS/CSS and (on template-driven sites) literal
+    // Handlebars/Mustache markup living inside <script type="text/x-...">
+    // tags. Left in, that garbage routinely drowns out the real article/
+    // product text a caller actually wants. Strip non-visible tags first.
+    $("script, style, noscript, template, svg").remove();
+    return $("body").text().replace(/\s+/g, " ").trim();
   } catch {
     return null;
   }

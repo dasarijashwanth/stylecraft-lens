@@ -1,6 +1,18 @@
 import { Document, Page, View, Text } from "@react-pdf/renderer";
 import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, CitationList } from "./shared";
 
+// Never render a bare "—" for a competitor with partial data — omit the
+// missing part instead, and only fall back to an explicit sentence when
+// literally nothing was resolved for this competitor.
+function competitorSummary(c: any): string {
+  const parts: string[] = [];
+  if (c.price) parts.push(c.price);
+  if (c.rating) parts.push(`★${c.rating}${c.review_count ? ` (${c.review_count} reviews)` : ""}`);
+  else if (c.review_count) parts.push(`${c.review_count} reviews`);
+  if (c.verified_by_rainforest === false) parts.push("unverified");
+  return parts.length > 0 ? parts.join(" · ") : "No verified pricing/rating data found for this competitor";
+}
+
 export function ActiveReportPdf({
   productName,
   projectName,
@@ -51,20 +63,12 @@ export function ActiveReportPdf({
 
         <SectionHeader title="Large Brand Competitors" />
         {largeComps.map((c: any, i: number) => (
-          <TwoColRow
-            key={i}
-            question={c.name}
-            answer={`${c.price || "—"} · ★${c.rating || "—"} (${c.review_count || "—"} reviews)${c.verified_by_rainforest === false ? " · unverified" : ""}`}
-          />
+          <TwoColRow key={i} question={c.name} answer={competitorSummary(c)} />
         ))}
 
         <SectionHeader title="Indie & Emerging Competitors" />
         {emergingComps.map((c: any, i: number) => (
-          <TwoColRow
-            key={i}
-            question={c.name}
-            answer={`${c.price || "—"} · ★${c.rating || "—"} (${c.review_count || "—"} reviews)${c.verified_by_rainforest === false ? " · unverified" : ""}`}
-          />
+          <TwoColRow key={i} question={c.name} answer={competitorSummary(c)} />
         ))}
 
         <View style={{ backgroundColor: "#f5f3ff", border: "0.5pt solid #ddd6fe", borderRadius: 6, padding: 10, marginTop: 8 }}>

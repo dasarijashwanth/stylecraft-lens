@@ -5,6 +5,7 @@ import { CompetitorCard } from "./CompetitorCard";
 import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
+import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 
 interface ResultsPanelProps {
   analysis: {
@@ -72,6 +73,11 @@ interface ResultsPanelProps {
 export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   const [exporting, setExporting] = useState(false);
+  // Populated as each CompetitorCard's own Key Features fetch resolves, so
+  // the comparison table's Top Feature row can reuse real cited data
+  // instead of re-running the resolver a second time.
+  const [phase1Features, setPhase1Features] = useState<Record<number, KeyFeaturesResult>>({});
+  const [phase2Features, setPhase2Features] = useState<Record<number, KeyFeaturesResult>>({});
 
   const handleExportPDF = async () => {
     setExporting(true);
@@ -429,13 +435,13 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors?.map((comp, i) => (
-            <CompetitorCard key={i} competitor={comp} tier="legacy" />
+            <CompetitorCard key={i} competitor={comp} tier="legacy" onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
           ))}
         </div>
 
         <div className="pt-4 border-t border-border/40">
           <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Legacy Brand Specification Comparison</h3>
-          <CompetitorTable competitors={phase1.competitors} tier="legacy" />
+          <CompetitorTable competitors={phase1.competitors} tier="legacy" resolvedFeatures={phase1Features} />
         </div>
       </section>
 
@@ -453,27 +459,62 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors?.map((comp, i) => (
-            <CompetitorCard key={i} competitor={comp} tier="emerging" />
+            <CompetitorCard key={i} competitor={comp} tier="emerging" onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
           ))}
         </div>
 
         <div className="pt-4 border-t border-border/40">
           <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Emerging Brand Specification Comparison</h3>
-          <CompetitorTable competitors={phase2.competitors} tier="emerging" />
+          <CompetitorTable competitors={phase2.competitors} tier="emerging" resolvedFeatures={phase2Features} />
         </div>
       </section>
     </div>
   );
 }
 
-/* HELPER COMPARISON TABLE COMPONENT */
+/* HELPER COMPARISON TABLE COMPONENT — data-driven rows: a row that no
+   competitor has data for is skipped entirely; a row where only some
+   competitors have data renders real values plus a muted "Not available
+   for {name}" — never a bare dash/N/A (delivered documents must never
+   show empty cells). */
 interface CompetitorTableProps {
   competitors: any[];
   tier: "legacy" | "emerging";
+  resolvedFeatures?: Record<number, KeyFeaturesResult>;
 }
 
-function CompetitorTable({ competitors, tier }: CompetitorTableProps) {
+interface TableRowDef {
+  label: string;
+  getValue: (comp: any, idx: number) => string | null;
+  getSourceUrl?: (comp: any, idx: number) => string | null;
+}
+
+function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTableProps) {
   if (!competitors || competitors.length === 0) return null;
+
+  const rows: TableRowDef[] = [
+    { label: "Amazon Price", getValue: (c) => c.price || null },
+    { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null) },
+    { label: "Review Count", getValue: (c) => c.review_count || null },
+    { label: "Monthly Sales", getValue: (c) => c.monthly_sales || null },
+    { label: "Best Seller Rank", getValue: (c) => c.bsr_rank || null },
+    { label: "Brand", getValue: (c) => c.brand || null },
+    { label: "ASIN", getValue: (c) => c.asin || null },
+    {
+      label: "Top Feature",
+      getValue: (c, idx) => {
+        const resolved = resolvedFeatures?.[idx]?.features?.[0];
+        return c.top_feature_summary || c.key_features?.[0]?.headline || resolved?.headline || null;
+      },
+      getSourceUrl: (c, idx) => resolvedFeatures?.[idx]?.features?.[0]?.sourceUrl ?? null,
+    },
+  ];
+
+  // Rows where every competitor is null get skipped entirely — a bare
+  // header with only "Not available" cells is just as empty as a dash.
+  const visibleRows = rows.filter(row => competitors.some((c, idx) => row.getValue(c, idx)));
+
+  if (visibleRows.length === 0) return null;
 
   return (
     <div className="overflow-x-auto border border-border rounded-lg bg-surface-1">
@@ -490,58 +531,43 @@ function CompetitorTable({ competitors, tier }: CompetitorTableProps) {
           </tr>
         </thead>
         <tbody className="divide-y divide-border/40 text-text-secondary">
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Amazon Price</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40">{comp.price || "—"}</td>
-            ))}
-          </tr>
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Star Rating</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40">{comp.rating ? `${comp.rating} ★` : "—"}</td>
-            ))}
-          </tr>
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Review Count</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40">{comp.review_count || "—"}</td>
-            ))}
-          </tr>
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Monthly Sales</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40">{comp.monthly_sales || "—"}</td>
-            ))}
-          </tr>
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Best Seller Rank</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40 max-w-[150px] truncate" title={comp.bsr_rank}>{comp.bsr_rank || "—"}</td>
-            ))}
-          </tr>
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Brand</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40">{comp.brand || "—"}</td>
-            ))}
-          </tr>
-          <tr>
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">ASIN</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40 select-all">{comp.asin || "—"}</td>
-            ))}
-          </tr>
-          <tr className="bg-surface-3/5">
-            <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">Top Feature</td>
-            {competitors.map((comp, idx) => (
-              <td key={idx} className="p-2 border-r border-border/40 max-w-[180px] truncate" title={comp.top_feature_summary || comp.key_features?.[0]?.headline}>
-                {comp.top_feature_summary || comp.key_features?.[0]?.headline || "—"}
-              </td>
-            ))}
-          </tr>
+          {visibleRows.map((row, rowIdx) => (
+            <tr key={row.label} className={rowIdx % 2 === 1 ? "bg-surface-3/5" : undefined}>
+              <td className="p-2 border-r border-border/40 bg-surface-3/10 font-bold text-text-muted">{row.label}</td>
+              {competitors.map((comp, idx) => {
+                const value = row.getValue(comp, idx);
+                const sourceUrl = row.getSourceUrl?.(comp, idx);
+                return (
+                  <td key={idx} className="p-2 border-r border-border/40 max-w-[180px] truncate" title={value ?? `Not available for ${comp.brand || comp.name}`}>
+                    {value ? (
+                      <span className="inline-flex items-center gap-1">
+                        {value}
+                        {sourceUrl && (
+                          <a href={sourceUrl} target="_blank" rel="noopener noreferrer" title="View source" className="text-accent hover:underline">
+                            <ExternalLinkIcon />
+                          </a>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="italic text-text-muted normal-case font-sans">Not available for {comp.brand || comp.name}</span>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
   );
 }

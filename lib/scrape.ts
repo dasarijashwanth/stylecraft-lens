@@ -88,6 +88,14 @@ export async function scrapeProductPage(url: string): Promise<ScrapedProduct | n
   result.description = result.description || og("description") || $('meta[name="description"]').attr("content") || undefined;
   result.image = result.image || og("image") || undefined;
 
+  // JSON-LD/meta extraction above needs <script> tags present; safe to
+  // strip them (and other non-visible tags) now. Left in, cheerio's
+  // .text() concatenates inline JS/CSS and — on template-driven storefronts
+  // — literal Handlebars/Mustache markup living inside
+  // <script type="text/x-...-template"> tags, which otherwise drowns out
+  // real page text in both the price regex and bodyTextSample below.
+  $("script, style, noscript, template, svg").remove();
+
   // 3. Price regex as a last resort — matches the FIRST dollar amount
   // anywhere in the page text, which is unreliable (confirmed in testing:
   // it matched "$99" out of a "FREE SHIPPING OVER $99" marketing banner on

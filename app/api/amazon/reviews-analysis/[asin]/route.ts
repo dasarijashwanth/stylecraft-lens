@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
-import { getAmazonProduct, hasRainforestKey } from "@/lib/rainforest";
+import { getAmazonProduct } from "@/lib/rainforest";
 import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
+import { resolveCacheKey } from "@/lib/product-cache-key";
 
 export const maxDuration = 45;
 
 const REVIEWS_ANALYSIS_TTL_MS = 24 * 60 * 60 * 1000;
 
-async function getCachedAnalysis(asin: string): Promise<{ analysis: ReviewAnalysis; fetchedAt: string } | null> {
+async function getCachedAnalysis(cacheKey: string): Promise<{ analysis: ReviewAnalysis; fetchedAt: string } | null> {
   if (!isSupabaseConfigured) return null;
   const { data } = await supabaseAdmin
     .from("amazon_cache")
     .select("payload, fetched_at")
-    .eq("asin", asin)
+    .eq("asin", cacheKey)
     .eq("cache_type", "reviews_analysis")
     .maybeSingle();
 
@@ -22,13 +23,13 @@ async function getCachedAnalysis(asin: string): Promise<{ analysis: ReviewAnalys
   return null;
 }
 
-async function setCachedAnalysis(asin: string, analysis: ReviewAnalysis) {
+async function setCachedAnalysis(cacheKey: string, analysis: ReviewAnalysis) {
   if (!isSupabaseConfigured) return;
   try {
     await supabaseAdmin
       .from("amazon_cache")
       .upsert(
-        { asin, cache_type: "reviews_analysis", payload: analysis, fetched_at: new Date().toISOString() },
+        { asin: cacheKey, cache_type: "reviews_analysis", payload: analysis, fetched_at: new Date().toISOString() },
         { onConflict: "asin,cache_type" }
       );
   } catch (e) {
@@ -36,39 +37,44 @@ async function setCachedAnalysis(asin: string, analysis: ReviewAnalysis) {
   }
 }
 
+// Path segment accepts a real 10-char ASIN OR the literal "none" — a
+// product with no Amazon presence at all still needs this route (that's
+// the point of the multi-source fallback in lib/amazon-review-analysis.ts),
+// keyed instead by a hash of productName (lib/product-cache-key.ts).
 export async function GET(req: NextRequest, { params }: { params: { asin: string } }) {
-  const asin = params.asin?.toUpperCase();
-  if (!asin || !/^[A-Z0-9]{10}$/.test(asin)) {
+  const rawAsin = params.asin?.toUpperCase();
+  const isRealAsin = !!rawAsin && /^[A-Z0-9]{10}$/.test(rawAsin);
+  const productName = req.nextUrl.searchParams.get("productName");
+
+  if (!isRealAsin && rawAsin !== "NONE") {
     return NextResponse.json({ error: "Invalid ASIN" }, { status: 400 });
   }
-
-  if (!hasRainforestKey) {
-    return NextResponse.json({ error: "Live Amazon data unavailable — Rainforest API key not configured" }, { status: 503 });
+  if (!isRealAsin && !productName) {
+    return NextResponse.json({ error: "productName query param is required when no ASIN is available" }, { status: 400 });
   }
 
-  // Refresh button (Strengths/Weaknesses & Recent Sentiment section) —
-  // bypasses the 24h cache to force a fresh Rainforest + AI pass.
   const forceRefresh = req.nextUrl.searchParams.get("refresh") === "true";
+  const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName || rawAsin || "product");
 
   try {
     if (!forceRefresh) {
-      const cached = await getCachedAnalysis(asin);
+      const cached = await getCachedAnalysis(cacheKey);
       if (cached) {
         return NextResponse.json({ ...cached.analysis, retrievedAt: cached.fetchedAt, cached: true });
       }
     }
 
-    const product = await getAmazonProduct(asin);
-    const analysis = await analyzeReviews(asin, product?.title || asin);
+    const product = isRealAsin ? await getAmazonProduct(rawAsin) : null;
+    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product");
 
     // Don't cache an "AI unavailable" result for 24h — that's a transient
     // provider outage, not a real answer, and should be retried freely.
     if (!analysis.aiUnavailable) {
-      await setCachedAnalysis(asin, analysis);
+      await setCachedAnalysis(cacheKey, analysis);
     }
 
     return NextResponse.json({ ...analysis, retrievedAt: new Date().toISOString(), cached: false });
   } catch (err: any) {
-    return NextResponse.json({ error: "Live Amazon data unavailable — retry" }, { status: 503 });
+    return NextResponse.json({ error: "Live review data unavailable — retry" }, { status: 503 });
   }
 }
