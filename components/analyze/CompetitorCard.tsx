@@ -91,13 +91,13 @@ function TimeoutChip({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-// Must safely exceed every section route's own maxDuration (key-features:
-// 55s, reviews-analysis/product-news: 45s — see those routes' exports) or
-// this client-side abort fires before the server-side work even has a
-// chance to finish. Confirmed live: with the old 20s value, real
-// successful responses (verified real data, not errors) were arriving at
-// 33-45s and getting thrown away as "timed out" by this timer alone.
-const SECTION_TIMEOUT_MS = 58_000;
+// Must safely exceed every section route's own maxDuration (all three are
+// 60s, Vercel Hobby's actual ceiling — see those routes' exports) or this
+// client-side abort fires before the server-side work even has a chance
+// to finish. Confirmed live: with the old 20s value, real successful
+// responses (verified real data, not errors) were arriving at 33-45s and
+// getting thrown away as "timed out" by this timer alone.
+const SECTION_TIMEOUT_MS = 63_000;
 
 async function fetchWithTimeout(url: string): Promise<Response> {
   const controller = new AbortController();
@@ -106,6 +106,23 @@ async function fetchWithTimeout(url: string): Promise<Response> {
     return await fetch(url, { signal: controller.signal });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// A hard Vercel function kill (the route ran past its own maxDuration)
+// returns a plain-text/HTML platform error page, not this route's own
+// JSON — confirmed live: that crashed res.json() with a raw parse error
+// ("Unexpected token 'A', "An error o"... is not valid JSON") shown
+// directly to the user instead of a clean message. Read the body as text
+// first and parse it ourselves so a non-JSON response degrades to a
+// normal, honest "unavailable — retry" instead of a stack-trace-looking
+// string.
+async function safeJson(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: res.ok ? "Unexpected response — retry" : `Live data unavailable (server error) — retry` };
   }
 }
 
@@ -133,7 +150,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
       const params = new URLSearchParams({ productName: c.name });
       if (refresh) params.set("refresh", "true");
       const res = await enqueue(() => fetchWithTimeout(`/api/product-data/key-features/${asinPathSegment}?${params.toString()}`));
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Live feature data unavailable — retry");
       setFeaturesState({ status: "loaded", data });
       onFeaturesResolved?.(data);
@@ -148,7 +165,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
       const params = new URLSearchParams({ productName: c.name });
       if (refresh) params.set("refresh", "true");
       const res = await enqueue(() => fetchWithTimeout(`/api/amazon/reviews-analysis/${asinPathSegment}?${params.toString()}`));
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Live Amazon data unavailable — retry");
       setReviewAnalysis({ status: "loaded", data });
     } catch (err: any) {
@@ -162,7 +179,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
       const params = new URLSearchParams({ productName: c.name, brand: c.brand || "" });
       if (refresh) params.set("refresh", "true");
       const res = await enqueue(() => fetchWithTimeout(`/api/amazon/product-news/${asinPathSegment}?${params.toString()}`));
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Live news search unavailable — retry");
       setNewsState({ status: "loaded", data });
     } catch (err: any) {

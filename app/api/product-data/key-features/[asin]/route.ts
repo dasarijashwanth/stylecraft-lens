@@ -5,9 +5,11 @@ import { resolveCacheKey } from "@/lib/product-cache-key";
 
 // Multi-tier feature resolution (Amazon -> brand site -> retailers ->
 // expert reviews) can genuinely take 30-40s when Amazon has nothing and
-// every fallback tier has to run — same budget reasoning as the other
-// per-product resolver routes.
-export const maxDuration = 55;
+// every fallback tier has to run. 60s is Vercel Hobby's actual ceiling —
+// bumped from 55 for the same reason as the other per-product resolver
+// routes: every extra second of headroom reduces how often a hard Vercel
+// kill mid-response returns a non-JSON error page instead of real JSON.
+export const maxDuration = 60;
 
 const FEATURES_TTL_MS = 24 * 60 * 60 * 1000;
 

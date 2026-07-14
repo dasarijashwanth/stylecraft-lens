@@ -3,7 +3,12 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { findProductNews, ProductNewsResult } from "@/lib/product-news";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 
-export const maxDuration = 45;
+// 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
+// a real news search can take 30s+ and a hard Vercel kill mid-response
+// returns a non-JSON error page instead of this route's own JSON, which
+// crashed the client's res.json() call with a raw parse error instead of
+// a clean message. Every extra second of real headroom reduces that.
+export const maxDuration = 60;
 
 // Mirrors app/api/amazon/reviews-analysis/[asin]/route.ts's cache pattern
 // exactly — same amazon_cache table, same 24h TTL, same refresh-bypass

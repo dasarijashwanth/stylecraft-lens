@@ -4,7 +4,15 @@ import { getAmazonProduct } from "@/lib/rainforest";
 import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 
-export const maxDuration = 45;
+// 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
+// the multi-tier resolver (Amazon -> expert reviews -> forums) sometimes
+// takes right up to that limit, and a hard Vercel kill mid-response
+// returns a non-JSON error page instead of this route's own JSON, which
+// then crashed the client's res.json() call with a raw parse error
+// ("Unexpected token 'A', "An error o"... is not valid JSON") instead of
+// a clean message. Every extra second of real headroom here reduces how
+// often that happens.
+export const maxDuration = 60;
 
 const REVIEWS_ANALYSIS_TTL_MS = 24 * 60 * 60 * 1000;
 
