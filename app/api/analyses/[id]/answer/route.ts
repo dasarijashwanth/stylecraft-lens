@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis, mergeAnalysisContext } from "@/lib/db/analyses";
+import { inngest } from "@/lib/inngest/client";
 
 // Answers a paused Product Identification question (see
-// lib/product-identification.ts's needsUserInput gate). Merges the
-// answer into context.category and clears pending_question — phase stays
-// where it is, so the next POST .../continue retries identification,
-// which now trusts the user-supplied category directly rather than
-// pausing again.
+// lib/product-identification.ts's needsUserInput gate). Merges the answer
+// into context.category and clears pending_question, then fires
+// "analysis/answer.provided" so the Inngest orchestrator's durable
+// step.waitForEvent (lib/inngest/functions/analyze-product.ts) resumes and
+// retries identification — which now trusts the user-supplied category
+// directly rather than pausing again. The browser can be closed entirely
+// between asking and answering; the job resumes the instant this fires,
+// not because a client happens to be polling.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
@@ -25,6 +29,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     await mergeAnalysisContext(params.id, { category: answer.trim() });
+    await inngest.send({ name: "analysis/answer.provided", data: { jobId: params.id, answer: answer.trim() } });
     const analysis = await getAnalysis(params.id);
     return NextResponse.json({ analysis });
   } catch (error: any) {

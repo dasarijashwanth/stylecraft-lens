@@ -243,6 +243,82 @@ ALTER TABLE analysis_competitors ADD COLUMN IF NOT EXISTS evidence JSONB;
 ALTER TABLE document_fields ADD COLUMN IF NOT EXISTS owner TEXT DEFAULT 'Product Marketing';
 ALTER TABLE document_fields ADD COLUMN IF NOT EXISTS notes TEXT;
 
+-- Re-architecture onto Inngest durable background jobs: `analyses` becomes
+-- the unified job id (no separate job table — it's already the FK target
+-- for reports/analysis_competitors). `job_status` is the new unified
+-- running/partial_complete/complete/failed signal the status-polling
+-- endpoint and frontend read; the legacy `status` column keeps being
+-- written exactly as before so nothing already reading it breaks.
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS job_status VARCHAR(20) NOT NULL DEFAULT 'running';
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS total_searches INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS inngest_run_id TEXT;
+
+-- Per-task checkpointing for the Inngest-driven analysis pipeline. Each
+-- durable step writes its result here on completion; a retry (automatic or
+-- user-clicked) re-runs only rows with status='failed' — rows already
+-- 'done' are read back directly, never re-executed. This is the source of
+-- truth the status-polling endpoint and the section-level retry button
+-- read/write; Inngest's own step memoization is a secondary safety net,
+-- not a replacement for it (see lib/inngest/functions/analyze-product.ts).
+CREATE TABLE IF NOT EXISTS analysis_tasks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES analyses(id) ON DELETE CASCADE NOT NULL,
+    task_key VARCHAR(160) NOT NULL,
+    task_type VARCHAR(40) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    provider VARCHAR(40),
+    error_class VARCHAR(40),
+    error TEXT,
+    latency_ms INTEGER,
+    result JSONB,
+    inngest_run_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    started_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    UNIQUE (job_id, task_key)
+);
+CREATE INDEX IF NOT EXISTS analysis_tasks_job_idx ON analysis_tasks(job_id);
+CREATE INDEX IF NOT EXISTS analysis_tasks_status_idx ON analysis_tasks(job_id, status);
+CREATE INDEX IF NOT EXISTS analysis_tasks_admin_failures_idx ON analysis_tasks(status, provider, updated_at DESC) WHERE status = 'failed';
+
+-- Per-provider circuit breaker state (Rainforest/OpenAI web-search/etc.) —
+-- tripped after 5 consecutive failures, auto-resets 60s after opening.
+-- record_provider_result is a Postgres RPC (not a plain Supabase-JS
+-- read-then-write) because many concurrent Inngest step invocations across
+-- DIFFERENT users' jobs race to update the same provider row; a naive
+-- read-then-write would lose updates under real concurrency and silently
+-- under-count failures, defeating the breaker.
+CREATE TABLE IF NOT EXISTS provider_circuit_state (
+    provider VARCHAR(40) PRIMARY KEY,
+    state VARCHAR(20) NOT NULL DEFAULT 'closed',
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    opened_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION record_provider_result(p_provider VARCHAR, p_success BOOLEAN)
+RETURNS TABLE(state VARCHAR, consecutive_failures INTEGER) AS $$
+BEGIN
+  INSERT INTO provider_circuit_state (provider, state, consecutive_failures, updated_at)
+  VALUES (p_provider, 'closed', 0, now()) ON CONFLICT (provider) DO NOTHING;
+  IF p_success THEN
+    UPDATE provider_circuit_state SET consecutive_failures = 0, state = 'closed', opened_at = NULL, updated_at = now()
+    WHERE provider = p_provider;
+  ELSE
+    UPDATE provider_circuit_state SET
+      consecutive_failures = consecutive_failures + 1,
+      state = CASE WHEN consecutive_failures + 1 >= 5 THEN 'open' ELSE state END,
+      opened_at = CASE WHEN consecutive_failures + 1 >= 5 AND opened_at IS NULL THEN now() ELSE opened_at END,
+      updated_at = now()
+    WHERE provider = p_provider;
+  END IF;
+  RETURN QUERY SELECT provider_circuit_state.state, provider_circuit_state.consecutive_failures FROM provider_circuit_state WHERE provider = p_provider;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Enable RLS on all tables
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE analyses ENABLE ROW LEVEL SECURITY;
@@ -256,6 +332,8 @@ ALTER TABLE document_fields ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_field_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE product_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_generation_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE analysis_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE provider_circuit_state ENABLE ROW LEVEL SECURITY;
 
 -- Create Permissive RLS Policies (allows anyone to query/insert/update/delete for prototype stage)
 CREATE POLICY "Allow all operations for projects" ON projects FOR ALL USING (true) WITH CHECK (true);
@@ -270,3 +348,5 @@ CREATE POLICY "Allow all operations for document_fields" ON document_fields FOR 
 CREATE POLICY "Allow all operations for document_field_history" ON document_field_history FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for product_snapshots" ON product_snapshots FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for project_generation_state" ON project_generation_state FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for analysis_tasks" ON analysis_tasks FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations for provider_circuit_state" ON provider_circuit_state FOR ALL USING (true) WITH CHECK (true);

@@ -9,9 +9,9 @@ interface PhaseState {
   message: string;
 }
 
-// Phase 0 (Product Identification) runs before any competitor search —
-// added so every downstream phase keys off a VERIFIED category instead
-// of a hardcoded default (see lib/analysisEngine.ts / lib/product-identification.ts).
+// Mirrors app/api/analysis/[jobId]/status/route.ts's own PHASE_LABELS —
+// duplicated rather than imported since one lives in a client component and
+// the other in a route handler; keep them in sync if either changes.
 const PHASE_LABELS = [
   "Identifying the product",
   "Researching large brand competitors",
@@ -31,6 +31,18 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+interface StatusResponse {
+  jobId: string;
+  status: "running" | "partial_complete" | "complete" | "failed";
+  phase: { current: number; total: number; label: string };
+  tasks: { done: number; running: number; failed: number; pending: number };
+  sections: Record<string, string>;
+  totalSearches: number;
+  pendingQuestion: PendingQuestion | null;
+}
+
+const POLL_INTERVAL_MS = 2500;
+
 async function fetchJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   const data = await res.json();
@@ -38,31 +50,13 @@ async function fetchJson(url: string, init?: RequestInit) {
   return data;
 }
 
-// A single phase step occasionally runs long enough (slow AI/Rainforest
-// calls, a cold serverless start) to get killed by the platform's function
-// timeout before it returns a response — the fetch() just fails with a
-// network error, even though the step may have partially succeeded. Retrying
-// is safe: /continue always re-reads the current persisted phase and only
-// ever advances it by one, so a retry either resumes cleanly or repeats a
-// no-op. Without this, a single transient timeout permanently stranded the
-// analysis (confirmed happening in production — analyses stuck mid-phase
-// with no error recorded, since the failure never reached the server).
-async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, onRetry: (attempt: number) => void, retries = 2): Promise<any> {
-  let lastErr: any;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fetchJson(url, init);
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries) {
-        onRetry(attempt + 1);
-        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-      }
-    }
-  }
-  throw lastErr;
-}
-
+// Replaces the old fetchJsonWithRetry client-side retry loop and the
+// "Connection dropped — retrying (N)…" message it produced — the job now
+// runs entirely in Inngest's own durable infrastructure, immune to any one
+// HTTP request timing out. This component only ever reads state back from
+// the DB (via GET /api/analysis/:jobId/status); a dropped poll is silently
+// retried on the next interval tick, and the analysis itself is never
+// affected by whether anyone is watching.
 export function ProgressPanel({ analysisId, productName, onComplete, onError }: Props) {
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({
@@ -79,7 +73,9 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
-  const resumeRef = useRef<(() => void) | null>(null);
+  const pollRef = useRef<NodeJS.Timeout>();
+  const identityFetchedRef = useRef(false);
+  const settledRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,121 +84,98 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
       setElapsedSeconds(Math.floor((Date.now() - startTime.current) / 1000));
     }, 1000);
 
-    // The pipeline runs one phase per POST .../continue call — this loop
-    // drives it phase by phase. Since every phase is persisted server-side
-    // before this call returns, a page refresh mid-analysis just resumes
-    // from whatever phase is saved, instead of losing progress.
-    async function run() {
-      const results: any = {};
-      let searchesSoFar = 0;
+    async function fetchIdentityIfNeeded() {
+      if (identityFetchedRef.current) return;
+      try {
+        const { analysis } = await fetchJson(`/api/analyses/${analysisId}`);
+        if (analysis?.phase0_result && Object.keys(analysis.phase0_result).length) {
+          identityFetchedRef.current = true;
+          setIdentity(analysis.phase0_result);
+        }
+      } catch {
+        // non-fatal — the identity card is a nice-to-have during the run,
+        // it isn't needed for the pipeline itself to keep progressing.
+      }
+    }
+
+    async function settle(status: StatusResponse) {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      clearInterval(timerRef.current);
+      clearInterval(pollRef.current);
 
       try {
-        let { analysis } = await fetchJsonWithRetry(`/api/analyses/${analysisId}`, undefined, () => {});
-        if (analysis.phase0_result && Object.keys(analysis.phase0_result).length) {
-          results.identity = analysis.phase0_result;
-          setIdentity(analysis.phase0_result);
-          setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "complete", message: "Complete" } : p)));
+        const { analysis } = await fetchJson(`/api/analyses/${analysisId}`);
+        if (status.status === "failed") {
+          setPhases((prev) => prev.map((p) => (p.status === "running" ? { ...p, status: "error", message: analysis.error_message || "Analysis failed" } : p)));
+          onError(analysis.error_message || "Analysis failed");
+          return;
         }
-        if (analysis.phase1_result && Object.keys(analysis.phase1_result).length) {
-          results.phase1 = analysis.phase1_result;
-          setPhases((prev) => prev.map((p, i) => (i === 1 ? { ...p, status: "complete", message: "Complete" } : p)));
-        }
-        if (analysis.phase2_result && Object.keys(analysis.phase2_result).length) {
-          results.phase2 = analysis.phase2_result;
-          setPhases((prev) => prev.map((p, i) => (i === 2 ? { ...p, status: "complete", message: "Complete" } : p)));
-        }
-
-        while (!cancelled) {
-          if (analysis.status === "complete") {
-            setPhases((prev) => prev.map((p) => ({ ...p, status: "complete", message: "Complete" })));
-            onComplete({
-              identity: results.identity || identity,
-              phase1: results.phase1 || {},
-              phase2: results.phase2 || {},
-              phase3: analysis.phase3_result || results.phase3 || {},
-              productName,
-              totalSearches: searchesSoFar,
-              reportId: results.reportId,
-            });
-            return;
-          }
-          if (analysis.status === "failed") {
-            throw new Error(analysis.error_message || "Analysis failed");
-          }
-
-          // The pipeline can't tell what the product actually is —
-          // pause and let the user answer instead of guessing.
-          if (analysis.pending_question) {
-            setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "running", message: "Waiting for your answer…" } : p)));
-            await new Promise<void>((resolve) => { resumeRef.current = resolve; setPendingQuestion(analysis.pending_question); });
-            if (cancelled) return;
-            setPendingQuestion(null);
-            const refreshed = await fetchJsonWithRetry(`/api/analyses/${analysisId}`, undefined, () => {});
-            analysis = refreshed.analysis;
-            continue;
-          }
-
-          const runningIdx = analysis.phase; // 0, 1, 2, or 3 — the phase about to run
-          setPhases((prev) =>
-            prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
-          );
-
-          const { analysis: updated, step } = await fetchJsonWithRetry(
-            `/api/analyses/${analysisId}/continue`,
-            { method: "POST" },
-            (attempt) =>
-              setPhases((prev) =>
-                prev.map((p, i) => (i === runningIdx ? { ...p, message: `Connection dropped — retrying (${attempt})…` } : p))
-              )
-          );
-          if (cancelled) return;
-
-          searchesSoFar += step.totalSearches || 0;
-          setTotalSearches(searchesSoFar);
-
-          if (step.status === "failed") {
-            throw new Error(step.error || "Analysis failed");
-          }
-
-          if (step.pendingQuestion) {
-            analysis = updated;
-            continue;
-          }
-
-          if (step.phase === 1) {
-            results.identity = step.stepResult;
-            setIdentity(step.stepResult);
-          }
-          if (step.phase === 2) results.phase1 = step.stepResult;
-          if (step.phase === 3) results.phase2 = step.stepResult;
-          if (step.phase === 5) {
-            results.phase3 = step.stepResult;
-            results.reportId = step.reportId;
-          }
-
-          const completedIdx = step.phase === 5 ? 3 : step.phase - 1;
-          setPhases((prev) =>
-            prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
-          );
-
-          analysis = updated;
-        }
+        setPhases((prev) => prev.map((p) => ({ ...p, status: "complete", message: "Complete" })));
+        onComplete({
+          identity: analysis.phase0_result || identity || {},
+          phase1: analysis.phase1_result || {},
+          phase2: analysis.phase2_result || {},
+          phase3: analysis.phase3_result || {},
+          productName,
+          totalSearches: status.totalSearches,
+        });
       } catch (err: any) {
-        if (cancelled) return;
-        clearInterval(timerRef.current);
-        setPhases((prev) =>
-          prev.map((p) => (p.status === "running" ? { ...p, status: "error", message: err.message } : p))
-        );
         onError(err.message || "Analysis failed");
       }
     }
 
-    run();
+    async function poll() {
+      if (cancelled || settledRef.current) return;
+      try {
+        const status: StatusResponse = await fetchJson(`/api/analysis/${analysisId}/status`);
+        if (cancelled) return;
+
+        setTotalSearches(status.totalSearches);
+        setPendingQuestion(status.pendingQuestion);
+
+        const runningIdx = status.phase.current - 1;
+        setPhases((prev) =>
+          prev.map((p, i) => {
+            if (status.status === "failed" && i === runningIdx) return { ...p, status: "error", message: "Analysis failed" };
+            if (i < runningIdx) return { ...p, status: "complete", message: "Complete" };
+            if (i === runningIdx && (status.status === "running" || status.status === "partial_complete")) {
+              return {
+                ...p,
+                status: "running",
+                message: status.pendingQuestion ? "Waiting for your answer…" : "Running…",
+              };
+            }
+            return p;
+          })
+        );
+
+        // Phase 0 finished — fetch its result once so the identity card can
+        // render mid-run, same UX the old continue-loop gave for free by
+        // returning stepResult directly (the new status payload deliberately
+        // stays lightweight, so this is a one-time follow-up read instead).
+        if (status.sections["phase:0:identify_product"] === "done") {
+          fetchIdentityIfNeeded();
+        }
+
+        if (status.status === "complete" || status.status === "partial_complete" || status.status === "failed") {
+          await settle(status);
+        }
+      } catch {
+        // A single missed poll is not an error worth surfacing — the job
+        // keeps running server-side regardless; just try again next tick.
+      }
+    }
+
+    poll();
+    pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
       clearInterval(timerRef.current);
+      clearInterval(pollRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisId]);
 
   async function submitAnswer() {
@@ -216,7 +189,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
       });
       if (!res.ok) throw new Error("Failed to submit answer");
       setAnswerText("");
-      resumeRef.current?.();
+      setPendingQuestion(null);
     } catch (err) {
       // Leave the question visible — the user can retry submitting.
     } finally {
@@ -277,7 +250,9 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
       )}
 
       {/* Pause-and-ask: identification couldn't confidently determine the
-          category — never guess, ask the one question needed instead. */}
+          category — never guess, ask the one question needed instead. This
+          is now a durable server-side pause (step.waitForEvent) — closing
+          the tab and coming back still shows the same question. */}
       {pendingQuestion && (
         <div className="mx-5 mt-4 p-3.5 bg-warning/5 border border-warning/25 rounded-lg space-y-2">
           <div className="flex items-center gap-1.5 text-warning font-bold text-[11px]">

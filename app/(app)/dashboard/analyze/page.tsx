@@ -164,7 +164,7 @@ export default function AnalyzePage() {
         }).catch(() => {});
       }
 
-      const res = await fetch("/api/analyses", {
+      const res = await fetch("/api/analysis/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -184,7 +184,7 @@ export default function AnalyzePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to start analysis");
 
-      setAnalysisId(data.analysisId);
+      setAnalysisId(data.jobId);
       setViewState("running");
     } catch (err: any) {
       toast.error(err.message || "Failed to trigger analysis");
@@ -487,6 +487,7 @@ export default function AnalyzePage() {
       {/* VIEW 3: RESULTS PANEL */}
       {viewState === "results" && analysisResult && (
         <ResultsPanel
+          jobId={analysisId ?? undefined}
           analysis={analysisResult}
           onSaveAsReport={handleSaveAsReport}
           savingReport={savingReport}
