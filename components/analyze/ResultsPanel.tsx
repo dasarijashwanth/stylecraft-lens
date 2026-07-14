@@ -1,26 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CompetitorCard, type SectionState } from "./CompetitorCard";
+import { useState } from "react";
+import { CompetitorCard } from "./CompetitorCard";
 import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
-import type { ReviewAnalysis } from "@/lib/amazon-review-analysis";
-import type { ProductNewsResult } from "@/lib/product-news";
-import type { AmazonData } from "@/hooks/useAmazonProduct";
-import { resolveCacheKey } from "@/lib/product-cache-key";
-import { useAnalysisStatus } from "@/hooks/useAnalysisStatus";
-
-interface ResolvedSectionData {
-  product?: AmazonData | null;
-  features?: KeyFeaturesResult | null;
-  reviews?: ReviewAnalysis | null;
-  news?: ProductNewsResult | null;
-}
 
 interface ResultsPanelProps {
-  jobId?: string;
   analysis: {
     productName: string;
     totalSearches: number;
@@ -83,101 +70,14 @@ interface ResultsPanelProps {
   onNewAnalysis: () => void;
 }
 
-export function ResultsPanel({ jobId, analysis, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
+export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   const [exporting, setExporting] = useState(false);
-
-  // Single shared status poll for every CompetitorCard's four sections —
-  // replaces the old per-card on-mount fetch-through-lib/fetch-queue.ts
-  // pattern. The Inngest phase4 tasks (lib/inngest/functions/
-  // phase4-workers.ts) do the actual resolving server-side; this just
-  // watches analysis_tasks via GET /api/analysis/:jobId/status and, once a
-  // section shows "done", makes ONE follow-up fetch to the same cache-
-  // backed route that used to do the resolving — by then it's a fast
-  // cache read, not a recomputation.
-  const { status, retryTasks } = useAnalysisStatus(jobId);
-  const [sectionData, setSectionData] = useState<Record<string, ResolvedSectionData>>({});
-  const fetchedRef = useRef<Set<string>>(new Set());
-
-  const allCompetitors = useMemo(
-    () => [...(phase1.competitors ?? []), ...(phase2.competitors ?? [])],
-    [phase1.competitors, phase2.competitors]
-  );
-
-  const cacheKeyFor = (comp: any): string => {
-    const isValidAsin = /^[A-Z0-9]{10}$/i.test(comp.asin ?? "");
-    return resolveCacheKey(isValidAsin ? comp.asin.toUpperCase() : "", comp.name);
-  };
-
-  // Fetch the actual resolved content for any section that just turned
-  // "done" and hasn't been fetched yet — a single fast cache-hit read per
-  // section, not a poll target itself.
-  useEffect(() => {
-    if (!status) return;
-    for (const comp of allCompetitors) {
-      const cacheKey = cacheKeyFor(comp);
-      const isValidAsin = /^[A-Z0-9]{10}$/i.test(comp.asin ?? "");
-      const asinSegment = isValidAsin ? comp.asin.toUpperCase() : "NONE";
-
-      const fetchIfDone = async (taskKey: string, kind: keyof ResolvedSectionData, url: string) => {
-        if (!url || status.sections[taskKey] !== "done" || fetchedRef.current.has(taskKey)) return;
-        fetchedRef.current.add(taskKey);
-        try {
-          const res = await fetch(url);
-          if (!res.ok) return;
-          const data = await res.json();
-          setSectionData(prev => ({ ...prev, [cacheKey]: { ...prev[cacheKey], [kind]: data } }));
-        } catch {
-          fetchedRef.current.delete(taskKey);
-        }
-      };
-
-      fetchIfDone(`phase4:${cacheKey}:fetch_product_data`, "product", isValidAsin ? `/api/amazon/product/${asinSegment}` : "");
-      fetchIfDone(`phase4:${cacheKey}:fetch_reviews`, "reviews", `/api/amazon/reviews-analysis/${asinSegment}?productName=${encodeURIComponent(comp.name)}`);
-      fetchIfDone(`phase4:${cacheKey}:fetch_news`, "news", `/api/amazon/product-news/${asinSegment}?productName=${encodeURIComponent(comp.name)}&brand=${encodeURIComponent(comp.brand || "")}`);
-      fetchIfDone(`phase4:${cacheKey}:fetch_key_features`, "features", `/api/product-data/key-features/${asinSegment}?productName=${encodeURIComponent(comp.name)}`);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, allCompetitors]);
-
-  function sectionStateFor<T>(cacheKey: string, taskType: string, data: T | null | undefined): SectionState<T> {
-    const taskKey = `phase4:${cacheKey}:${taskType}`;
-    const detail = status?.taskDetails[taskKey];
-    return {
-      status: (detail?.status as SectionState<T>["status"]) ?? "pending",
-      error: detail?.error,
-      data,
-    };
-  }
-
-  function handleRetry(comp: any, taskType: "fetch_product_data" | "fetch_reviews" | "fetch_news" | "fetch_key_features") {
-    const cacheKey = cacheKeyFor(comp);
-    const taskKey = `phase4:${cacheKey}:${taskType}`;
-    fetchedRef.current.delete(taskKey);
-    retryTasks([taskKey]);
-  }
-
-  // The comparison table's Top Feature row reuses whatever Key Features
-  // data has already resolved for that competitor instead of running its
-  // own extraction — derived directly from the shared poll's fetched
-  // section data rather than a callback bubbled up from each card.
-  const phase1Features = useMemo(() => {
-    const out: Record<number, KeyFeaturesResult> = {};
-    (phase1.competitors ?? []).forEach((c, i) => {
-      const f = sectionData[cacheKeyFor(c)]?.features;
-      if (f) out[i] = f;
-    });
-    return out;
-  }, [phase1.competitors, sectionData]);
-
-  const phase2Features = useMemo(() => {
-    const out: Record<number, KeyFeaturesResult> = {};
-    (phase2.competitors ?? []).forEach((c, i) => {
-      const f = sectionData[cacheKeyFor(c)]?.features;
-      if (f) out[i] = f;
-    });
-    return out;
-  }, [phase2.competitors, sectionData]);
+  // Populated as each CompetitorCard's own Key Features fetch resolves, so
+  // the comparison table's Top Feature row can reuse real cited data
+  // instead of re-running the resolver a second time.
+  const [phase1Features, setPhase1Features] = useState<Record<number, KeyFeaturesResult>>({});
+  const [phase2Features, setPhase2Features] = useState<Record<number, KeyFeaturesResult>>({});
 
   const handleExportPDF = async () => {
     setExporting(true);
@@ -534,22 +434,9 @@ export function ResultsPanel({ jobId, analysis, onSaveAsReport, savingReport, on
         </div>
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
-          {phase1.competitors?.map((comp, i) => {
-            const cacheKey = cacheKeyFor(comp);
-            const data = sectionData[cacheKey] ?? {};
-            return (
-              <CompetitorCard
-                key={i}
-                competitor={comp}
-                tier="legacy"
-                live={sectionStateFor(cacheKey, "fetch_product_data", data.product)}
-                features={sectionStateFor(cacheKey, "fetch_key_features", data.features)}
-                reviews={sectionStateFor(cacheKey, "fetch_reviews", data.reviews)}
-                news={sectionStateFor(cacheKey, "fetch_news", data.news)}
-                onRetry={(taskType) => handleRetry(comp, taskType)}
-              />
-            );
-          })}
+          {phase1.competitors?.map((comp, i) => (
+            <CompetitorCard key={i} competitor={comp} tier="legacy" onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+          ))}
         </div>
 
         <div className="pt-4 border-t border-border/40">
@@ -571,22 +458,9 @@ export function ResultsPanel({ jobId, analysis, onSaveAsReport, savingReport, on
         </div>
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
-          {phase2.competitors?.map((comp, i) => {
-            const cacheKey = cacheKeyFor(comp);
-            const data = sectionData[cacheKey] ?? {};
-            return (
-              <CompetitorCard
-                key={i}
-                competitor={comp}
-                tier="emerging"
-                live={sectionStateFor(cacheKey, "fetch_product_data", data.product)}
-                features={sectionStateFor(cacheKey, "fetch_key_features", data.features)}
-                reviews={sectionStateFor(cacheKey, "fetch_reviews", data.reviews)}
-                news={sectionStateFor(cacheKey, "fetch_news", data.news)}
-                onRetry={(taskType) => handleRetry(comp, taskType)}
-              />
-            );
-          })}
+          {phase2.competitors?.map((comp, i) => (
+            <CompetitorCard key={i} competitor={comp} tier="emerging" onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+          ))}
         </div>
 
         <div className="pt-4 border-t border-border/40">
