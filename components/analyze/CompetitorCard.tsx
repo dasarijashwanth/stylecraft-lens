@@ -91,7 +91,13 @@ function TimeoutChip({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-const SECTION_TIMEOUT_MS = 20_000;
+// Must safely exceed every section route's own maxDuration (key-features:
+// 55s, reviews-analysis/product-news: 45s — see those routes' exports) or
+// this client-side abort fires before the server-side work even has a
+// chance to finish. Confirmed live: with the old 20s value, real
+// successful responses (verified real data, not errors) were arriving at
+// 33-45s and getting thrown away as "timed out" by this timer alone.
+const SECTION_TIMEOUT_MS = 58_000;
 
 async function fetchWithTimeout(url: string): Promise<Response> {
   const controller = new AbortController();
