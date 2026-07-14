@@ -14,17 +14,26 @@ import { callOpenAiForJson, hasOpenAIKey } from "./openai";
 export async function callAiForJson<T = any>(
   systemInstruction: string,
   userContent: string,
-  label: string
+  label: string,
+  opts?: { webSearch?: boolean; maxToolCalls?: number; timeoutMs?: number }
 ): Promise<T | null> {
   if (hasOpenAIKey) {
-    const result = await callOpenAiForJson<T>(systemInstruction, userContent, label, { timeoutMs: 25_000 });
+    const result = await callOpenAiForJson<T>(systemInstruction, userContent, label, {
+      timeoutMs: opts?.timeoutMs ?? 25_000,
+      webSearch: opts?.webSearch,
+      maxToolCalls: opts?.maxToolCalls,
+    });
     if (result) return result;
   }
   if (hasGeminiKey) {
     try {
       const message = await genAI.models.generateContent({
         model: GEMINI_MODEL,
-        config: { systemInstruction, maxOutputTokens: 8192 },
+        config: {
+          systemInstruction,
+          maxOutputTokens: 8192,
+          ...(opts?.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
+        },
         contents: userContent,
       });
       return JSON.parse(cleanJsonString(message.text || "{}"));
@@ -38,7 +47,8 @@ export async function callAiForJson<T = any>(
 export async function callAiForFields(
   systemInstruction: string,
   userContent: string,
-  label: string
+  label: string,
+  opts?: { webSearch?: boolean; maxToolCalls?: number; timeoutMs?: number }
 ): Promise<Record<string, { answer: string; source: string }> | null> {
-  return callAiForJson(systemInstruction, userContent, label);
+  return callAiForJson(systemInstruction, userContent, label, opts);
 }

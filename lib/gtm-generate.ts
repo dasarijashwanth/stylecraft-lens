@@ -1,11 +1,16 @@
 // Core GTM field-generation pipeline — shared by the full-document generate
-// route and the single-field regenerate route. Fix 1's grounding/hierarchy
-// rules live here: project record > project documents > N/A (web enrichment
-// deferred — see WEB_ELIGIBLE_FIELD_IDS in gtm-field-schema.ts).
+// route and the single-field regenerate route. Source priority: project
+// record > project documents (TDS/Sales Kit/Competitive Analysis) > real
+// web search (OpenAI's native web_search tool, same trust model already
+// proven in lib/analysisEngine.ts/lib/product-news.ts) > N/A. Every one of
+// the 74 fields is eligible for the web tier now — previously only 7 were
+// (the rest were contractually forced to N/A the moment the project's own
+// documents didn't already contain the spec), which was the main reason
+// most fields never completed.
 import { callAiForFields } from "./ai-json-call";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
-import { GTM_FIELD_SCHEMA, GtmField, GtmFieldAnswer, GtmFieldSource, WEB_ELIGIBLE_FIELD_IDS } from "./gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
 import { deriveFieldsFromSources, ProjectRecord } from "./gtm-derive";
 import { verifyGrounding, checkConsistency, SourceTexts } from "./gtm-grounding";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
@@ -18,6 +23,16 @@ import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documen
 // generateAllFields returns, so the boilerplate-guard retry pass below
 // bails out before actually hitting the platform limit.
 const PIPELINE_TIME_BUDGET_MS = 45_000;
+
+// The main call now carries real web search across all 74 fields (not the
+// old docs-only, 25s-timeout call) — confirmed live that 25s was too tight
+// even for the docs-only version and was silently truncating/timing out,
+// with every failure swallowed into a misleading "N/A" (callOpenAiForJson
+// catches all errors and returns null — see lib/openai.ts). 38s leaves
+// real room, within the 60s route budget, for the second-chance web
+// fallback pass and the written-field quality-guard retry pass that both
+// still need to run afterward, plus the DB writes back in the route handler.
+const MAIN_CALL_TIMEOUT_MS = 38_000;
 
 export interface GtmSources {
   project: ProjectRecord;
@@ -62,8 +77,8 @@ Rules:
 - Answer every field using ONLY the labeled sources provided below. Cite the source per field.
 - HARD-GROUNDED fields (specs: dimensions, weight, RPM, run time, voltage, cord length, blade names, quantities, colors, pricing, warranty, box/pallet data, included-in-box items): copy values exactly as they appear in the sources, units included. If a value is not present in any source, return "N/A". NEVER estimate, infer, or reuse a value from another product.
 - WRITTEN fields (positioning statement, story, reason to buy, expert tip, messaging): write them specifically about THIS product, referencing its actual named features and specs from the sources. Do not produce generic copy that could apply to any similar product — every claim must trace back to a real fact in the sources.
-- Source priority, highest first: the Project Record > Competitive Analysis / TDS / Sales Kit documents. Never use general/world knowledge or web search.
-- Bias: specs/motor/blades/packaging/included-in-box come from TDS; positioning/pricing tiers/USPs/upsell/expert tip come from Sales Kit; COMPS/buying-guide/competitive context come from Competitive Analysis.
+- Source priority, highest first: the Project Record > Competitive Analysis / TDS / Sales Kit documents > real web search. If a field's answer is not in the labeled sources below, use web search to find real, verifiable public information about this EXACT product (its official product page, retailer listings, spec sheets) — never general/world knowledge, never a guess, and never a value from a different or similar product. Mark any web-sourced field's "source" as "web" in your JSON response. Only return "N/A" if the answer genuinely cannot be found in the sources OR via a real web search.
+- Bias: specs/motor/blades/packaging/included-in-box come from TDS; positioning/pricing tiers/USPs/upsell/expert tip come from Sales Kit; COMPS/buying-guide/competitive context come from Competitive Analysis. Fields still missing after checking all of these are exactly the ones worth a web search.
 
 REQUIRED DEPTH for these specific fields (this describes FORMAT AND DEPTH ONLY — never copy this wording, it is not about the current product):
 - why_creating_item: a numbered list of 4-6 concrete reasons (consumer need, competitive gap, identity/customization, credibility, system completion), each one sentence, specific to this product's real facts.
@@ -78,9 +93,9 @@ FIELD SCHEMA (id [section] (grounded|written): question):
 ${fieldList}
 
 Return ONLY valid JSON — no markdown, no explanation — keyed by field id:
-{ "<field_id>": { "answer": "...", "source": "project_record" | "competitive_analysis" | "tds" | "sales_kit" | "multiple" | "none" } }
+{ "<field_id>": { "answer": "...", "source": "project_record" | "competitive_analysis" | "tds" | "sales_kit" | "web" | "multiple" | "none" } }
 
-If the sources do not contain the answer for a field, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.`;
+If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.`;
 }
 
 function buildUserContent(sourceTexts: SourceTexts) {
@@ -101,8 +116,15 @@ ${sourceTexts.salesKit}
 </SALES_KIT>`;
 }
 
-function callAi(systemInstruction: string, userContent: string) {
-  return callAiForFields(systemInstruction, userContent, "GTM");
+function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number }) {
+  // maxToolCalls: 10 — up to 74 fields can each need their own search;
+  // bounded so one call can't run away the way an uncapped web_search call
+  // did in the prior (now-removed) Anthropic integration.
+  return callAiForFields(systemInstruction, userContent, "GTM", {
+    webSearch: true,
+    maxToolCalls: 10,
+    timeoutMs: opts?.timeoutMs ?? MAIN_CALL_TIMEOUT_MS,
+  });
 }
 
 function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: string; source: string }> | null, derived: Record<string, GtmFieldAnswer>): { field: GtmFieldAnswer; fromAi: boolean } {
@@ -141,7 +163,13 @@ export async function generateAllFields(productName: string, sources: GtmSources
   for (const f of schema) {
     const { field: value, fromAi } = mergeField(f, aiRaw, derived);
     merged[f.id] = value;
-    if (fromAi) aiSourcedIds.add(f.id);
+    // Web-sourced answers are real (OpenAI's own web_search tool actually
+    // searched and read a page — same trust model as
+    // lib/analysisEngine.ts/lib/product-news.ts), but they won't literally
+    // appear in the internal project/TDS/sales-kit JSON blocks the
+    // substring check below compares against — excluding them here avoids
+    // rejecting genuinely-correct web answers as "ungrounded".
+    if (fromAi && value.source !== "web") aiSourcedIds.add(f.id);
   }
 
   const groundedAiOnly = verifyGrounding(merged, schema.filter(f => aiSourcedIds.has(f.id)), sourceTextBlocks(sourceTexts));
@@ -177,11 +205,16 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const systemInstruction = buildSystemInstruction(productName, [schemaField]);
   const userContent = buildUserContent(sourceTexts);
 
-  const aiRaw = await callAi(systemInstruction, userContent);
+  // A single field needs far less search than the full 74-field sweep —
+  // this route's own maxDuration is 45s, and the web-fallback/quality-guard
+  // passes below still need their share of it.
+  const aiRaw = await callAi(systemInstruction, userContent, { timeoutMs: 30_000 });
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
   const { field: mergedField, fromAi } = mergeField(schemaField, aiRaw, derived);
 
-  const grounded = fromAi ? verifyGrounding({ [fieldId]: mergedField }, [schemaField], sourceTextBlocks(sourceTexts))[fieldId] : mergedField;
+  const grounded = fromAi && mergedField.source !== "web"
+    ? verifyGrounding({ [fieldId]: mergedField }, [schemaField], sourceTextBlocks(sourceTexts))[fieldId]
+    : mergedField;
 
   if (schemaField.kind === "written") {
     const guarded = { [fieldId]: grounded };
@@ -193,21 +226,24 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   return grounded;
 }
 
-// Batched Gemini native-Google-Search call (same tools:[{googleSearch:{}}]
-// pattern already proven in lib/analysisEngine.ts) for fields still
-// unanswered after project record + project documents — the source
-// hierarchy's last tier before N/A, per lib/gtm-field-schema.ts's
-// WEB_ELIGIBLE_FIELD_IDS whitelist. One call covers every eligible N/A
-// field at once, never one call per field, and is skipped once the
-// pipeline is close to Vercel's 60s cap — same time-budget discipline as
-// the boilerplate-retry pass below.
+// Second-chance web search for whatever's STILL unanswered after the main
+// call (which now already tries web search itself, across all 74 fields —
+// this covers anything that call's own tool-call budget didn't reach).
+// Every field is eligible now, not just a small whitelist — the whitelist
+// was the main reason most fields never completed; the remaining 67 were
+// contractually forced to N/A whenever the project's own documents didn't
+// already have the spec, even though a real web search plainly could have
+// found it. One call covers every eligible N/A field at once, never one
+// call per field, and is skipped once the pipeline is close to Vercel's
+// 60s cap — same time-budget discipline as the boilerplate-retry pass
+// below.
 async function applyWebSearchFallback(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
   productName: string,
   pipelineStart: number
 ) {
-  const eligible = schema.filter(f => WEB_ELIGIBLE_FIELD_IDS.has(f.id) && (!fields[f.id] || fields[f.id].source === "none" || fields[f.id].answer.toUpperCase() === "N/A"));
+  const eligible = schema.filter(f => !fields[f.id] || fields[f.id].source === "none" || fields[f.id].answer.toUpperCase() === "N/A");
   if (eligible.length === 0 || (!hasOpenAIKey && !hasGeminiKey)) return;
   if (Date.now() - pipelineStart > PIPELINE_TIME_BUDGET_MS) return;
 
@@ -234,11 +270,14 @@ ${fieldList}`;
           // the same lesson learned from the prior, now-removed Anthropic
           // integration).
           tools: [{ type: "web_search" as any }],
-          max_tool_calls: 5,
+          max_tool_calls: 6,
           instructions: systemInstruction,
           input: `Product: ${productName}`,
         } as any,
-        { timeout: 25_000 }
+        // Short — this only runs at all if PIPELINE_TIME_BUDGET_MS above
+        // left room, and the quality-guard retry pass still needs its
+        // share of whatever's left in the route's 60s ceiling.
+        { timeout: 15_000 }
       );
       const queries: string[] = (response.output || [])
         .filter((o: any) => o.type === "web_search_call")
@@ -363,7 +402,10 @@ async function guardWrittenFieldsQuality(
         generic: `The previous draft read like generic, could-apply-to-any-product marketing filler.`,
       }[reason.kind];
       const retryInstruction = `${buildSystemInstruction(productName, [f])}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
-      const retryRaw = await callAi(retryInstruction, userContent);
+      // These retries run concurrently for up to 9 written fields — a
+      // shorter timeout each keeps the whole Promise.all safely inside the
+      // pipeline's remaining time budget (checked just above this block).
+      const retryRaw = await callAi(retryInstruction, userContent, { timeoutMs: 20_000 });
       const retryAnswer = retryRaw?.[f.id]?.answer?.trim();
 
       const exemplar = GENERIC_EXEMPLARS[f.id];

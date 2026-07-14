@@ -11,8 +11,9 @@
 // Source hierarchy (highest authority first): the project record itself
 // (name, description, category, motorTech, keyDiff, pricePoint,
 // companyContext — entered directly by the team) > project documents
-// (Competitive Analysis, TDS, Sales Kit) > web (deferred, see
-// WEB_ELIGIBLE_FIELD_IDS in gtm-field-schema.ts) > N/A.
+// (Competitive Analysis, TDS, Sales Kit) > real web search (all 74 fields
+// are eligible — see lib/gtm-generate.ts's callAi/applyWebSearchFallback)
+// > N/A.
 //
 // `tds` is a flat field_id -> answer map (TDS's document_fields rows,
 // see lib/db/documents.ts) — TDS's spec-field ids are deliberately

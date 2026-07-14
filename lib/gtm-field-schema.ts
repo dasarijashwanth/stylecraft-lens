@@ -30,19 +30,6 @@ const WRITTEN_FIELD_IDS = new Set([
   "expert_tip",
 ]);
 
-// Fix 3 (deferred): the only fields ever allowed to fall back to web search
-// once that's wired up. Every other field must come from the project record
-// or project documents, or be N/A — never the web.
-export const WEB_ELIGIBLE_FIELD_IDS = new Set([
-  "core_consumer",
-  "why_creating_item",
-  "hair_type",
-  "comps",
-  "comps_buying_guide",
-  "certification_needed",
-  "rating_label",
-]);
-
 function field(id: string, section: string, question: string): GtmField {
   return { id, section, question, kind: WRITTEN_FIELD_IDS.has(id) ? "written" : "grounded" };
 }
