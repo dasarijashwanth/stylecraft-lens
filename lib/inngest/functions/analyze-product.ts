@@ -68,14 +68,21 @@ async function recomputeJobStatus(jobId: string): Promise<void> {
 }
 
 // A single durable step: figure out which phase is about to run (before
-// calling, so the checkpoint's task_key matches what actually executes),
+// calling, so the checkpoint's task_key(s) match what actually executes),
 // mark it running, call runAnalysisStep exactly once, mark the result.
+//
+// Phase 1 is a special case: lib/analysisEngine.ts now runs established +
+// emerging discovery CONCURRENTLY inside that one call (previously two
+// sequential DB-phase steps) since neither's real AI prompt ever actually
+// depended on the other's output — this saves ~35-40s of wall-clock time.
+// Both task_key rows still get checkpointed together here so the UI's two
+// distinct rows ("Researching large brand competitors" / "...indie &
+// emerging...") both flip running -> done/failed in lockstep, matching
+// what's actually happening under the hood.
 async function runOnePhaseStep(jobId: string): Promise<AnalysisStepResult> {
   const before = await supabaseAdmin.from("analyses").select("phase, status, pending_question").eq("id", jobId).single();
   if (before.error) throw before.error;
   const phase = before.data.phase as number;
-  const taskKey = taskKeyForPhase(phase);
-  const taskType = PHASE_TASK_TYPES[phase] ?? "unknown";
 
   // Already terminal or paused on a question — nothing to checkpoint,
   // runAnalysisStep itself no-ops correctly in both cases.
@@ -83,14 +90,17 @@ async function runOnePhaseStep(jobId: string): Promise<AnalysisStepResult> {
     return runAnalysisStep(jobId);
   }
 
-  await markTaskRunning(jobId, taskKey, taskType);
+  const taskKeys = phase === 1 ? ["phase:1:discover_established", "phase:2:discover_emerging"] : [taskKeyForPhase(phase)];
+  const taskTypes = phase === 1 ? ["discover_established", "discover_emerging"] : [PHASE_TASK_TYPES[phase] ?? "unknown"];
+
+  await Promise.all(taskKeys.map((k, i) => markTaskRunning(jobId, k, taskTypes[i])));
   const start = Date.now();
   try {
     const result = await runAnalysisStep(jobId);
     if (result.status === "failed") {
-      await markTaskFailed(jobId, taskKey, result.error || "Unknown error", { latencyMs: Date.now() - start });
+      await Promise.all(taskKeys.map(k => markTaskFailed(jobId, k, result.error || "Unknown error", { latencyMs: Date.now() - start })));
     } else {
-      await markTaskDone(jobId, taskKey, { phase: result.phase, totalSearches: result.totalSearches }, { latencyMs: Date.now() - start });
+      await Promise.all(taskKeys.map(k => markTaskDone(jobId, k, { phase: result.phase, totalSearches: result.totalSearches }, { latencyMs: Date.now() - start })));
     }
     // total_searches is otherwise never persisted (updateAnalysisPhase
     // intentionally doesn't write it — see lib/db/analyses.ts:106-107) —
@@ -105,7 +115,7 @@ async function runOnePhaseStep(jobId: string): Promise<AnalysisStepResult> {
     }
     return result;
   } catch (err: any) {
-    await markTaskFailed(jobId, taskKey, err?.message || "Unknown error", { latencyMs: Date.now() - start });
+    await Promise.all(taskKeys.map(k => markTaskFailed(jobId, k, err?.message || "Unknown error", { latencyMs: Date.now() - start })));
     throw err;
   }
 }

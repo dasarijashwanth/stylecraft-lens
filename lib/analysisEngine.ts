@@ -370,6 +370,28 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
   return [];
 }
 
+// Established (Phase 1) and emerging (Phase 2) discovery now run
+// concurrently rather than sequentially (see the merged record.phase===1
+// branch above), so Phase 2 no longer has Phase 1's actual picks to
+// exclude upfront — this catches the rare case where both searches
+// independently converge on the same real product afterward, instead.
+// Matching ASIN is the reliable signal; a normalized-name match is a
+// fallback for the no-ASIN case. Dropping the emerging-tier duplicate
+// (never the established one) keeps the ordering a user would expect.
+function dedupeAcrossTiers(emerging: any[], established: any[]): any[] {
+  const establishedAsins = new Set(established.map((c: any) => (c.asin || "").toUpperCase()).filter(Boolean));
+  const establishedNames = established.map((c: any) => normalizeWhitespace(`${c.brand || ""} ${c.name || ""}`));
+  return emerging.filter((c: any) => {
+    if (c.asin && establishedAsins.has(String(c.asin).toUpperCase())) return false;
+    const name = normalizeWhitespace(`${c.brand || ""} ${c.name || ""}`);
+    return !establishedNames.some(en => en && name && textSimilarity(en, name) > 0.85);
+  });
+}
+
+function normalizeWhitespace(s: string): string {
+  return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 // `cleaned` also drops any AI-returned competitor whose own name/feature
 // text doesn't match the identified category (lib/category-synonyms.ts) —
 // a clipper can never survive into a hair-dryer analysis, even if the AI
@@ -686,48 +708,53 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
     if (record.phase === 1) {
       // ----------------------------------------------------
-      // PHASE 1: ESTABLISHED-COMPETITOR DISCOVERY
+      // PHASE 1+2: ESTABLISHED + EMERGING COMPETITOR DISCOVERY (concurrent)
       // ----------------------------------------------------
+      // These used to run as two separate sequential phases, but neither's
+      // real AI prompt ever actually depended on the other's output —
+      // Phase 2's prompt excludes established brands using a static
+      // per-category hint (getKnownBrandsHint), not phase 1's live
+      // results; phase1Result was only ever read by the offline mock
+      // fallback. Running them concurrently saves ~35-40s of real wall-
+      // clock time with no prompt/quality change. The one real trade-off:
+      // without phase 1's actual picks to exclude, the two searches can
+      // rarely converge on the same product — caught by dedupeAcrossTiers
+      // below rather than prevented upfront (same "fewer real results is
+      // fine, inventing fake ones is not" philosophy used everywhere else
+      // in this pipeline, applied to duplicates instead of fabrication).
       if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
 
-      const result: any = await withAiFallback(
-        "Phase 1",
-        hasGeminiKey ? () => executePhase1Gemini(context, identityCard, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, onSearchUsed) : null,
-        () => generateMockPhase1(context, identityCard)
-      );
+      const [establishedRaw, emergingRaw] = await Promise.all([
+        withAiFallback(
+          "Phase 1",
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, onSearchUsed) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, onSearchUsed) : null,
+          () => generateMockPhase1(context, identityCard)
+        ),
+        withAiFallback(
+          "Phase 2",
+          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, onSearchUsed) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, onSearchUsed) : null,
+          () => generateMockPhase2(context, identityCard, null)
+        ),
+      ]);
 
-      result.competitors = cleanCompetitors(result.competitors, "legacy", identityCard);
+      const established: any = establishedRaw;
+      const emerging: any = emergingRaw;
+      established.competitors = cleanCompetitors(established.competitors, "legacy", identityCard);
+      emerging.competitors = dedupeAcrossTiers(cleanCompetitors(emerging.competitors, "emerging", identityCard), established.competitors);
+
       if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+        [established.competitors, emerging.competitors] = await Promise.all([
+          enrichCompetitorsWithRainforest(established.competitors),
+          enrichCompetitorsWithRainforest(emerging.competitors),
+        ]);
       }
-      webSearchCount += result.web_searches_performed || 0;
+      webSearchCount += (established.web_searches_performed || 0) + (emerging.web_searches_performed || 0);
 
-      await updateAnalysisPhase(analysisId, 2, "phase1_result", result, webSearchCount);
-      return { analysisId, phase: 2, status: "running", stepResult: result, totalSearches: webSearchCount };
-    }
-
-    if (record.phase === 2) {
-      // ----------------------------------------------------
-      // PHASE 2: EMERGING-COMPETITOR DISCOVERY
-      // ----------------------------------------------------
-      if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
-
-      const result: any = await withAiFallback(
-        "Phase 2",
-        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, onSearchUsed) : null,
-        () => generateMockPhase2(context, identityCard, phase1Result)
-      );
-
-      result.competitors = cleanCompetitors(result.competitors, "emerging", identityCard);
-      if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
-      }
-      webSearchCount += result.web_searches_performed || 0;
-
-      await updateAnalysisPhase(analysisId, 3, "phase2_result", result, webSearchCount);
-      return { analysisId, phase: 3, status: "running", stepResult: result, totalSearches: webSearchCount };
+      await updateAnalysisPhase(analysisId, 1, "phase1_result", established, webSearchCount);
+      await updateAnalysisPhase(analysisId, 3, "phase2_result", emerging, webSearchCount);
+      return { analysisId, phase: 3, status: "running", stepResult: { established, emerging }, totalSearches: webSearchCount };
     }
 
     if (record.phase === 3) {

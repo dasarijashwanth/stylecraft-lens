@@ -134,17 +134,27 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
         setTotalSearches(status.totalSearches);
         setPendingQuestion(status.pendingQuestion);
 
-        const runningIdx = status.phase.current - 1;
+        // Driven directly from each phase's own task_key rather than the
+        // single coarse phase.current pointer — established-competitor and
+        // emerging-competitor discovery now run concurrently in one
+        // backend step (lib/analysisEngine.ts), so `analysis.phase` jumps
+        // straight from 1 to 3 and never passes through an intermediate
+        // "2" a single running index could represent. Reading each row's
+        // real task status instead means both rows correctly show
+        // running/complete together, matching what's actually happening.
+        const TASK_KEYS = [
+          "phase:0:identify_product",
+          "phase:1:discover_established",
+          "phase:2:discover_emerging",
+          "phase:3:synthesize",
+        ];
         setPhases((prev) =>
           prev.map((p, i) => {
-            if (status.status === "failed" && i === runningIdx) return { ...p, status: "error", message: "Analysis failed" };
-            if (i < runningIdx) return { ...p, status: "complete", message: "Complete" };
-            if (i === runningIdx && (status.status === "running" || status.status === "partial_complete")) {
-              return {
-                ...p,
-                status: "running",
-                message: status.pendingQuestion ? "Waiting for your answer…" : "Running…",
-              };
+            const taskStatus = status.sections[TASK_KEYS[i]];
+            if (taskStatus === "failed") return { ...p, status: "error", message: "Analysis failed" };
+            if (taskStatus === "done") return { ...p, status: "complete", message: "Complete" };
+            if (taskStatus === "running") {
+              return { ...p, status: "running", message: status.pendingQuestion ? "Waiting for your answer…" : "Running…" };
             }
             return p;
           })
