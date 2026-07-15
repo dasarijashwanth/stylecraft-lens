@@ -86,20 +86,33 @@ async function withSupabaseCache<T>(asin: string, cacheType: string, ttlMs: numb
   return fresh;
 }
 
-async function fetchWithRetry(url: string, attempts = 3): Promise<any> {
+// Not-retryable class — 401/402/403 (bad key, out of credits, forbidden)
+// can never be fixed by retrying. Thrown as this specific type so the loop
+// below can tell it apart from a transient network/5xx error and fail
+// immediately instead of burning through every remaining attempt's
+// backoff delay — every caller's fallback chain (web search tiers) then
+// kicks in right away instead of each Rainforest call wasting several
+// seconds retrying a doomed request.
+class RainforestAuthError extends Error {}
+
+async function fetchWithRetry(url: string, attempts = 2): Promise<any> {
   let lastErr: any;
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await fetch(url, { next: { revalidate: 3600 } });
+      if (res.status === 401 || res.status === 402 || res.status === 403) {
+        throw new RainforestAuthError(`HTTP ${res.status} (not retryable)`);
+      }
       if (res.status === 429 || res.status >= 500) {
         lastErr = new Error(`HTTP ${res.status}`);
-        await new Promise(r => setTimeout(r, 500 * Math.pow(3, i)));
+        if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * Math.pow(3, i)));
         continue;
       }
       return await res.json();
     } catch (err) {
+      if (err instanceof RainforestAuthError) throw err;
       lastErr = err;
-      await new Promise(r => setTimeout(r, 500 * Math.pow(3, i)));
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * Math.pow(3, i)));
     }
   }
   throw lastErr;
