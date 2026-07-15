@@ -19,22 +19,23 @@ import { GENERIC_EXEMPLARS } from "./gtm-reference-exemplars";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
-// This leaves headroom for the DB writes that still happen after
-// generateAllFields returns, so the boilerplate-guard retry pass below
-// bails out before actually hitting the platform limit.
-const PIPELINE_TIME_BUDGET_MS = 45_000;
+// Confirmed live that a 45s/45s split here still produced a hard 504 (the
+// whole route killed by Vercel, worse than a graceful per-field N/A) —
+// tightened so the fallback/quality-guard passes reliably bail out with
+// real time still left before the platform limit, rather than racing it.
+const PIPELINE_TIME_BUDGET_MS = 30_000;
 
 // A single call covering all 74 fields with web search enabled was
 // confirmed live to time out even at 38s (OpenAI's own request timeout) —
 // once genuine web search is involved across that many fields, one call
 // can't reliably finish inside any budget that still leaves room for the
 // fallback/quality-guard passes and DB writes within the route's 60s
-// ceiling. Split into one concurrent call PER SECTION instead (10
-// sections, ~7 fields each) — each section's own scope is small enough to
-// realistically finish well inside its timeout, and running them via
-// Promise.all means total wall-clock is bounded by the slowest section,
-// not the sum of all ten.
-const SECTION_CALL_TIMEOUT_MS = 45_000;
+// ceiling. Split into small, evenly-sized chunks instead (see
+// FIELDS_PER_CHUNK below) — each chunk's scope is small enough to
+// realistically finish well inside its own timeout, and running them all
+// via Promise.all means total wall-clock is bounded by the slowest chunk,
+// not the sum of all of them.
+const SECTION_CALL_TIMEOUT_MS = 28_000;
 
 export interface GtmSources {
   project: ProjectRecord;
@@ -121,27 +122,29 @@ ${sourceTexts.salesKit}
 function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number; maxToolCalls?: number }) {
   return callAiForFields(systemInstruction, userContent, "GTM", {
     webSearch: true,
-    maxToolCalls: opts?.maxToolCalls ?? 4,
+    maxToolCalls: opts?.maxToolCalls ?? 3,
     timeoutMs: opts?.timeoutMs ?? SECTION_CALL_TIMEOUT_MS,
   });
 }
 
-// Runs one concurrent AI call per section (~7 fields each) instead of one
-// call for all 74 — see SECTION_CALL_TIMEOUT_MS above for why. Merges into
-// the same {fieldId: {answer, source}} shape the rest of the pipeline
-// already expects, so nothing downstream needs to know the call was split.
+// Fixed-size chunks rather than by-section: sections range from 2 fields
+// (Lids) to 22 (General) — confirmed live that grouping by section still
+// produced a hard 504 (Vercel killed the whole route at its 60s ceiling,
+// worse than a graceful per-field N/A), because the largest section alone
+// was still too much for one call. Small, evenly-sized chunks keep every
+// individual call's scope — and therefore its realistic completion time —
+// uniform regardless of how the schema happens to be organized. Merges
+// into the same {fieldId: {answer, source}} shape the rest of the
+// pipeline already expects, so nothing downstream needs to know the call
+// was split.
+const FIELDS_PER_CHUNK = 6;
+
 async function callAiPerSection(productName: string, schema: GtmField[], userContent: string): Promise<Record<string, { answer: string; source: string }> | null> {
-  const bySection = new Map<string, GtmField[]>();
-  for (const f of schema) {
-    if (!bySection.has(f.section)) bySection.set(f.section, []);
-    bySection.get(f.section)!.push(f);
-  }
+  const chunks: GtmField[][] = [];
+  for (let i = 0; i < schema.length; i += FIELDS_PER_CHUNK) chunks.push(schema.slice(i, i + FIELDS_PER_CHUNK));
 
   const results = await Promise.all(
-    Array.from(bySection.entries()).map(async ([section, fields]) => {
-      const raw = await callAi(buildSystemInstruction(productName, fields), userContent, { maxToolCalls: 6 });
-      return raw;
-    })
+    chunks.map(fields => callAi(buildSystemInstruction(productName, fields), userContent, { maxToolCalls: 3 }))
   );
 
   const merged: Record<string, { answer: string; source: string }> = {};
@@ -296,14 +299,14 @@ ${fieldList}`;
           // the same lesson learned from the prior, now-removed Anthropic
           // integration).
           tools: [{ type: "web_search" as any }],
-          max_tool_calls: 6,
+          max_tool_calls: 4,
           instructions: systemInstruction,
           input: `Product: ${productName}`,
         } as any,
         // Short — this only runs at all if PIPELINE_TIME_BUDGET_MS above
         // left room, and the quality-guard retry pass still needs its
         // share of whatever's left in the route's 60s ceiling.
-        { timeout: 15_000 }
+        { timeout: 10_000 }
       );
       const queries: string[] = (response.output || [])
         .filter((o: any) => o.type === "web_search_call")
