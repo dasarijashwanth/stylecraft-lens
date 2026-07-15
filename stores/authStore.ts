@@ -1,14 +1,8 @@
 import { create } from "zustand";
+import type { UserSession } from "@/lib/auth";
+import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
-export interface UserSession {
-  userId: string;
-  orgId: string;
-  email: string;
-  name: string;
-  avatarUrl: string;
-  role: "OWNER" | "ADMIN" | "MEMBER" | "VIEWER";
-  plan: "FREE" | "PRO" | "AGENCY" | "ENTERPRISE";
-}
+export type { UserSession };
 
 interface AuthState {
   user: UserSession | null;
@@ -36,8 +30,12 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
   logout: async () => {
-    // For mock, just clear user and redirect.
-    // For Clerk, we can redirect to sign out endpoint or sign out locally.
+    try {
+      await createSupabaseBrowserClient().auth.signOut();
+    } catch (e) {
+      // Best-effort — still clear local state and redirect even if the
+      // sign-out call itself fails (e.g. Supabase not configured locally).
+    }
     set({ user: null });
     window.location.href = "/sign-in";
   }

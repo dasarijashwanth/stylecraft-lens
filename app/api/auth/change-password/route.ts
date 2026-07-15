@@ -23,8 +23,15 @@ export async function POST(request: Request) {
 
     // Re-verify the current password before allowing a change — cheap,
     // worthwhile hardening against a left-open/stolen session silently
-    // taking over the account.
-    const { error: verifyError } = await supabase.auth.signInWithPassword({
+    // taking over the account. Uses a throwaway anon client rather than the
+    // cookie-bound request client, so this verification sign-in can never
+    // clobber the caller's existing session cookies mid-request.
+    const { createClient } = await import("@supabase/supabase-js");
+    const verifyClient = createClient(
+      (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/rest\/v1\/?$/, ""),
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+    );
+    const { error: verifyError } = await verifyClient.auth.signInWithPassword({
       email: user.email,
       password: currentPassword,
     });
@@ -33,16 +40,23 @@ export async function POST(request: Request) {
     }
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, { password: newPassword });
-    if (updateError) throw updateError;
+    if (updateError) {
+      console.error("change-password: updateUserById failed:", updateError);
+      return NextResponse.json({ error: updateError.message || "Failed to update password" }, { status: updateError.status || 400 });
+    }
 
     const { error: profileError } = await supabaseAdmin
       .from("profiles")
       .update({ must_change_password: false, updated_at: new Date().toISOString() })
       .eq("id", user.id);
-    if (profileError) throw profileError;
+    if (profileError) {
+      console.error("change-password: profiles update failed:", profileError);
+      return NextResponse.json({ error: profileError.message || "Failed to update profile" }, { status: 500 });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {
+    console.error("change-password: unexpected error:", err);
     return NextResponse.json({ error: err.message || "Failed to change password" }, { status: 500 });
   }
 }
