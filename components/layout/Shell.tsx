@@ -22,8 +22,8 @@ import { Modal } from "@/components/ui/Modal";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { isSignedIn, loading } = useAuth();
-  
+  const { isSignedIn, loading, user } = useAuth();
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -37,12 +37,17 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Redirect to sign-in if not signed in and loading is complete
+  // Redirect to sign-in if not signed in and loading is complete; force a
+  // password change before allowing access to anything else if the seeded
+  // admin hasn't replaced their temporary bootstrap password yet.
   useEffect(() => {
-    if (!loading && !isSignedIn) {
+    if (loading) return;
+    if (!isSignedIn) {
       router.push("/sign-in");
+    } else if (user?.mustChangePassword) {
+      router.push("/change-password");
     }
-  }, [loading, isSignedIn, router]);
+  }, [loading, isSignedIn, user, router]);
 
   // Fetch search index once when search opens
   useEffect(() => {

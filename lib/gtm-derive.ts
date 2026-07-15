@@ -31,14 +31,18 @@ export interface ProjectRecord {
   companyContext?: string | null;
 }
 
-function pick(answer: string | undefined | null, source: GtmFieldSource): GtmFieldAnswer | null {
+// Generalized over the source-tag type so callers outside GTM (e.g.
+// lib/pricing-analysis.ts's TargetPriceSource) can reuse the identical
+// "first non-empty, N/A-aware" priority-pick discipline instead of
+// reimplementing it.
+export function pick<S extends string>(answer: string | undefined | null, source: S): { answer: string; source: S } | null {
   const trimmed = (answer ?? "").toString().trim();
   if (!trimmed || trimmed.toUpperCase() === "N/A" || trimmed === "Not listed on product page") return null;
   return { answer: trimmed, source };
 }
 
 // First non-empty of a list of (value, source) candidates, in priority order.
-function firstOf(...candidates: [string | undefined | null, GtmFieldSource][]): GtmFieldAnswer | null {
+export function firstOf<S extends string>(...candidates: [string | undefined | null, S][]): { answer: string; source: S } | null {
   for (const [value, source] of candidates) {
     const p = pick(value, source);
     if (p) return p;

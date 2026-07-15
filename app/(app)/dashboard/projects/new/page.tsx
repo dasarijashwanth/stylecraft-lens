@@ -71,14 +71,11 @@ export default function NewProjectPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
 
-      // Kick off the background snapshot -> TDS -> GTM pipeline if a
-      // product anchor was given. Creation itself already succeeded and
-      // navigation happens regardless — the project page picks up the
+      // The snapshot -> TDS -> GTM pipeline is now seeded server-side by
+      // POST /api/projects itself (atomic with creation, for every project
+      // regardless of whether a product anchor was given) — no client-side
+      // trigger needed here anymore. The project page picks up the
       // in-progress pipeline via ProjectGenerationProgress.
-      if (productUrl.trim() || asin.trim()) {
-        fetch(`/api/projects/${data.project.id}/pipeline/start`, { method: "POST" }).catch(() => {});
-      }
-
       toast.success("Project created");
       router.push(`/dashboard/projects/${data.project.id}`);
     } catch (err: any) {

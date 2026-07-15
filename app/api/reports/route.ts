@@ -67,6 +67,7 @@ export async function POST(request: Request) {
         industry: industry || analysisData.projects?.industry,
         targetMarket,
         pricePoint,
+        identity: analysisData.phase0_result || undefined,
       },
       session.orgId
     );

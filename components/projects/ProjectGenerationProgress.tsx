@@ -60,6 +60,8 @@ export function ProjectGenerationProgress({ projectId, onDone }: Props) {
     PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" }))
   );
   const [failed, setFailed] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [runToken, setRunToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,7 +98,21 @@ export function ProjectGenerationProgress({ projectId, onDone }: Props) {
 
     run();
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, runToken]);
+
+  async function handleRetry() {
+    setRetrying(true);
+    try {
+      await fetchJson(`/api/projects/${projectId}/pipeline/retry`, { method: "POST" });
+      setFailed(null);
+      setPhases(PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" })));
+      setRunToken((t) => t + 1);
+    } catch (err: any) {
+      setFailed(err.message || "Retry failed");
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   return (
     <div className="border border-border rounded-xl overflow-hidden mb-4 bg-surface-2 shadow-sm">
@@ -131,9 +147,17 @@ export function ProjectGenerationProgress({ projectId, onDone }: Props) {
           </div>
         ))}
         {failed && (
-          <p className="text-[10px] text-danger pt-1">
-            {failed} — you can still fill things in manually below, or use &quot;Re-capture snapshot&quot; on the TDS card to retry.
-          </p>
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <p className="text-[10px] text-danger">{failed}</p>
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={retrying}
+              className="px-2.5 py-1 bg-accent hover:bg-accent-hover text-white text-[10px] font-bold rounded-lg disabled:opacity-50 transition-colors shrink-0"
+            >
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
         )}
       </div>
     </div>

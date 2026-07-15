@@ -350,3 +350,21 @@ CREATE POLICY "Allow all operations for product_snapshots" ON product_snapshots 
 CREATE POLICY "Allow all operations for project_generation_state" ON project_generation_state FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for analysis_tasks" ON analysis_tasks FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations for provider_circuit_state" ON provider_circuit_state FOR ALL USING (true) WITH CHECK (true);
+
+-- Real auth (Supabase Auth) — profile/role data for real logged-in users,
+-- one row per auth.users row. Domain data (projects/competitors/analyses/
+-- reports) is intentionally NOT re-keyed to this id — see lib/auth.ts's
+-- getAuthSession() comment on why it still maps to the existing fixed
+-- org_id/user_id literal strings for now (single-admin app, no multi-tenant
+-- management yet).
+CREATE TABLE IF NOT EXISTS profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    name VARCHAR(255),
+    role VARCHAR(50) NOT NULL DEFAULT 'ADMIN' CHECK (role IN ('OWNER','ADMIN','MEMBER','VIEWER')),
+    must_change_password BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for profiles" ON profiles FOR ALL USING (true) WITH CHECK (true);

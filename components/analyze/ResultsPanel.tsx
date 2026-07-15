@@ -7,11 +7,13 @@ import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { Spinner } from "@/components/ui/Spinner";
+import { buildPricingAnalysis } from "@/lib/pricing-analysis";
 
 interface ResultsPanelProps {
   analysis: {
     productName: string;
     totalSearches: number;
+    pricePoint?: string;
     identity?: {
       category?: string;
       subcategory?: string;
@@ -100,14 +102,11 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
           quick_wins: phase3.quick_wins,
           citations: phase3.citations || [],
         },
-        pricing_analysis: {
-          competitors_pricing: [
-            ...phase1.competitors.map((c: any) => ({ name: c.name, price: c.price, tier: "large" })),
-            ...phase2.competitors.map((c: any) => ({ name: c.name, price: c.price, tier: "emerging" })),
-          ],
-          price_positioning: phase3.market_snapshot.headline_stat_value || "",
-          notes: "",
-        },
+        pricing_analysis: buildPricingAnalysis({
+          competitors: [...phase1.competitors, ...phase2.competitors],
+          targetPriceCandidates: [[analysis.pricePoint, "project_record"]],
+          identity: analysis.identity,
+        }),
         go_to_market: {
           recommendations: phase3.strategic_recommendations,
           quick_wins: phase3.quick_wins,

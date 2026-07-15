@@ -134,6 +134,19 @@ export const GTM_SECTIONS = Array.from(new Set(GTM_FIELD_SCHEMA.map(f => f.secti
 
 export type GtmFieldSource = "project_record" | "sales_kit" | "tds" | "active_report" | "web" | "multiple" | "none";
 
+// Human-readable provenance labels — shared by the field-grid UI
+// (ProductKnowledgeSection) and the CSV export route so both present the
+// same "Source" wording instead of maintaining two copies of this map.
+export const GTM_SOURCE_LABELS: Record<string, string> = {
+  project_record: "Project",
+  sales_kit: "Sales Kit",
+  tds: "TDS",
+  active_report: "Active Report",
+  web: "Web — verify",
+  multiple: "Multiple",
+  none: "N/A",
+};
+
 export interface GtmFieldAnswer {
   answer: string;
   source: GtmFieldSource;

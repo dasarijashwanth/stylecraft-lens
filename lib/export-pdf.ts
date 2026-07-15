@@ -1,10 +1,17 @@
 // lib/export-pdf.ts
+import { isPricingAnalysisEmpty } from "./pricing-analysis";
 
 export async function downloadReportPDF(report: any) {
   // Create a print-ready HTML document
   const html = generatePrintHTML(report);
 
-  const blob = new Blob([html], { type: "text/html" });
+  // Blob's own type must declare a charset — without it, the print window
+  // has no encoding signal at all and the browser falls back to a legacy
+  // 8-bit codepage (commonly windows-1252) to decode this UTF-8 string,
+  // turning e.g. "★" into "â˜…" and "—" into "â€”". This, plus the
+  // <meta charset="utf-8"> in generatePrintHTML's own <head>, is the whole
+  // fix — nothing in the underlying data was ever actually corrupted.
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
 
   const printWindow = window.open(url, "_blank");
@@ -29,7 +36,7 @@ export async function downloadTabPDF(report: any, activeTab: string) {
   const title = `${report.title} — ${tabTitles[activeTab] || activeTab}`;
   const html = generatePrintHTML(report, activeTab);
 
-  const blob = new Blob([html], { type: "text/html" });
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
 
   const printWindow = window.open(url, "_blank");
@@ -79,6 +86,26 @@ function parseTipTapNode(node: any): string {
   }
 }
 
+// Renders a real gold/gray SVG star rating instead of the "★" glyph — immune
+// to any print-engine font/encoding quirks, since it's drawn as vector shapes
+// rather than relying on a Unicode glyph being decoded/rendered correctly.
+function renderStarRating(rating: string | number | null | undefined, reviewCount?: string | number | null): string {
+  const numRating = typeof rating === "number" ? rating : parseFloat(String(rating ?? ""));
+  if (rating == null || rating === "" || isNaN(numRating)) return "";
+  const clamped = Math.max(0, Math.min(5, numRating));
+  const starPath = "M12 2l2.9 6.9 7.1.6-5.4 4.7 1.6 7-6.2-3.9-6.2 3.9 1.6-7L1.9 9.5l7.1-.6z";
+  const stars = Array.from({ length: 5 }, (_, i) => {
+    const fillPct = Math.round(Math.max(0, Math.min(1, clamped - i)) * 100);
+    return `<span style="position:relative;display:inline-block;width:10px;height:10px;">
+      <svg viewBox="0 0 24 24" width="10" height="10" style="position:absolute;top:0;left:0;" fill="#D1D5DB"><path d="${starPath}"/></svg>
+      <span style="position:absolute;top:0;left:0;width:${fillPct}%;height:100%;overflow:hidden;">
+        <svg viewBox="0 0 24 24" width="10" height="10" fill="#F59E0B"><path d="${starPath}"/></svg>
+      </span>
+    </span>`;
+  }).join("");
+  return `<span style="display:inline-flex;align-items:center;gap:2px;vertical-align:middle;">${stars}<span style="margin-left:3px;">${clamped.toFixed(1)}${reviewCount ? ` (${reviewCount})` : ""}</span></span>`;
+}
+
 function generatePrintHTML(report: any, activeTab?: string): string {
   const ca = report.competitive_analysis || {};
   const pa = report.pricing_analysis || {};
@@ -96,10 +123,11 @@ function generatePrintHTML(report: any, activeTab?: string): string {
     return `<!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>${report.title}</title>
   <style>
-    @media print { 
-      body { margin: 15mm; background: #fff; color: #000; } 
+    @media print {
+      body { margin: 15mm; background: #fff; color: #000; }
     }
     body { 
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -146,10 +174,11 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   return `<!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>${report.title}</title>
   <style>
-    @media print { 
-      body { margin: 15mm 15mm 15mm 15mm; background: #fff; color: #000; } 
+    @media print {
+      body { margin: 15mm 15mm 15mm 15mm; background: #fff; color: #000; }
       .no-print { display: none; } 
       .page-break { page-break-after: always; break-after: page; }
       .comp-card, tr, .rec-card { page-break-inside: avoid; break-inside: avoid; }
@@ -414,9 +443,9 @@ function generatePrintHTML(report: any, activeTab?: string): string {
           </div>
           <div class="comp-metrics">
             <div><strong>ASIN:</strong> ${c.asin}</div>
-            <div><strong>Rating:</strong> ★ ${c.rating || "—"} (${c.review_count || "0"})</div>
+            ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
             <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
-            <div><strong>Rank:</strong> ${c.bsr_rank || "—"}</div>
+            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${c.bsr_rank}</div>` : ""}
           </div>
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
           <div class="comp-specs">
@@ -444,7 +473,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
           <tr>
             <td><strong>${c.name}</strong></td>
             <td>${c.price || "—"}</td>
-            <td>★ ${c.rating || "—"}</td>
+            <td>${renderStarRating(c.rating) || "—"}</td>
             <td>${c.review_count || "—"}</td>
             <td>${c.monthly_sales || "—"}</td>
             <td>${c.confirmed_technical_specs?.motor_type || "—"}</td>
@@ -470,9 +499,9 @@ function generatePrintHTML(report: any, activeTab?: string): string {
           </div>
           <div class="comp-metrics">
             <div><strong>ASIN:</strong> ${c.asin}</div>
-            <div><strong>Rating:</strong> ★ ${c.rating || "—"} (${c.review_count || "0"})</div>
+            ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
             <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
-            <div><strong>Rank:</strong> ${c.bsr_rank || "—"}</div>
+            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${c.bsr_rank}</div>` : ""}
           </div>
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
           <div class="comp-specs">
@@ -500,7 +529,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
           <tr>
             <td><strong>${c.name}</strong></td>
             <td>${c.price || "—"}</td>
-            <td>★ ${c.rating || "—"}</td>
+            <td>${renderStarRating(c.rating) || "—"}</td>
             <td>${c.review_count || "—"}</td>
             <td>${c.monthly_sales || "—"}</td>
             <td>${c.confirmed_technical_specs?.motor_type || "—"}</td>
@@ -517,29 +546,31 @@ function generatePrintHTML(report: any, activeTab?: string): string {
     <p>${ca.positioning_recommendation || "No positioning recommendation specified."}</p>
   ` : ""}
 
-  ${(showAll || activeTab === "pricing") ? `
+  ${(showAll || activeTab === "pricing") && !isPricingAnalysisEmpty(pa) ? `
     ${showAll ? "" : '<div class="page-break"></div>'}
-    <h2>3. Pricing Analysis</h2>
-    <p><strong>Price Positioning Index:</strong> ${pa.price_positioning || "N/A"}</p>
-    
-    <h3>Competitor Price Reference Grid</h3>
+    <h2>3. Pricing Analysis & Benchmarks</h2>
+    ${pa.target_price ? `<p><strong>Target Price:</strong> ${pa.target_price}</p>` : ""}
+    ${pa.price_positioning ? `<p><strong>Price Positioning:</strong> ${pa.price_positioning}</p>` : ""}
+
+    <h3>Pricing Benchmarks</h3>
     <table class="comparison-table">
       <thead>
         <tr>
           <th>Competitor Name</th>
-          <th>Price Point</th>
-          <th>Market Segment</th>
+          <th>Brand</th>
+          <th>Tier</th>
+          <th>Price</th>
         </tr>
       </thead>
       <tbody>
-        ${(pa.competitors_pricing || []).map((p: any) => `
+        ${(pa.competitor_prices || []).map((p: any) => `
           <tr>
-            <td>${p.name}</td>
-            <td>${p.price || "—"}</td>
-            <td><span class="badge ${p.tier === "large" ? "badge-pro" : ""}">${p.tier}</span></td>
+            <td>${p.name}${p.source_url ? ` <a href="${p.source_url}" style="font-size:9px;">[source]</a>` : ""}</td>
+            <td>${p.brand || ""}</td>
+            <td>${p.tier ? `<span class="badge ${p.tier === "Best" ? "badge-pro" : ""}">${p.tier}</span>` : ""}</td>
+            <td>${p.price || ""}</td>
           </tr>
         `).join("")}
-        ${(pa.competitors_pricing || []).length === 0 ? "<tr><td colspan='3'>No competitor pricing recorded.</td></tr>" : ""}
       </tbody>
     </table>
 
@@ -547,6 +578,10 @@ function generatePrintHTML(report: any, activeTab?: string): string {
       <h3>Pricing Strategy Notes</h3>
       <p>${pa.notes}</p>
     ` : ""}
+  ` : ""}
+  ${activeTab === "pricing" && !showAll && isPricingAnalysisEmpty(pa) ? `
+    <h2>3. Pricing Analysis & Benchmarks</h2>
+    <p>No pricing data available for this report.</p>
   ` : ""}
 
   ${(showAll || activeTab === "go-to-market") ? `

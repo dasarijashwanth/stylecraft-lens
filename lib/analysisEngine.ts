@@ -566,6 +566,8 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
         ...c,
         asin: product.asin,
         price: product.price,
+        price_raw: product.price_raw,
+        last_updated: product.last_updated,
         rating: product.rating_str,
         review_count: product.reviews_str,
         monthly_sales: product.monthly_str || c.monthly_sales,

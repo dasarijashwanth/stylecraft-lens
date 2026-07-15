@@ -41,21 +41,23 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     if (state.phase === "pending") {
       const productUrl: string | null = project.productUrl ?? null;
       const asin: string | null = project.asin ?? null;
-      if (!productUrl && !asin) {
-        await updateGenerationState(projectId, { status: "failed", errorMessage: "No product URL or ASIN to capture" });
-        throw new Error("No product URL or ASIN to capture");
-      }
 
-      const { projection } = await captureProductSnapshot({ projectId, productUrl, asin });
+      // No product anchor is no longer a hard failure — GTM generation (and,
+      // in degraded form, TDS) can still run from just the project record.
+      // This is what makes generation fully automatic for every project,
+      // not only ones created with a URL/ASIN.
+      if (productUrl || asin) {
+        const { projection } = await captureProductSnapshot({ projectId, productUrl, asin });
 
-      // Auto-fill only fields the user left blank — never overwrite what
-      // they typed. Category isn't auto-filled: nothing scraped gives a
-      // reliable signal for it, and a wrong guess is worse than blank.
-      const updates: Record<string, any> = {};
-      if (!project.pricePoint && projection.price) updates.pricePoint = projection.price;
-      if (!project.description && projection.description) updates.description = projection.description;
-      if (Object.keys(updates).length > 0) {
-        await updateProject(projectId, orgId, updates);
+        // Auto-fill only fields the user left blank — never overwrite what
+        // they typed. Category isn't auto-filled: nothing scraped gives a
+        // reliable signal for it, and a wrong guess is worse than blank.
+        const updates: Record<string, any> = {};
+        if (!project.pricePoint && projection.price) updates.pricePoint = projection.price;
+        if (!project.description && projection.description) updates.description = projection.description;
+        if (Object.keys(updates).length > 0) {
+          await updateProject(projectId, orgId, updates);
+        }
       }
 
       await updateGenerationState(projectId, { phase: "snapshot", status: "running" });
@@ -63,13 +65,14 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     }
 
     if (state.phase === "snapshot") {
+      // No snapshot (no anchor was given, or capture didn't find one) is no
+      // longer a hard failure — generateTdsFields already accepts a null
+      // raw_data and produces a document sourced only from the project
+      // record (mostly "Not listed on product page"), which is a real, if
+      // degraded, TDS rather than nothing at all.
       const snapshot = await getLatestSnapshot(projectId);
-      if (!snapshot) {
-        await updateGenerationState(projectId, { status: "failed", errorMessage: "No snapshot found for TDS generation" });
-        throw new Error("No snapshot found for TDS generation");
-      }
 
-      const fields = await generateTdsFields(project.productName, snapshot.raw_data, {
+      const fields = await generateTdsFields(project.productName, snapshot?.raw_data ?? null, {
         productName: project.productName,
         description: project.description,
         category: project.category,
@@ -81,7 +84,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
 
       const document = await getOrCreateDocument(projectId, "tds");
       await saveDocumentFields(document.id, TDS_FIELD_SCHEMA, fields, userId);
-      await setDocumentSnapshot(document.id, snapshot.id);
+      if (snapshot) await setDocumentSnapshot(document.id, snapshot.id);
 
       await updateGenerationState(projectId, { phase: "tds", status: "running" });
       return { state: { ...state, phase: "tds", status: "running" }, phaseCompleted: "tds" };

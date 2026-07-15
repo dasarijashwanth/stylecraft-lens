@@ -3,20 +3,18 @@ import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { startGenerationState } from "@/lib/db/generation-state";
 
-// Called once right after a project is created with a product URL/ASIN —
-// inserts the pipeline state row so the project detail page knows to
-// mount ProjectGenerationProgress and start driving
-// pipeline/continue. Project creation itself stays a fast, synchronous
-// insert (see app/api/projects/route.ts) — nothing here blocks on a
-// scrape or AI call.
+// Normally seeded server-side by app/api/projects/route.ts's POST handler
+// itself, right after creation, for every project — this route is kept as
+// a manual escape hatch (e.g. re-seeding a project whose row was somehow
+// never created) rather than the primary trigger. A product URL/ASIN is no
+// longer required: lib/project-generation-engine.ts's "pending"/"snapshot"
+// phases already degrade gracefully with no anchor. Project creation itself
+// stays a fast, synchronous insert — nothing here blocks on a scrape or AI call.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
     const project = await getProject(params.id, session.orgId) as any;
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-    if (!project.productUrl && !project.asin) {
-      return NextResponse.json({ error: "Project has no product URL or ASIN" }, { status: 400 });
-    }
 
     const state = await startGenerationState(params.id);
     return NextResponse.json({ state });

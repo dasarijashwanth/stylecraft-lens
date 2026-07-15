@@ -1,5 +1,6 @@
 import { Document, Page, View, Text } from "@react-pdf/renderer";
 import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, CitationList } from "./shared";
+import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
 
 // Never render a bare "—" for a competitor with partial data — omit the
 // missing part instead, and only fall back to an explicit sentence when
@@ -80,12 +81,21 @@ export function ActiveReportPdf({
       </Page>
 
       <Page size="A4" style={styles.page}>
-        <SectionHeader title="Pricing Analysis" />
-        <Text style={{ fontSize: 9, fontWeight: 700, marginBottom: 6 }}>{pricing.price_positioning || "—"}</Text>
-        {prices.map((p: any, i: number) => (
-          <TwoColRow key={i} question={p.name} answer={`${p.price || "—"} · ${p.tier || "—"} tier`} />
-        ))}
-        <Text style={{ fontSize: 9, marginTop: 8, lineHeight: 1.5 }}>{pricing.notes || ""}</Text>
+        {!isPricingAnalysisEmpty(pricing) && (
+          <View>
+            <SectionHeader title="Pricing Analysis & Benchmarks" />
+            {pricing.target_price && <Text style={{ fontSize: 9, fontWeight: 700, marginBottom: 4 }}>Target Price: {pricing.target_price}</Text>}
+            {pricing.price_positioning && <Text style={{ fontSize: 9, marginBottom: 6, lineHeight: 1.5 }}>{pricing.price_positioning}</Text>}
+            {prices.map((p: any, i: number) => (
+              <TwoColRow
+                key={i}
+                question={`${p.name}${p.brand ? ` (${p.brand})` : ""}`}
+                answer={[p.price, p.tier].filter(Boolean).join(" · ") + (p.source_url ? " · [source]" : "")}
+              />
+            ))}
+            {pricing.notes && <Text style={{ fontSize: 9, marginTop: 8, lineHeight: 1.5 }}>{pricing.notes}</Text>}
+          </View>
+        )}
 
         <SectionHeader title="Go-To-Market Recommendations" />
         {recs.map((r: any, i: number) => (

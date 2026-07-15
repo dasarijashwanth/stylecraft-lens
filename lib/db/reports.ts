@@ -3,6 +3,8 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { prisma } from "@/lib/db";
 import { memoryDb, MockReport } from "@/lib/memoryDb";
 import { STYLECRAFT_PRODUCTS } from "@/lib/stylecraft-products";
+import { buildPricingAnalysis, isPricingAnalysisEmpty, type PricingAnalysis } from "@/lib/pricing-analysis";
+import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
 
 // Find the catalog entry for a product being analyzed, if it's a known
 // StyleCraft SKU (matched by name/shortName, case- and punctuation-insensitive).
@@ -124,6 +126,7 @@ export function buildReportSections(analysis: {
   industry?: string;
   targetMarket?: string;
   pricePoint?: string;
+  identity?: { category?: string; subcategory?: string; whatItIs?: string };
 }) {
   const p1Comps = analysis.phase1?.competitors || [];
   const p2Comps = analysis.phase2?.competitors || [];
@@ -155,14 +158,14 @@ export function buildReportSections(analysis: {
       quick_wins: wins,
       citations,
     },
-    pricing_analysis: {
-      competitors_pricing: [
-        ...p1Comps.map((c: any) => ({ name: c.name, price: c.price, tier: "large" })),
-        ...p2Comps.map((c: any) => ({ name: c.name, price: c.price, tier: "emerging" })),
+    pricing_analysis: buildPricingAnalysis({
+      competitors: [...p1Comps, ...p2Comps],
+      targetPriceCandidates: [
+        [analysis.pricePoint, "project_record"],
+        [catalogProduct?.pricePoint, "catalog_default"],
       ],
-      price_positioning: snapshot.headline_stat_value || "",
-      notes: "",
-    },
+      identity: analysis.identity,
+    }),
     go_to_market: {
       recommendations: recommendations,
       quick_wins: wins,
@@ -219,6 +222,7 @@ export async function createReportFromAnalysis(
     industry?: string;
     targetMarket?: string;
     pricePoint?: string;
+    identity?: { category?: string; subcategory?: string; whatItIs?: string };
   },
   orgId: string = "dev_org_id"
 ) {
@@ -271,7 +275,7 @@ export async function createReportFromAnalysis(
         projectId: projectId || null,
         title,
         status: "DRAFT",
-        content: sections,
+        content: sections as any,
       },
     });
 
@@ -366,16 +370,77 @@ export async function getUserReports(userId: string) {
   }
 }
 
+// A report saved before this fix has pricing_analysis in the old, broken
+// shape (or none at all). Rather than a one-time migration script (JSONB has
+// no schema to block on, and a batch job would need this exact logic anyway
+// — see lib/pricing-analysis.ts's header comment), recompute it lazily the
+// next time the report is read, from the richest source still available,
+// and fire-and-forget persist the result so future reads skip recompute.
+async function recomputeLegacyPricingAnalysis(report: any): Promise<PricingAnalysis> {
+  let competitors: any[] = [];
+
+  if (report.analysis_id) {
+    const { data: rows } = await supabaseAdmin
+      .from("analysis_competitors")
+      .select("name, brand, price, asin, amazon_url")
+      .eq("analysis_id", report.analysis_id);
+    if (rows && rows.length > 0) competitors = rows;
+  }
+
+  if (competitors.length === 0) {
+    // Degrade to whichever old array key this report actually has, using
+    // only name+price — no brand/citation available from that shape.
+    const legacy = report.pricing_analysis?.competitor_prices || report.pricing_analysis?.competitors_pricing || [];
+    competitors = legacy.map((c: any) => ({ name: c.name, price: c.price }));
+  }
+
+  let gtmApprovedPricing: string | null = null;
+  try {
+    if (report.project_id) {
+      const gtmDoc = await getDocumentByProject(report.project_id, "gtm");
+      if (gtmDoc) {
+        const fields = await getDocumentFields(gtmDoc.id);
+        gtmApprovedPricing = fields.find(f => f.field_id === "approved_pricing")?.answer ?? null;
+      }
+    }
+  } catch { /* best-effort only — a missing/broken GTM doc must never block viewing the report */ }
+
+  const catalogProduct = matchCatalogProduct(report.projects?.product_name || "");
+
+  return buildPricingAnalysis({
+    competitors,
+    targetPriceCandidates: [
+      [report.projects?.price_point, "project_record"],
+      [gtmApprovedPricing, "gtm_approved_pricing"],
+      [catalogProduct?.pricePoint, "catalog_default"],
+    ],
+    identity: report.analyses?.phase0_result || undefined,
+  });
+}
+
 export async function getReport(reportId: string, userId: string) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("reports")
-      .select("*, projects(name, product_name), analyses(*)")
+      .select("*, projects(name, product_name, price_point), analyses(*)")
       .eq("id", reportId)
       .eq("user_id", userId)
       .single();
 
     if (error) throw error;
+
+    if (data && data.pricing_analysis?.schema_version !== 2) {
+      const recomputed = await recomputeLegacyPricingAnalysis(data);
+      data.pricing_analysis = recomputed;
+      // Fire-and-forget — never block the response on this, and never route
+      // through updateReport() (its Prisma/memoryDb fallback branch clobbers
+      // the rest of `content` on write, an unrelated pre-existing bug).
+      supabaseAdmin.from("reports").update({ pricing_analysis: recomputed }).eq("id", reportId).then(
+        () => {},
+        (err: any) => console.error("Failed to persist recomputed pricing_analysis:", err)
+      );
+    }
+
     return data;
   }
 

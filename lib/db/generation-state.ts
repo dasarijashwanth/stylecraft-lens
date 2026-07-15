@@ -32,12 +32,16 @@ export async function getGenerationState(projectId: string): Promise<GenerationS
   return { project_id: row.projectId, phase: row.phase as GenerationPhase, status: row.status as GenerationStatus, error_message: row.errorMessage, updated_at: row.updatedAt.toISOString() };
 }
 
-export async function startGenerationState(projectId: string): Promise<GenerationStateRow> {
+// `opts.phase` lets a caller seed the pipeline past phases it already knows
+// are done — e.g. the backfill script starting a project that already has a
+// TDS document straight at "tds" instead of redoing snapshot capture.
+export async function startGenerationState(projectId: string, opts?: { phase?: GenerationPhase }): Promise<GenerationStateRow> {
   const now = new Date().toISOString();
+  const phase = opts?.phase ?? "pending";
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("project_generation_state")
-      .upsert({ project_id: projectId, phase: "pending", status: "pending", error_message: null, updated_at: now }, { onConflict: "project_id" })
+      .upsert({ project_id: projectId, phase, status: "pending", error_message: null, updated_at: now }, { onConflict: "project_id" })
       .select()
       .single();
     if (error) throw error;
@@ -45,10 +49,39 @@ export async function startGenerationState(projectId: string): Promise<Generatio
   }
 
   const idx = memoryDb.projectGenerationState.findIndex(s => s.projectId === projectId);
-  const row = { projectId, phase: "pending", status: "pending", errorMessage: null, updatedAt: new Date() };
+  const row = { projectId, phase, status: "pending", errorMessage: null, updatedAt: new Date() };
   if (idx >= 0) memoryDb.projectGenerationState[idx] = row;
   else memoryDb.projectGenerationState.push(row);
-  return { project_id: projectId, phase: "pending", status: "pending", error_message: null, updated_at: row.updatedAt.toISOString() };
+  return { project_id: projectId, phase, status: "pending", error_message: null, updated_at: row.updatedAt.toISOString() };
+}
+
+// The one primitive the existing phase-continue pattern was missing: a way
+// to actually retry after `status` has settled to "failed". Deliberately
+// does NOT touch `phase` — /continue re-reads it and resumes exactly where
+// generation stopped, it just needed permission to run again.
+export async function retryFailedGeneration(projectId: string): Promise<GenerationStateRow | null> {
+  const state = await getGenerationState(projectId);
+  if (!state || state.status !== "failed") return state;
+
+  const now = new Date().toISOString();
+  if (isSupabaseConfigured) {
+    const { data, error } = await supabaseAdmin
+      .from("project_generation_state")
+      .update({ status: "running", error_message: null, updated_at: now })
+      .eq("project_id", projectId)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const row = memoryDb.projectGenerationState.find(s => s.projectId === projectId);
+  if (row) {
+    row.status = "running";
+    row.errorMessage = null;
+    row.updatedAt = new Date();
+  }
+  return getGenerationState(projectId);
 }
 
 export async function updateGenerationState(

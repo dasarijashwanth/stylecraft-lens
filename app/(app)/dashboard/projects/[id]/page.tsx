@@ -33,7 +33,7 @@ import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ArtworkTab } from "@/components/project/ArtworkTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
-import { GTM_FIELD_SCHEMA, GTM_SECTIONS } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-field-schema";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -334,13 +334,16 @@ export default function ProjectDetailPage() {
           )}
 
           {/* TDS + GTM live independently of whether a report is linked —
-              a brand-new project created via the product-anchor flow has
-              no report yet, but should still show its generated TDS/GTM. */}
-          {pipelineState && pipelineState.status !== "complete" && pipelineState.status !== "failed" && (
+              every project now gets this pipeline automatically on
+              creation. Mount condition intentionally only excludes
+              "complete" — a "failed" pipeline must stay visible (with its
+              Retry button) on every page load, not just live in the same
+              session where it failed. */}
+          {pipelineState && pipelineState.status !== "complete" && (
             <ProjectGenerationProgress projectId={id} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           <TdsKnowledgeSection projectId={id} />
-          <ProductKnowledgeSection projectId={id} />
+          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
         </div>
       </div>
 
@@ -1166,15 +1169,7 @@ function TdsKnowledgeSection({ projectId }: { projectId: string }) {
 // ────────────────────────────────────────────────────────────────────────────
 // PRODUCT KNOWLEDGE (74-field GTM generator)
 // ────────────────────────────────────────────────────────────────────────────
-const SOURCE_LABELS: Record<string, string> = {
-  project_record: "Project",
-  sales_kit: "Sales Kit",
-  tds: "TDS",
-  active_report: "Active Report",
-  web: "Web — verify",
-  multiple: "Multiple",
-  none: "N/A",
-};
+const SOURCE_LABELS = GTM_SOURCE_LABELS;
 
 const OWNER_OPTIONS = ["Product Marketing", "Marketing", "Sales", "Legal", "Ops"];
 
@@ -1202,11 +1197,10 @@ function flagReason(detail: any): string {
   return "Flagged for review";
 }
 
-function ProductKnowledgeSection({ projectId }: { projectId: string }) {
+function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: { projectId: string; pipelineStatus?: string; pipelinePhase?: string }) {
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -1225,31 +1219,13 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
       } catch (e) {}
       setLoading(false);
     })();
-  }, [projectId]);
+    // Re-fetch whenever the auto-generation pipeline's status changes (e.g.
+    // transitions to "complete") — otherwise a freshly-finished GTM document
+    // only ever appeared after a manual page reload, since this fetch used
+    // to depend only on projectId.
+  }, [projectId, pipelineStatus]);
 
   const completedCount = GTM_FIELD_SCHEMA.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
-
-  async function handleGenerate() {
-    setGenerating(true);
-    try {
-      const res = await fetch("/api/documents/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, docType: "gtm" }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Generation failed");
-      setDocumentId(data.document.id);
-      const map: Record<string, FieldRow> = {};
-      for (const f of data.fields) map[f.field_id] = f;
-      setFields(map);
-      toast.success("Go-To-Market product knowledge generated");
-    } catch (err: any) {
-      toast.error(err.message || "Failed to generate Go-To-Market data");
-    } finally {
-      setGenerating(false);
-    }
-  }
 
   function handleFieldChange(fieldId: string, value: string) {
     setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], answer: value } }));
@@ -1341,6 +1317,14 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
   }
 
   const hasDocument = !!documentId;
+  // GTM now generates automatically (see app/api/projects/route.ts +
+  // lib/project-generation-engine.ts) — no manual trigger button. This is a
+  // read-only reflection of the same project_generation_state the top-level
+  // ProjectGenerationProgress banner drives; deliberately not a second
+  // independent poller/retry (see that banner for the Retry action).
+  const isGtmPhaseRunning = pipelinePhase === "gtm" && (pipelineStatus === "running" || pipelineStatus === "pending");
+  const isQueued = !hasDocument && !isGtmPhaseRunning && (pipelineStatus === "pending" || pipelineStatus === "running");
+  const pipelineFailed = !hasDocument && pipelineStatus === "failed";
 
   return (
     <div className="border border-border rounded-xl overflow-hidden">
@@ -1352,22 +1336,42 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
               {completedCount}/{GTM_FIELD_SCHEMA.length} fields completed
             </span>
           )}
+          {!hasDocument && isGtmPhaseRunning && (
+            <span className="flex items-center gap-1.5 text-[10px] font-bold text-accent px-1.5 py-0.5 rounded bg-accent-bg border border-accent-border">
+              <Loader2 className="w-3 h-3 animate-spin" /> Generating…
+            </span>
+          )}
+          {!hasDocument && isQueued && (
+            <span className="text-[10px] font-bold text-text-muted px-1.5 py-0.5 rounded bg-surface-3 border border-border">Queued</span>
+          )}
+          {pipelineFailed && (
+            <span className="text-[10px] font-bold text-danger px-1.5 py-0.5 rounded bg-danger-bg border border-danger/25">
+              Generation failed — see retry above
+            </span>
+          )}
         </div>
-        <button
-          onClick={handleGenerate}
-          disabled={generating || loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors shadow"
-        >
-          {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-          <span>{hasDocument ? "Regenerate Go-To-Market" : "Generate Go-To-Market"}</span>
-        </button>
+        {hasDocument && (
+          <a
+            href={`/api/documents/gtm/${documentId}/export-csv`}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Download CSV</span>
+          </a>
+        )}
       </div>
 
       {loading ? (
         <p className="p-4 text-text-muted text-[11px]">Loading…</p>
       ) : !hasDocument ? (
         <p className="p-4 text-text-muted text-[11px]">
-          Generate the 74-field product knowledge sheet from this project&apos;s Sales Kit, TDS, and Active Report.
+          {isGtmPhaseRunning
+            ? "Generating the 74-field product knowledge sheet now…"
+            : isQueued
+            ? "Queued for automatic generation from this project's Sales Kit, TDS, and Active Report."
+            : pipelineFailed
+            ? "Automatic generation failed — use Retry above to resume."
+            : "This project hasn't been queued for Go-To-Market generation yet."}
         </p>
       ) : (
         <div className="divide-y divide-border/60">

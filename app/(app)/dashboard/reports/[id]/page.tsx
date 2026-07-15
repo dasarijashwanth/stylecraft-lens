@@ -20,6 +20,7 @@ import { CompetitorCard } from "@/components/analyze/CompetitorCard";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form";
 
@@ -166,6 +167,7 @@ export default function ReportDetailPage() {
   const pa = report.pricing_analysis || {};
   const gtm = report.go_to_market || {};
   const cf = report.content_form || {};
+  const pricingEmpty = isPricingAnalysisEmpty(pa);
 
   return (
     <div className="space-y-6 text-xs font-sans">
@@ -286,11 +288,11 @@ export default function ReportDetailPage() {
                         market_snapshot: { ...editData.market_snapshot, overview_paragraph: e.target.value }
                       })}
                     />
-                  ) : (
+                  ) : ca.market_snapshot?.overview_paragraph ? (
                     <p className="text-text-secondary leading-relaxed text-xs">
-                      {ca.market_snapshot?.overview_paragraph || "No snapshot available."}
+                      {ca.market_snapshot.overview_paragraph}
                     </p>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -371,11 +373,11 @@ export default function ReportDetailPage() {
                   value={editData.positioning_recommendation ?? ""}
                   onChange={e => setEditData({ ...editData, positioning_recommendation: e.target.value })}
                 />
-              ) : (
+              ) : ca.positioning_recommendation ? (
                 <p className="text-text-secondary leading-relaxed bg-surface-3 p-4 border border-border rounded-lg font-medium italic">
-                  {ca.positioning_recommendation || "No positioning recommendation compiled."}
+                  {ca.positioning_recommendation}
                 </p>
-              )}
+              ) : null}
             </div>
 
             {/* Mapped Competitors Discovered */}
@@ -398,101 +400,119 @@ export default function ReportDetailPage() {
           <div className="space-y-6">
             <h2 className="text-sm font-bold text-text-primary">Pricing Analysis & Benchmarks</h2>
 
-            {/* Target Price & Positioning */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
-              <div className="p-4 rounded-xl bg-surface-3 border border-border-strong text-center">
-                <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Target Price</span>
-                {editing ? (
-                  <input 
-                    type="text"
-                    className="w-full mt-2 px-2.5 py-1.5 border border-border rounded bg-surface-1 text-text-primary outline-none focus:border-accent text-xs font-bold text-center"
-                    value={editData.target_price ?? ""}
-                    onChange={e => setEditData({ ...editData, target_price: e.target.value })}
-                  />
-                ) : (
-                  <span className="text-display mt-1 text-accent block">
-                    {pa.target_price || ca.price_point || "—"}
-                  </span>
+            {!editing && pricingEmpty ? (
+              <p className="text-text-muted italic py-6 text-center">
+                No pricing data available for this report yet. Click Edit above to add pricing information manually.
+              </p>
+            ) : (
+              <>
+                {/* Target Price & Positioning */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
+                  <div className="p-4 rounded-xl bg-surface-3 border border-border-strong text-center">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Target Price</span>
+                    {editing ? (
+                      <input
+                        type="text"
+                        className="w-full mt-2 px-2.5 py-1.5 border border-border rounded bg-surface-1 text-text-primary outline-none focus:border-accent text-xs font-bold text-center"
+                        value={editData.target_price ?? ""}
+                        onChange={e => setEditData({ ...editData, target_price: e.target.value })}
+                      />
+                    ) : pa.target_price ? (
+                      <span className="text-display mt-1 text-accent block">{pa.target_price}</span>
+                    ) : (
+                      <span className="text-xs text-text-muted italic block mt-2">Not set</span>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-3 space-y-1">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Price Positioning</span>
+                    {editing ? (
+                      <textarea
+                        rows={3}
+                        className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
+                        value={editData.price_positioning ?? ""}
+                        onChange={e => setEditData({ ...editData, price_positioning: e.target.value })}
+                      />
+                    ) : pa.price_positioning ? (
+                      <p className="text-text-secondary leading-relaxed">{pa.price_positioning}</p>
+                    ) : (
+                      <p className="text-xs text-text-muted italic">Not enough priced competitors to compute a positioning statement.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Pricing benchmark grid */}
+                {((editing ? editData.competitor_prices : pa.competitor_prices)?.length > 0) && (
+                  <div className="space-y-3 border-t border-border/40 pt-4">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Pricing Benchmarks</span>
+                    <div className="bg-surface-3 border border-border rounded-lg overflow-hidden">
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr className="bg-surface-1/40 border-b border-border/80 font-bold text-text-muted">
+                            <th className="py-2.5 px-4">Competitor</th>
+                            <th className="py-2.5 px-4">Brand</th>
+                            <th className="py-2.5 px-4">Tier</th>
+                            <th className="py-2.5 px-4">Price</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/45">
+                          {(editing ? editData.competitor_prices : pa.competitor_prices)?.map((item: any, i: number) => (
+                            <tr key={i} className="hover:bg-surface-1/10 transition-colors">
+                              <td className="py-2.5 px-4 font-bold text-text-primary">
+                                {item.name}
+                                {item.source_url && (
+                                  <a href={item.source_url} target="_blank" rel="noopener noreferrer" className="ml-1.5 text-accent hover:underline font-normal text-[10px]">
+                                    source
+                                  </a>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-4 text-text-secondary">{item.brand || ""}</td>
+                              <td className="py-2.5 px-4 uppercase tracking-wider text-[9px] font-semibold">{item.tier || ""}</td>
+                              <td className="py-2.5 px-4">
+                                {editing ? (
+                                  <input
+                                    type="text"
+                                    className="px-2 py-1 border border-border rounded bg-surface-1 text-text-primary text-xs max-w-[100px] font-mono"
+                                    value={item.price ?? ""}
+                                    onChange={e => {
+                                      const list = [...editData.competitor_prices];
+                                      list[i].price = e.target.value;
+                                      setEditData({ ...editData, competitor_prices: list });
+                                    }}
+                                  />
+                                ) : (
+                                  <span className="font-mono text-accent-text font-bold">{item.price || ""}</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )}
-              </div>
-              
-              <div className="md:col-span-3 space-y-1">
-                <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Price Positioning Snapshot</span>
-                {editing ? (
-                  <textarea 
-                    rows={3}
-                    className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
-                    value={editData.price_positioning ?? ""}
-                    onChange={e => setEditData({ ...editData, price_positioning: e.target.value })}
-                  />
-                ) : (
-                  <p className="text-text-secondary leading-relaxed">
-                    {pa.price_positioning || "No price positioning snapshot compiled."}
-                  </p>
+
+                {/* General notes */}
+                {(editing || pa.notes) && (
+                  <div className="space-y-2 border-t border-border/40 pt-4">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Pricing Notes & Strategy</span>
+                    {editing ? (
+                      <textarea
+                        rows={4}
+                        className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
+                        value={editData.notes ?? ""}
+                        onChange={e => setEditData({ ...editData, notes: e.target.value })}
+                        placeholder="Enter strategic pricing decisions or analysis notes..."
+                      />
+                    ) : (
+                      <p className="text-text-secondary leading-relaxed whitespace-pre-line bg-surface-1/40 p-4 border border-border rounded-lg">
+                        {pa.notes}
+                      </p>
+                    )}
+                  </div>
                 )}
-              </div>
-            </div>
-
-            {/* Pricing benchmark grid */}
-            <div className="space-y-3 border-t border-border/40 pt-4">
-              <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Pricing Benchmarks</span>
-              <div className="bg-surface-3 border border-border rounded-lg overflow-hidden">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="bg-surface-1/40 border-b border-border/80 font-bold text-text-muted">
-                      <th className="py-2.5 px-4">Competitor</th>
-                      <th className="py-2.5 px-4">Brand</th>
-                      <th className="py-2.5 px-4">Tier</th>
-                      <th className="py-2.5 px-4">Price Value</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/45">
-                    {(editing ? editData.competitor_prices : pa.competitor_prices)?.map((item: any, i: number) => (
-                      <tr key={i} className="hover:bg-surface-1/10 transition-colors">
-                        <td className="py-2.5 px-4 font-bold text-text-primary">{item.name}</td>
-                        <td className="py-2.5 px-4 text-text-secondary">{item.brand}</td>
-                        <td className="py-2.5 px-4 uppercase tracking-wider text-[9px] font-semibold">{item.tier}</td>
-                        <td className="py-2.5 px-4">
-                          {editing ? (
-                            <input 
-                              type="text"
-                              className="px-2 py-1 border border-border rounded bg-surface-1 text-text-primary text-xs max-w-[100px] font-mono"
-                              value={item.price ?? ""}
-                              onChange={e => {
-                                const list = [...editData.competitor_prices];
-                                list[i].price = e.target.value;
-                                setEditData({ ...editData, competitor_prices: list });
-                              }}
-                            />
-                          ) : (
-                            <span className="font-mono text-accent-text font-bold">{item.price || "—"}</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* General notes */}
-            <div className="space-y-2 border-t border-border/40 pt-4">
-              <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Pricing Notes & Strategy</span>
-              {editing ? (
-                <textarea 
-                  rows={4}
-                  className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
-                  value={editData.notes ?? ""}
-                  onChange={e => setEditData({ ...editData, notes: e.target.value })}
-                  placeholder="Enter strategic pricing decisions or analysis notes..."
-                />
-              ) : (
-                <p className="text-text-secondary leading-relaxed whitespace-pre-line bg-surface-1/40 p-4 border border-border rounded-lg">
-                  {pa.notes || "No additional pricing notes documented."}
-                </p>
-              )}
-            </div>
-
+              </>
+            )}
           </div>
         )}
 
@@ -510,11 +530,11 @@ export default function ReportDetailPage() {
                   value={editData.positioning ?? ""}
                   onChange={e => setEditData({ ...editData, positioning: e.target.value })}
                 />
-              ) : (
+              ) : gtm.positioning ? (
                 <p className="text-text-secondary leading-relaxed bg-surface-3 p-4 border border-border rounded-lg italic font-medium">
-                  {gtm.positioning || "No core positioning outlined."}
+                  {gtm.positioning}
                 </p>
-              )}
+              ) : null}
             </div>
 
             {/* Quick Wins */}
@@ -578,11 +598,11 @@ export default function ReportDetailPage() {
                   onChange={e => setEditData({ ...editData, notes: e.target.value })}
                   placeholder="Enter GTM launch notes..."
                 />
-              ) : (
+              ) : gtm.notes ? (
                 <p className="text-text-secondary leading-relaxed whitespace-pre-line bg-surface-1/40 p-4 border border-border rounded-lg">
-                  {gtm.notes || "No launching notes documented."}
+                  {gtm.notes}
                 </p>
-              )}
+              ) : null}
             </div>
 
           </div>
@@ -603,11 +623,11 @@ export default function ReportDetailPage() {
                     value={editData.target_audience ?? ""}
                     onChange={e => setEditData({ ...editData, target_audience: e.target.value })}
                   />
-                ) : (
+                ) : cf.target_audience ? (
                   <p className="font-bold text-text-primary text-xs p-3 bg-surface-3 rounded-lg border border-border">
-                    {cf.target_audience || "No target audience details."}
+                    {cf.target_audience}
                   </p>
-                )}
+                ) : null}
               </div>
               
               <div className="space-y-1">
@@ -619,11 +639,11 @@ export default function ReportDetailPage() {
                     value={editData.product_name ?? ""}
                     onChange={e => setEditData({ ...editData, product_name: e.target.value })}
                   />
-                ) : (
+                ) : cf.product_name ? (
                   <p className="font-bold text-text-primary text-xs p-3 bg-surface-3 rounded-lg border border-border">
-                    {cf.product_name || "—"}
+                    {cf.product_name}
                   </p>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -688,11 +708,11 @@ export default function ReportDetailPage() {
                   onChange={e => setEditData({ ...editData, notes: e.target.value })}
                   placeholder="Enter content production or copywriting guidelines..."
                 />
-              ) : (
+              ) : cf.notes ? (
                 <p className="text-text-secondary leading-relaxed whitespace-pre-line bg-surface-1/40 p-4 border border-border rounded-lg">
-                  {cf.notes || "No content strategy notes documented."}
+                  {cf.notes}
                 </p>
-              )}
+              ) : null}
             </div>
 
           </div>

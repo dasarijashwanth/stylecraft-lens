@@ -14,6 +14,7 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui/Spinner";
+import { KeyRound } from "lucide-react";
 
 export default function SettingsPage() {
   const { user, refreshSession } = useAuth();
@@ -22,6 +23,11 @@ export default function SettingsPage() {
   const [userName, setUserName] = useState(user?.name || "Dev Admin");
   const [userEmail, setUserEmail] = useState(user?.email || "developer@stylecraftlens.com");
   const [savingProfile, setSavingProfile] = useState(false);
+
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const planLimits = {
     FREE: { competitors: 5, analyses: 3, projects: 1, reports: 3 },
@@ -37,6 +43,39 @@ export default function SettingsPage() {
       setSavingProfile(false);
       toast.success("Profile saved successfully");
     }, 800);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      toast.error("New password and confirmation don't match");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("New password must be at least 8 characters");
+      return;
+    }
+
+    setChangingPassword(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to change password");
+
+      toast.success("Password updated");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      if (user?.mustChangePassword) refreshSession();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to change password");
+    } finally {
+      setChangingPassword(false);
+    }
   };
 
   const handleUpgradePlan = async (targetPlan: "FREE" | "PRO" | "AGENCY") => {
@@ -139,6 +178,58 @@ export default function SettingsPage() {
                   <span>Save Profile</span>
                 </button>
               </form>
+
+              <div className="pt-6 border-t border-border/60">
+                <div className="flex items-center gap-2 mb-1">
+                  <KeyRound className="w-4 h-4 text-text-muted" />
+                  <h2 className="text-sm font-bold text-text-primary">Change Password</h2>
+                </div>
+                <p className="text-[11px] text-text-muted mb-4">Update the password used to sign in.</p>
+
+                <form onSubmit={handleChangePassword} className="space-y-4 max-w-md text-xs">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-text-primary">Current password</label>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-text-primary">New password</label>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-text-primary">Confirm new password</label>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={changingPassword}
+                    className="px-4 py-2 bg-surface-3 hover:border-border-strong border border-border text-text-primary font-bold rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {changingPassword && <Spinner size="xs" />}
+                    <span>Update Password</span>
+                  </button>
+                </form>
+              </div>
             </div>
           )}
 
