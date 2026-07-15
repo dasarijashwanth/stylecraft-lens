@@ -8,14 +8,15 @@ import {
   Search, 
   ChevronRight, 
   Clock, 
-  Trash2, 
-  Download, 
+  Trash2,
+  Download,
   Sparkles,
-  RefreshCw,
   Plus
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadReportPDF } from "@/lib/export-pdf";
+import { Badge } from "@/components/ui/Badge";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 export default function ReportsPage() {
   const router = useRouter();
@@ -26,6 +27,8 @@ export default function ReportsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [exportingId, setExportingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchReports = async () => {
     try {
@@ -49,17 +52,19 @@ export default function ReportsPage() {
     fetchReports();
   }, [statusFilter, searchQuery]);
 
-  const handleDeleteReport = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!window.confirm("Are you sure you want to delete this report?")) return;
-    
+  const handleDeleteReport = async () => {
+    if (!confirmDeleteId) return;
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/reports/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/reports/${confirmDeleteId}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       toast.success("Report deleted");
+      setConfirmDeleteId(null);
       fetchReports();
     } catch (err) {
       toast.error("Failed to delete report");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -153,9 +158,10 @@ export default function ReportsPage() {
 
       {/* Reports Grid */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center p-20 bg-surface-2 border border-border rounded-xl">
-          <RefreshCw className="w-8 h-8 text-accent animate-spin mb-3" />
-          <p className="text-xs text-text-muted">Fetching reports...</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="h-[210px] bg-surface-2 border border-border rounded-xl" />
+          ))}
         </div>
       ) : reports.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -167,14 +173,18 @@ export default function ReportsPage() {
             >
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-semibold border rounded-full uppercase tracking-wider ${
-                    r.status?.toUpperCase() === "DRAFT" ? "bg-zinc-800 text-zinc-400 border-zinc-700" :
-                    r.status?.toUpperCase() === "IN_REVIEW" ? "bg-warning-bg border border-warning/20 text-warning" :
-                    r.status?.toUpperCase() === "READY" ? "bg-success-bg border border-success/20 text-success" :
-                    "bg-indigo-950 text-indigo-300 border-indigo-900"
-                  }`}>
+                  <Badge
+                    tone={
+                      r.status?.toUpperCase() === "DRAFT" ? "neutral" :
+                      r.status?.toUpperCase() === "IN_REVIEW" ? "warning" :
+                      r.status?.toUpperCase() === "READY" ? "success" :
+                      "accent"
+                    }
+                    uppercase
+                    className="rounded-full"
+                  >
                     {r.status?.replace("_", " ")}
-                  </span>
+                  </Badge>
                   
                   <div className="flex items-center gap-1.5">
                     <button
@@ -186,7 +196,7 @@ export default function ReportsPage() {
                       <Download className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={(e) => handleDeleteReport(r.id, e)}
+                      onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(r.id); }}
                       title="Delete Report"
                       className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-danger"
                     >
@@ -238,6 +248,16 @@ export default function ReportsPage() {
           </Link>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={!!confirmDeleteId}
+        title="Delete this report?"
+        description="This will permanently delete the report. This action is irreversible."
+        confirmLabel="Delete report"
+        loading={deleting}
+        onConfirm={handleDeleteReport}
+        onClose={() => setConfirmDeleteId(null)}
+      />
     </div>
   );
 }

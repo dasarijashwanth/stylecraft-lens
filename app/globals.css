@@ -50,6 +50,10 @@
   --radius:    8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+
+  /* Shared layout dimensions */
+  --sidebar-width: 220px;
+  --topbar-height: 60px;
 }
 
 body {
@@ -202,4 +206,20 @@ h3 {
 }
 .animate-pulse-soft {
   animation: pulse-soft 2s infinite ease-in-out;
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-down {
+  animation: slide-down 0.15s ease-out;
+}
+
+@keyframes pulse-once {
+  0%   { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+.animate-pulse-once {
+  animation: pulse-once 0.6s ease-out;
 }

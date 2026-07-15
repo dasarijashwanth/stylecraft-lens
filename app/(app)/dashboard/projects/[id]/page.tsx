@@ -36,6 +36,7 @@ import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS } from "@/lib/gtm-field-schema";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork";
 
@@ -49,6 +50,8 @@ export default function ProjectDetailPage() {
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [linkingReport, setLinkingReport] = useState(false);
   const [pipelineState, setPipelineState] = useState<any>(null);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchProjectDetails = async () => {
     try {
@@ -95,16 +98,16 @@ export default function ProjectDetailPage() {
   }, [id]);
 
   const handleDeleteProject = async () => {
-    if (!window.confirm("Are you sure you want to permanently delete this project? This will remove related database indexes.")) return;
-    
+    setDeleting(true);
     try {
       const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
-      
+
       toast.success("Project deleted");
       router.push("/dashboard/projects");
     } catch (e) {
       toast.error("Failed to delete project");
+      setDeleting(false);
     }
   };
 
@@ -165,13 +168,6 @@ export default function ProjectDetailPage() {
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Run analysis</span>
-            </button>
-            <button
-              onClick={handleDeleteProject}
-              className="flex items-center gap-1.5 px-3.5 py-2 border border-danger/35 bg-danger/10 hover:bg-danger/20 text-danger text-xs font-bold rounded-lg transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete</span>
             </button>
           </div>
         </div>
@@ -307,14 +303,14 @@ export default function ProjectDetailPage() {
               </div>
 
               {/* 5-Tab Navigation */}
-              <div className="flex border-b border-border bg-surface-2 p-1.5 rounded-xl gap-1 overflow-x-auto">
+              <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
                 {(["competitive-analysis", "pricing", "go-to-market", "content-form", "artwork"] as Tab[]).map(tab => (
                   <button
                     key={tab}
-                    className={`flex-1 py-2 px-3 text-center text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
+                    className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors whitespace-nowrap ${
                       activeTab === tab
-                        ? "bg-surface-1 text-accent border border-border-strong shadow-sm"
-                        : "text-text-muted hover:text-text-primary hover:bg-surface-3/40"
+                        ? "border-accent text-accent"
+                        : "border-transparent text-text-secondary hover:text-text-primary"
                     }`}
                     onClick={() => setActiveTab(tab)}
                   >
@@ -348,12 +344,40 @@ export default function ProjectDetailPage() {
         </div>
       </div>
 
+      {/* Danger Zone */}
+      <div className="bg-surface-2 border border-danger/25 rounded-xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-danger">
+          <AlertTriangle className="w-4 h-4" />
+          <h2 className="text-xs font-bold uppercase tracking-wider">Danger Zone</h2>
+        </div>
+        <p className="text-[11px] text-text-muted leading-normal">
+          Permanently delete this project and its related database indexes. This action is irreversible.
+        </p>
+        <button
+          onClick={() => setConfirmDeleteOpen(true)}
+          className="px-4 py-2 bg-danger/10 border border-danger/35 hover:bg-danger/20 text-danger text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 w-full sm:w-auto"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>Delete project</span>
+        </button>
+      </div>
+
       {/* Link Report Modal */}
       <LinkReportModal
         isOpen={linkingReport}
         projectId={id}
         onLinked={fetchProjectDetails}
         onClose={() => setLinkingReport(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmDeleteOpen}
+        title="Delete this project?"
+        description="This will permanently delete the project and remove related database indexes. This action is irreversible."
+        confirmLabel="Delete project"
+        loading={deleting}
+        onConfirm={handleDeleteProject}
+        onClose={() => setConfirmDeleteOpen(false)}
       />
     </div>
   );
@@ -1078,6 +1102,19 @@ function TdsKnowledgeSection({ projectId }: { projectId: string }) {
                   const complete = isTdsFieldComplete(entry?.answer);
                   const status = fieldStatus[f.id] || "idle";
                   const flagged = !!entry?.flagged;
+                  // Same distinction as the GTM grid below: "never captured yet"
+                  // (still needs attention) vs "captured but confirmed not
+                  // listed" (a settled, non-urgent answer) — previously both
+                  // rendered as an identical amber chip.
+                  const isPending = !complete && (entry?.answer ?? "").trim() === "";
+                  const isSettledNA = !complete && !isPending;
+                  const chipClass = flagged
+                    ? "bg-danger/10 border-danger/30 text-danger"
+                    : isPending
+                    ? "bg-warning/10 border-warning/25 text-warning"
+                    : isSettledNA
+                    ? "bg-surface-3 border-border text-text-muted"
+                    : "bg-surface-3 border-border text-text-muted";
                   return (
                     <div key={f.id} className="flex flex-col gap-1">
                       <div className="flex items-center justify-between gap-2">
@@ -1088,9 +1125,7 @@ function TdsKnowledgeSection({ projectId }: { projectId: string }) {
                           )}
                         </label>
                         <div className="flex items-center gap-1 shrink-0">
-                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
-                            flagged ? "bg-danger/10 border-danger/30 text-danger" : !complete ? "bg-warning/10 border-warning/25 text-warning" : "bg-surface-3 border-border text-text-muted"
-                          }`}>
+                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}>
                             {TDS_SOURCE_LABELS[entry?.source || "none"]}
                           </span>
                           <button
@@ -1345,6 +1380,22 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
                   const complete = isFieldComplete(entry?.answer);
                   const status = fieldStatus[f.id] || "idle";
                   const flagged = !!entry?.flagged;
+                  // Distinguish "never generated yet" (no answer at all — still
+                  // needs attention) from "AI/derivation explicitly decided N/A"
+                  // (a real, settled answer) — both used to render as an
+                  // identical amber "N/A" chip, indistinguishable at a glance
+                  // across a 74-row grid.
+                  const isPending = !complete && (entry?.answer ?? "").trim() === "";
+                  const isSettledNA = !complete && !isPending;
+                  const chipClass = flagged
+                    ? "bg-danger/10 border-danger/30 text-danger"
+                    : isPending
+                    ? "bg-warning/10 border-warning/25 text-warning"
+                    : isSettledNA
+                    ? "bg-surface-3 border-border text-text-muted"
+                    : entry?.source === "web"
+                    ? "bg-accent-bg border-accent-border text-accent-text"
+                    : "bg-surface-3 border-border text-text-muted";
                   return (
                     <div key={f.id} className="flex flex-col gap-1">
                       <div className="flex items-center justify-between gap-2">
@@ -1355,9 +1406,7 @@ function ProductKnowledgeSection({ projectId }: { projectId: string }) {
                           )}
                         </label>
                         <div className="flex items-center gap-1 shrink-0">
-                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
-                            flagged ? "bg-danger/10 border-danger/30 text-danger" : !complete ? "bg-warning/10 border-warning/25 text-warning" : "bg-surface-3 border-border text-text-muted"
-                          }`}>
+                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}>
                             {SOURCE_LABELS[entry?.source || "none"]}
                           </span>
                           <button

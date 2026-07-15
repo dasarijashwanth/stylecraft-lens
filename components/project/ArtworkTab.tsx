@@ -209,8 +209,8 @@ export function ArtworkTab({ projectId }: { projectId: string }) {
 
           {/* Amazon Listing Notes */}
           {activeSuggestions.amazon_listing_notes && (
-            <div className="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-950 dark:text-amber-200 rounded-xl space-y-1">
-              <span className="text-[10px] font-bold uppercase tracking-wider block text-amber-600 dark:text-amber-400">Amazon Marketplace Artwork Notes</span>
+            <div className="p-4 bg-warning-bg border border-warning/20 text-warning rounded-xl space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider block text-warning">Amazon Marketplace Artwork Notes</span>
               <p className="text-[11px] leading-relaxed">{activeSuggestions.amazon_listing_notes}</p>
             </div>
           )}

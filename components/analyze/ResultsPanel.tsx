@@ -6,6 +6,7 @@ import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb,
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
+import { Spinner } from "@/components/ui/Spinner";
 
 interface ResultsPanelProps {
   analysis: {
@@ -146,9 +147,9 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
           <div className="results-meta text-[11px] text-text-muted font-mono leading-none">
             <span>{phase3.amazon_category || "Market Analysis"}</span>
             <span className="mx-2">·</span>
-            <span>10 products mapped</span>
+            <span>{(phase1.competitors?.length ?? 0) + (phase2.competitors?.length ?? 0)} products mapped</span>
             <span className="mx-2">·</span>
-            <span>{analysis.totalSearches || 26} web searches performed</span>
+            <span>{analysis.totalSearches ?? 0} web searches performed</span>
           </div>
         </div>
 
@@ -173,7 +174,7 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
             className="flex items-center gap-1.5 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/20 disabled:opacity-50"
           >
             {savingReport ? (
-              <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <Spinner size="sm" className="text-white" />
             ) : (
               <FileText className="w-3.5 h-3.5" />
             )}
@@ -392,7 +393,7 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
                       ? "bg-danger/10 text-danger border border-danger/30"
                       : rec.priority === "medium"
                       ? "bg-warning/10 text-warning border border-warning/30"
-                      : "bg-zinc-800 text-zinc-400 border border-zinc-700"
+                      : "bg-surface-3 text-text-muted border border-border-strong"
                   }`}
                 >
                   {rec.priority}
@@ -429,14 +430,18 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
             <h2 className="text-base font-bold text-text-primary tracking-tight">Large Brand Competitors</h2>
           </div>
           <span className="count-badge bg-indigo-950/60 border border-indigo-900/60 text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
-            5 Brands
+            {phase1.competitors?.length ?? 0} Brands
           </span>
         </div>
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
-          {phase1.competitors?.map((comp, i) => (
-            <CompetitorCard key={i} competitor={comp} tier="legacy" onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
-          ))}
+          {phase1.competitors && phase1.competitors.length > 0 ? (
+            phase1.competitors.map((comp, i) => (
+              <CompetitorCard key={i} competitor={comp} tier="legacy" onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+            ))
+          ) : (
+            <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
+          )}
         </div>
 
         <div className="pt-4 border-t border-border/40">
@@ -453,14 +458,18 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
             <h2 className="text-base font-bold text-text-primary tracking-tight">Indie & Emerging Competitors</h2>
           </div>
           <span className="count-badge bg-amber-950/60 border border-amber-900/60 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
-            5 Brands
+            {phase2.competitors?.length ?? 0} Brands
           </span>
         </div>
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
-          {phase2.competitors?.map((comp, i) => (
-            <CompetitorCard key={i} competitor={comp} tier="emerging" onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
-          ))}
+          {phase2.competitors && phase2.competitors.length > 0 ? (
+            phase2.competitors.map((comp, i) => (
+              <CompetitorCard key={i} competitor={comp} tier="emerging" onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+            ))
+          ) : (
+            <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>
+          )}
         </div>
 
         <div className="pt-4 border-t border-border/40">

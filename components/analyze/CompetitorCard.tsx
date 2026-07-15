@@ -8,6 +8,7 @@ import type { ProductNewsResult } from "@/lib/product-news";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { CitationMarker, SourcesFootnoteList, useCitationNumbering } from "./CitationMarker";
 import { enqueue } from "@/lib/fetch-queue";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 interface Competitor {
   name:               string;
@@ -51,19 +52,6 @@ type NewsState =
   | { status: "loading" }
   | { status: "loaded"; data: ProductNewsResult & { retrievedAt: string } }
   | { status: "error"; message: string };
-
-function SkeletonRows({ count = 3 }: { count?: number }) {
-  return (
-    <div className="space-y-2 animate-pulse">
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="space-y-1">
-          <div className="h-3 bg-surface-3 rounded w-1/3" />
-          <div className="h-2.5 bg-surface-3/60 rounded w-full" />
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function RefreshButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
   return (
@@ -284,7 +272,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
         </div>
       )}
 
-      {c.asin && <div className="text-[10px] text-text-muted font-mono leading-none">ASIN: {c.asin}</div>}
+      {isValidAsin && <div className="text-[10px] text-text-muted font-mono leading-none">ASIN: {c.asin}</div>}
 
       {/* ==================== SECTION 1: KEY FEATURES ==================== */}
       <div className="border-t border-border/40 pt-3">
@@ -297,10 +285,10 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
         </div>
 
         {featuresOpen && (
-          <div className="mt-3 space-y-3 animate-slide-down">
+          <div className="mt-3 space-y-2.5 animate-slide-down">
             {featuresState.status === "loading" && <SkeletonRows count={4} />}
             {featuresState.status === "error" && (
-              <div className="flex items-center justify-between gap-2 py-2">
+              <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
                 <span className="text-danger">{featuresState.message}</span>
                 <TimeoutChip onRetry={() => loadFeatures()} />
               </div>
@@ -342,10 +330,10 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
         </div>
 
         {strengthsOpen && (
-          <div className="mt-3 space-y-2 animate-slide-down">
+          <div className="mt-3 space-y-2.5 animate-slide-down">
             {reviewAnalysis.status === "loading" && <SkeletonRows count={2} />}
             {reviewAnalysis.status === "error" && (
-              <div className="flex items-center justify-between gap-2 py-2">
+              <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
                 <span className="text-danger">{reviewAnalysis.message}</span>
                 <TimeoutChip onRetry={() => loadReviewAnalysis()} />
               </div>
@@ -398,10 +386,10 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
         </div>
 
         {weaknessesOpen && (
-          <div className="mt-3 space-y-3 animate-slide-down">
+          <div className="mt-3 space-y-2.5 animate-slide-down">
             {reviewAnalysis.status === "loading" && <SkeletonRows count={2} />}
             {reviewAnalysis.status === "error" && (
-              <div className="flex items-center justify-between gap-2 py-2">
+              <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
                 <span className="text-danger">{reviewAnalysis.message}</span>
                 <TimeoutChip onRetry={() => loadReviewAnalysis()} />
               </div>
@@ -485,7 +473,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
           <div className="mt-3 space-y-2.5 animate-slide-down">
             {newsState.status === "loading" && <SkeletonRows count={2} />}
             {newsState.status === "error" && (
-              <div className="flex items-center justify-between gap-2 py-2">
+              <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
                 <span className="text-danger">{newsState.message}</span>
                 <TimeoutChip onRetry={() => loadNews()} />
               </div>

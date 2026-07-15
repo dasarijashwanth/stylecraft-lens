@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Loader2, AlertCircle, HelpCircle } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 
 interface PhaseState {
   status: "waiting" | "running" | "complete" | "error";
@@ -77,6 +78,8 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   const [answerText, setAnswerText] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
+  const [failedMessage, setFailedMessage] = useState<string | null>(null);
+  const [runToken, setRunToken] = useState(0);
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
   const resumeRef = useRef<(() => void) | null>(null);
@@ -193,7 +196,13 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
         setPhases((prev) =>
           prev.map((p) => (p.status === "running" ? { ...p, status: "error", message: err.message } : p))
         );
-        onError(err.message || "Analysis failed");
+        // Stay mounted with a Retry affordance instead of immediately bouncing
+        // back to the empty form — /continue always re-reads the persisted
+        // phase and only advances it by one, so resuming from here is safe
+        // (see fetchJsonWithRetry's comment above). onError is now only
+        // invoked if the user explicitly chooses to give up (see the
+        // "Start new analysis instead" button below).
+        setFailedMessage(err.message || "Analysis failed");
       }
     }
 
@@ -203,7 +212,13 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
       cancelled = true;
       clearInterval(timerRef.current);
     };
-  }, [analysisId]);
+  }, [analysisId, runToken]);
+
+  function handleRetry() {
+    setFailedMessage(null);
+    setPhases(PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" })));
+    setRunToken((t) => t + 1);
+  }
 
   async function submitAnswer() {
     if (!answerText.trim() || submittingAnswer) return;
@@ -227,8 +242,10 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   const formatTime = (s: number) =>
     `${Math.floor(s / 60)}m ${s % 60}s`;
 
+  const completedCount = phases.filter((p) => p.status === "complete").length;
+
   return (
-    <div className="analysis-progress-panel bg-surface-2 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
+    <motion.div layout className="analysis-progress-panel bg-surface-2 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
       {/* Top bar */}
       <div className="progress-topbar flex items-center justify-between px-5 py-3 border-b border-border bg-surface-3/30">
         <div className="progress-meta text-[11px] text-text-muted font-mono">
@@ -238,75 +255,112 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
           <span className="mx-1.5">·</span>
           <span className="elapsed">{formatTime(elapsedSeconds)}</span>
         </div>
-        <div className="status-running flex items-center gap-1.5 text-[11px] text-accent font-semibold">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          <span>Analyzing…</span>
-        </div>
+        {pendingQuestion ? (
+          <div className="status-running flex items-center gap-1.5 text-[11px] text-warning font-semibold">
+            <HelpCircle className="w-3.5 h-3.5" />
+            <span>Waiting for your input…</span>
+          </div>
+        ) : (
+          <div className="status-running flex items-center gap-1.5 text-[11px] text-accent font-semibold">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span>Analyzing…</span>
+          </div>
+        )}
+      </div>
+
+      {/* Overall progress bar — derived from completed phase count */}
+      <div className="h-1 bg-surface-3">
+        <div
+          className="h-full bg-accent transition-all duration-500"
+          style={{ width: `${(completedCount / PHASE_LABELS.length) * 100}%` }}
+        />
       </div>
 
       {/* Product Identity Card — shown as soon as Stage 1 completes, so a
           wrong identification is visible immediately. */}
-      {identity && (identity.category || identity.whatItIs) && (
-        <div className="mx-5 mt-4 p-3 bg-surface-3/30 border border-border rounded-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Identified Product</span>
-            {identity.confidence && (
-              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
-                identity.confidence === "high" ? "bg-success/10 border-success/30 text-success" :
-                identity.confidence === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
-                "bg-danger/10 border-danger/30 text-danger"
-              }`}>{identity.confidence} confidence</span>
-            )}
-          </div>
-          <div className="mt-1 text-[11px] text-text-primary font-semibold">
-            {identity.category}{identity.subcategory && identity.subcategory !== identity.category ? ` / ${identity.subcategory}` : ""}
-          </div>
-          {identity.whatItIs && <p className="mt-1 text-[10px] text-text-secondary leading-relaxed">{identity.whatItIs}</p>}
-          {Array.isArray(identity.evidence) && identity.evidence.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {identity.evidence.slice(0, 3).map((e: any, i: number) => (
-                e.url ? (
-                  <a key={i} href={e.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-accent hover:underline">
-                    source {i + 1}
-                  </a>
-                ) : null
-              ))}
+      <AnimatePresence initial={false}>
+        {identity && (identity.category || identity.whatItIs) && (
+          <motion.div
+            key="identity-card"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mx-5 mt-4 overflow-hidden"
+          >
+            <div className="p-3 bg-surface-3/30 border border-border rounded-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Identified Product</span>
+                {identity.confidence && (
+                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
+                    identity.confidence === "high" ? "bg-success/10 border-success/30 text-success" :
+                    identity.confidence === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
+                    "bg-danger/10 border-danger/30 text-danger"
+                  }`}>{identity.confidence} confidence</span>
+                )}
+              </div>
+              <div className="mt-1 text-[11px] text-text-primary font-semibold">
+                {identity.category}{identity.subcategory && identity.subcategory !== identity.category ? ` / ${identity.subcategory}` : ""}
+              </div>
+              {identity.whatItIs && <p className="mt-1 text-[10px] text-text-secondary leading-relaxed">{identity.whatItIs}</p>}
+              {Array.isArray(identity.evidence) && identity.evidence.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {identity.evidence.slice(0, 3).map((e: any, i: number) => (
+                    e.url ? (
+                      <a key={i} href={e.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-accent hover:underline">
+                        source {i + 1}
+                      </a>
+                    ) : null
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Pause-and-ask: identification couldn't confidently determine the
           category — never guess, ask the one question needed instead. */}
-      {pendingQuestion && (
-        <div className="mx-5 mt-4 p-3.5 bg-warning/5 border border-warning/25 rounded-lg space-y-2">
-          <div className="flex items-center gap-1.5 text-warning font-bold text-[11px]">
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>{pendingQuestion.question}</span>
-          </div>
-          {pendingQuestion.foundSoFar && (
-            <p className="text-[10px] text-text-muted italic">What we found so far: {pendingQuestion.foundSoFar}</p>
-          )}
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={answerText}
-              onChange={(e) => setAnswerText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
-              placeholder="e.g. beard trimmer"
-              className="flex-1 px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
-              autoFocus
-            />
-            <button
-              onClick={submitAnswer}
-              disabled={!answerText.trim() || submittingAnswer}
-              className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors"
-            >
-              {submittingAnswer ? "Saving…" : "Continue"}
-            </button>
-          </div>
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {pendingQuestion && (
+          <motion.div
+            key="pending-question"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mx-5 mt-4 overflow-hidden"
+          >
+            <div className="p-3.5 bg-warning/5 border border-warning/25 rounded-lg space-y-2">
+              <div className="flex items-center gap-1.5 text-warning font-bold text-[11px]">
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span>{pendingQuestion.question}</span>
+              </div>
+              {pendingQuestion.foundSoFar && (
+                <p className="text-[10px] text-text-muted italic">What we found so far: {pendingQuestion.foundSoFar}</p>
+              )}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={answerText}
+                  onChange={(e) => setAnswerText(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
+                  placeholder="e.g. beard trimmer"
+                  className="flex-1 px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+                  autoFocus
+                />
+                <button
+                  onClick={submitAnswer}
+                  disabled={!answerText.trim() || submittingAnswer}
+                  className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg disabled:opacity-50 transition-colors"
+                >
+                  {submittingAnswer ? "Saving…" : "Continue"}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Phase list */}
       <div className="phase-list flex flex-col p-5 gap-4">
@@ -321,10 +375,12 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             <div className="phase-icon w-6 h-6 flex items-center justify-center shrink-0 mt-0.5">
               {phase.status === "complete" ? (
                 <CheckCircle className="w-5 h-5 text-success" />
-              ) : phase.status === "running" ? (
-                <Loader2 className="w-5 h-5 text-accent animate-spin" />
               ) : phase.status === "error" ? (
                 <AlertCircle className="w-5 h-5 text-danger" />
+              ) : pendingQuestion && i === 0 ? (
+                <HelpCircle className="w-5 h-5 text-warning" />
+              ) : phase.status === "running" ? (
+                <Loader2 className="w-5 h-5 text-accent animate-spin" />
               ) : (
                 <span className="phase-number w-5 h-5 rounded-full border border-border-strong text-[10px] font-bold text-text-muted flex items-center justify-center">
                   {i + 1}
@@ -360,6 +416,34 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
           </div>
         ))}
       </div>
-    </div>
+
+      {/* Terminal failure — resumable in place instead of discarding progress
+          back to the empty form; /continue is safe to call again (see the
+          comment on fetchJsonWithRetry above). */}
+      {failedMessage && (
+        <div className="mx-5 mb-5 p-3.5 bg-danger-bg border border-danger/20 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2 text-danger">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{failedMessage}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => onError(failedMessage)}
+              className="px-3 py-1.5 border border-border hover:bg-surface-3 text-text-primary text-[11px] font-semibold rounded-lg transition-colors"
+            >
+              Start new analysis instead
+            </button>
+          </div>
+        </div>
+      )}
+    </motion.div>
   );
 }

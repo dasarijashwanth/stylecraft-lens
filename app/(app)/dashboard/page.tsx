@@ -4,15 +4,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { 
-  Target, 
-  Sparkles, 
-  FileText, 
-  TrendingUp, 
+import {
+  Target,
+  Sparkles,
+  FileText,
+  TrendingUp,
   ArrowRight,
   Plus,
   Play,
-  Download
+  Download,
+  Activity
 } from "lucide-react";
 import { 
   ResponsiveContainer, 
@@ -25,6 +26,8 @@ import {
 } from "recharts";
 import KPICard from "@/components/dashboard/KPICard";
 import { toast } from "sonner";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 function timeAgo(date: Date) {
   const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
@@ -250,13 +253,13 @@ export default function DashboardOverview() {
                         </div>
                       </td>
                       <td className="py-3">
-                        <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                          an.status === "COMPLETE" ? "bg-success/15 text-success" :
-                          an.status === "RUNNING" ? "bg-accent-bg text-accent-text animate-pulse" :
-                          an.status === "FAILED" ? "bg-danger/15 text-danger" : "bg-zinc-800 text-zinc-400"
-                        }`}>
+                        <Badge
+                          tone={an.status === "COMPLETE" ? "success" : an.status === "RUNNING" ? "accent" : an.status === "FAILED" ? "danger" : "neutral"}
+                          uppercase
+                          className={an.status === "RUNNING" ? "animate-pulse" : undefined}
+                        >
                           {an.status}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="py-3 text-text-secondary">{an.competitors?.length || 10} found</td>
                       <td className="py-3 text-text-muted">
@@ -274,8 +277,14 @@ export default function DashboardOverview() {
                   ))}
                   {analyses.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-text-muted">
-                        No analyses completed yet.
+                      <td colSpan={5}>
+                        <EmptyState
+                          compact
+                          icon={Sparkles}
+                          title="No analyses yet"
+                          description="Run your first AI competitive analysis to see it here."
+                          action={{ label: "New analysis", href: "/dashboard/analyze" }}
+                        />
                       </td>
                     </tr>
                   )}
@@ -312,10 +321,14 @@ export default function DashboardOverview() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex flex-col items-center justify-center h-full text-text-muted">
-                  <TrendingUp className="w-8 h-8 opacity-40 mb-2" />
-                  <p>No competitor data available for plotting.</p>
-                </div>
+                <EmptyState
+                  compact
+                  icon={TrendingUp}
+                  title="No competitor data yet"
+                  description="Add competitors to see them ranked by threat score."
+                  action={{ label: "Add competitor", href: "/dashboard/competitors" }}
+                  className="h-full justify-center"
+                />
               )}
             </div>
           </div>
@@ -398,7 +411,7 @@ export default function DashboardOverview() {
                 );
               })}
               {activityFeed.length === 0 && (
-                <p className="p-4 text-center text-text-muted">No recent activities</p>
+                <EmptyState compact icon={Activity} title="No recent activity" />
               )}
             </div>
           </div>
@@ -441,19 +454,11 @@ export default function DashboardOverview() {
                   </td>
                   <td className="py-3">
                     {c.is_fixed ? (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-surface-3 border border-border text-text-secondary">
-                        Reference
-                      </span>
+                      <Badge tone="neutral">Reference</Badge>
                     ) : c.status ? (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-success-bg border border-success/20 text-success">
-                        <span className="w-1.5 h-1.5 rounded-full bg-success" />
-                        {c.status}
-                      </span>
+                      <Badge tone="success" dot>{c.status}</Badge>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
-                        <span className="w-1 h-1 rounded-full bg-indigo-400" />
-                        Analysis Mapped
-                      </span>
+                      <Badge tone="accent" dot>Analysis Mapped</Badge>
                     )}
                   </td>
                   <td className="py-3">
@@ -491,8 +496,13 @@ export default function DashboardOverview() {
               ))}
               {emergingThreats.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-text-muted">
-                    No active competitors with high threat scores found.
+                  <td colSpan={5}>
+                    <EmptyState
+                      compact
+                      icon={TrendingUp}
+                      title="No high-threat competitors"
+                      description="Competitors scoring above 50 threat will appear here."
+                    />
                   </td>
                 </tr>
               )}

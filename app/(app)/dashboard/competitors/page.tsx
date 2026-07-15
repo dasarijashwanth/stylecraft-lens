@@ -20,6 +20,13 @@ import AddCompetitorModal from "@/components/competitors/AddCompetitorModal";
 import { useAuth } from "@/hooks/useAuth";
 import { useAmazonProduct } from "@/hooks/useAmazonProduct";
 import { toast } from "sonner";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+
+function statusBadgeTone(status: string): BadgeTone {
+  const s = status.toUpperCase();
+  return s === "ACTIVE" ? "status-active" : s === "MONITORING" ? "status-monitoring" : "status-archived";
+}
 
 type TabView = "all" | "analysis" | "manual";
 
@@ -46,6 +53,9 @@ export default function CompetitorsPage() {
   
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
+  const [confirmBulkDeleteOpen, setConfirmBulkDeleteOpen] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Open modal if URL query param has ?add=true
   useEffect(() => {
@@ -162,8 +172,7 @@ export default function CompetitorsPage() {
   };
 
   const handleBulkDelete = async () => {
-    if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} manual competitors?`)) return;
-    
+    setDeleting(true);
     let successCount = 0;
     for (const id of selectedIds) {
       // Do not allow deleting analysis / fixed competitors
@@ -176,9 +185,11 @@ export default function CompetitorsPage() {
         if (res.ok) successCount++;
       } catch (e) {}
     }
-    
+
     toast.success(`Deleted ${successCount} manual competitors`);
     setSelectedIds([]);
+    setConfirmBulkDeleteOpen(false);
+    setDeleting(false);
     loadAll();
   };
 
@@ -215,15 +226,19 @@ export default function CompetitorsPage() {
     toast.success("CSV file downloaded");
   };
 
-  const handleDeleteCompetitor = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this competitor?")) return;
+  const handleDeleteCompetitor = async () => {
+    if (!confirmDeleteId) return;
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/competitors/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/competitors/${confirmDeleteId}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       toast.success("Competitor deleted");
+      setConfirmDeleteId(null);
       loadAll();
     } catch (e) {
       toast.error("Failed to delete competitor");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -318,7 +333,7 @@ export default function CompetitorsPage() {
 
       {/* Bulk Actions Bar */}
       {selectedIds.length > 0 && (
-        <div className="flex items-center justify-between p-3 border border-accent-border bg-accent-bg rounded-xl animate-pulse-soft">
+        <div className="flex items-center justify-between p-3 border border-accent-border bg-accent-bg rounded-xl">
           <span className="text-xs font-semibold text-accent-text">
             {selectedIds.length} items selected
           </span>
@@ -331,7 +346,7 @@ export default function CompetitorsPage() {
               <span>Export CSV</span>
             </button>
             <button
-              onClick={handleBulkDelete}
+              onClick={() => setConfirmBulkDeleteOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-danger/10 border border-danger/25 text-danger text-[11px] font-bold hover:bg-danger/20 transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -541,22 +556,9 @@ export default function CompetitorsPage() {
                           </td>
                           <td className="py-3 px-4">
                             {isFromAnalysis ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold rounded bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
-                                <span className="w-1 h-1 rounded-full bg-indigo-400" />
-                                Analysis Mapped
-                              </span>
+                              <Badge tone="accent" dot>Analysis Mapped</Badge>
                             ) : (
-                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold rounded ${
-                                c.status.toUpperCase() === "ACTIVE" ? "bg-success-bg border border-success/20 text-success" :
-                                c.status.toUpperCase() === "MONITORING" ? "bg-warning-bg border border-warning/20 text-warning" :
-                                "bg-zinc-800 border border-zinc-700 text-zinc-400"
-                              }`}>
-                                <span className={`w-1 h-1 rounded-full ${
-                                  c.status.toUpperCase() === "ACTIVE" ? "bg-success" :
-                                  c.status.toUpperCase() === "MONITORING" ? "bg-warning" : "bg-zinc-500"
-                                }`} />
-                                {c.status}
-                              </span>
+                              <Badge tone={statusBadgeTone(c.status)} dot>{c.status}</Badge>
                             )}
                           </td>
                           <td className="py-3 px-4">
@@ -572,7 +574,7 @@ export default function CompetitorsPage() {
                           <td className="py-3 px-4 text-right">
                             {!isFromAnalysis && (
                               <button
-                                onClick={() => handleDeleteCompetitor(c.id)}
+                                onClick={() => setConfirmDeleteId(c.id)}
                                 className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-danger transition-colors"
                                 title="Delete competitor"
                               >
@@ -596,7 +598,7 @@ export default function CompetitorsPage() {
                       key={id} 
                       competitor={c} 
                       isFromAnalysis={isFromAnalysis} 
-                      onDelete={() => handleDeleteCompetitor(c.id)} 
+                      onDelete={() => setConfirmDeleteId(c.id)}
                     />
                   );
                 })}
@@ -608,13 +610,31 @@ export default function CompetitorsPage() {
       )}
 
       {/* Add Competitor Modal */}
-      {isAddModalOpen && (
-        <AddCompetitorModal
-          isOpen={isAddModalOpen}
-          onClose={() => setIsAddModalOpen(false)}
-          onSuccess={loadAll}
-        />
-      )}
+      <AddCompetitorModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        onSuccess={loadAll}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmBulkDeleteOpen}
+        title={`Delete ${selectedIds.length} competitors?`}
+        description="This will permanently delete the selected manual competitors. Analysis-mapped and fixed reference competitors are never removed by bulk delete. This action is irreversible."
+        confirmLabel="Delete selected"
+        loading={deleting}
+        onConfirm={handleBulkDelete}
+        onClose={() => setConfirmBulkDeleteOpen(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={!!confirmDeleteId}
+        title="Delete this competitor?"
+        description="This will permanently delete the competitor. This action is irreversible."
+        confirmLabel="Delete competitor"
+        loading={deleting}
+        onConfirm={handleDeleteCompetitor}
+        onClose={() => setConfirmDeleteId(null)}
+      />
     </div>
   );
 }
@@ -656,17 +676,9 @@ function CompetitorGridCard({
           </div>
 
           {isFromAnalysis ? (
-            <span className="px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-indigo-950 text-indigo-400 border border-indigo-900">
-              Analysis
-            </span>
+            <Badge tone="accent" uppercase>Analysis</Badge>
           ) : (
-            <span className={`inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
-              c.status.toUpperCase() === "ACTIVE" ? "bg-success-bg border border-success/20 text-success" :
-              c.status.toUpperCase() === "MONITORING" ? "bg-warning-bg border border-warning/20 text-warning" :
-              "bg-zinc-800 border border-zinc-700 text-zinc-400"
-            }`}>
-              {c.status}
-            </span>
+            <Badge tone={statusBadgeTone(c.status)} uppercase>{c.status}</Badge>
           )}
         </div>
 

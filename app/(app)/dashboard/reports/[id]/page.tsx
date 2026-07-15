@@ -3,21 +3,23 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
-import { 
-  Save, 
-  Download, 
-  ArrowLeft, 
-  Edit2, 
-  X, 
-  Loader2, 
-  Star, 
+import {
+  Save,
+  Download,
+  ArrowLeft,
+  Edit2,
+  X,
+  Loader2,
+  Star,
   ExternalLink,
   Plus,
-  Trash2
+  Trash2,
+  AlertTriangle
 } from "lucide-react";
 import { CompetitorCard } from "@/components/analyze/CompetitorCard";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form";
 
@@ -40,6 +42,8 @@ export default function ReportDetailPage() {
   const [editData, setEditData] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchReport = async () => {
     try {
@@ -104,6 +108,19 @@ export default function ReportDetailPage() {
       toast.error("Failed to save report updates");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteReport = async () => {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/reports/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      toast.success("Report deleted");
+      router.push("/dashboard/reports");
+    } catch (e) {
+      toast.error("Failed to delete report");
+      setDeleting(false);
     }
   };
 
@@ -201,7 +218,7 @@ export default function ReportDetailPage() {
           ) : (
             <button 
               onClick={startEdit} 
-              className="flex items-center gap-1 px-4 py-2 bg-surface-3 hover:bg-surface-3-hover text-text-primary border border-border text-xs font-bold rounded-lg transition-colors"
+              className="flex items-center gap-1 px-4 py-2 bg-surface-3 hover:border-border-strong text-text-primary border border-border text-xs font-bold rounded-lg transition-colors"
             >
               <Edit2 className="w-3.5 h-3.5 text-text-muted" />
               <span>Edit</span>
@@ -682,6 +699,34 @@ export default function ReportDetailPage() {
         )}
 
       </div>
+
+      {/* Danger Zone */}
+      <div className="bg-surface-2 border border-danger/25 rounded-xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-danger">
+          <AlertTriangle className="w-4 h-4" />
+          <h2 className="text-xs font-bold uppercase tracking-wider">Danger Zone</h2>
+        </div>
+        <p className="text-[11px] text-text-muted leading-normal">
+          Permanently delete this report. This action is irreversible.
+        </p>
+        <button
+          onClick={() => setConfirmDeleteOpen(true)}
+          className="px-4 py-2 bg-danger/10 border border-danger/35 hover:bg-danger/20 text-danger text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 w-full sm:w-auto"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>Delete report</span>
+        </button>
+      </div>
+
+      <ConfirmDialog
+        isOpen={confirmDeleteOpen}
+        title="Delete this report?"
+        description="This will permanently delete the report. This action is irreversible."
+        confirmLabel="Delete report"
+        loading={deleting}
+        onConfirm={handleDeleteReport}
+        onClose={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }

@@ -17,6 +17,8 @@ import {
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 import { useAuth } from "@/hooks/useAuth";
+import { Spinner } from "@/components/ui/Spinner";
+import { Modal } from "@/components/ui/Modal";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -150,7 +152,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-bg">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        <Spinner size="lg" className="text-accent" />
         <span className="text-xs text-text-muted mt-3 font-medium">Authorizing session...</span>
       </div>
     );
@@ -164,7 +166,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
 
       {/* Main content wrapper */}
-      <div className="flex flex-col lg:pl-[220px] min-h-screen">
+      <div className="flex flex-col lg:pl-[var(--sidebar-width)] min-h-screen">
         <Topbar 
           onMenuClick={() => setSidebarOpen(true)} 
           onSearchClick={() => setSearchOpen(true)} 
@@ -176,12 +178,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Global Command Palette Search Modal */}
-      {searchOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] px-4 bg-black/70 backdrop-blur-sm">
-          {/* Overlay click closer */}
-          <div className="fixed inset-0" onClick={() => setSearchOpen(false)} />
-          
-          <div className="relative w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-surface-2 shadow-2xl z-10 flex flex-col max-h-[500px]">
+      <Modal isOpen={searchOpen} onClose={() => setSearchOpen(false)} placement="top" size="xl" className="overflow-hidden max-h-[500px]">
             {/* Search Input bar */}
             <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border bg-surface-3/50">
               <Search className="w-5 h-5 text-text-muted shrink-0" />
@@ -268,9 +265,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                 <span>K</span>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+      </Modal>
     </div>
   );
 }

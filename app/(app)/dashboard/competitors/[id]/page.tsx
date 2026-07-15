@@ -18,6 +18,13 @@ import {
   FileText
 } from "lucide-react";
 import { toast } from "sonner";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+
+function statusBadgeTone(status: string): BadgeTone {
+  const s = (status || "").toUpperCase();
+  return s === "ACTIVE" ? "status-active" : s === "MONITORING" ? "status-monitoring" : "status-archived";
+}
 
 export default function CompetitorDetailPage() {
   const router = useRouter();
@@ -42,6 +49,8 @@ export default function CompetitorDetailPage() {
   const [editTags, setEditTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState("");
   const [savingSettings, setSavingSettings] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchDetails = async () => {
     try {
@@ -138,8 +147,7 @@ export default function CompetitorDetailPage() {
   };
 
   const handleDelete = async () => {
-    if (!window.confirm("Are you sure you want to permanently delete this competitor? This cannot be undone.")) return;
-    
+    setDeleting(true);
     try {
       const res = await fetch(`/api/competitors/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
@@ -147,6 +155,7 @@ export default function CompetitorDetailPage() {
       router.push("/dashboard/competitors");
     } catch (e) {
       toast.error("Failed to delete competitor");
+      setDeleting(false);
     }
   };
 
@@ -225,13 +234,9 @@ export default function CompetitorDetailPage() {
             <div>
               <div className="flex items-center gap-2.5">
                 <h1 className="text-display leading-none">{competitor.name}</h1>
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[9px] font-semibold border rounded-full uppercase tracking-wider ${
-                  competitor.status === "ACTIVE" ? "bg-success-bg border-success/20 text-success" :
-                  competitor.status === "MONITORING" ? "bg-warning-bg border-warning/20 text-warning" :
-                  "bg-zinc-800 border-zinc-700 text-zinc-400"
-                }`}>
+                <Badge tone={statusBadgeTone(competitor.status)} uppercase className="rounded-full">
                   {competitor.status}
-                </span>
+                </Badge>
               </div>
               {competitor.website && (
                 <a
@@ -250,7 +255,7 @@ export default function CompetitorDetailPage() {
           <div className="flex items-center gap-2 self-start md:self-auto">
             <button
               onClick={() => router.push("/dashboard/analyze")}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-950 border border-indigo-900/60 hover:bg-indigo-900 text-indigo-300 text-xs font-bold rounded-lg transition-colors"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/25"
             >
               <Play className="w-3.5 h-3.5" />
               <span>Run analysis</span>
@@ -453,7 +458,7 @@ export default function CompetitorDetailPage() {
                       
                       <div className="flex flex-wrap gap-2 text-[10px]">
                         {an.category && (
-                          <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">Category: {an.category}</span>
+                          <Badge tone="neutral">Category: {an.category}</Badge>
                         )}
                         {an.standoutFeature && (
                           <span className="px-1.5 py-0.5 rounded bg-indigo-950/60 text-indigo-300 border border-indigo-900/40">Feature: {an.standoutFeature}</span>
@@ -631,16 +636,16 @@ export default function CompetitorDetailPage() {
                   {editTags.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-2">
                       {editTags.map(tag => (
-                        <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">
+                        <Badge key={tag} tone="neutral">
                           <span>{tag}</span>
-                          <button 
-                            type="button" 
+                          <button
+                            type="button"
                             onClick={() => handleRemoveTag(tag)}
                             className="opacity-50 hover:opacity-100 font-bold text-xs"
                           >
                             ×
                           </button>
-                        </span>
+                        </Badge>
                       ))}
                     </div>
                   )}
@@ -679,7 +684,7 @@ export default function CompetitorDetailPage() {
               </p>
               
               <button
-                onClick={handleDelete}
+                onClick={() => setConfirmDeleteOpen(true)}
                 className="w-full py-2 bg-danger/10 border border-danger/35 hover:bg-danger/20 text-danger text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -690,6 +695,16 @@ export default function CompetitorDetailPage() {
         )}
 
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmDeleteOpen}
+        title="Delete this competitor?"
+        description="This will permanently delete this competitor profile, all historical analysis references, and saved comments. This action is irreversible."
+        confirmLabel="Delete competitor"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onClose={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }

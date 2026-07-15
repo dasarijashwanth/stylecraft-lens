@@ -39,11 +39,12 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between h-[60px] px-4 md:px-6 border-b border-border bg-bg/85 backdrop-blur-md">
+    <header className="sticky top-0 z-30 flex items-center justify-between h-[var(--topbar-height)] px-4 md:px-6 border-b border-border bg-bg/85 backdrop-blur-md">
       {/* Left: Menu Toggle + Breadcrumbs */}
       <div className="flex items-center gap-3">
         <button
           onClick={onMenuClick}
+          aria-label="Open menu"
           className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary lg:hidden"
         >
           <Menu className="w-5 h-5" />
@@ -85,7 +86,8 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
       <div className="flex items-center gap-3">
         <button
           onClick={onSearchClick}
-          className="p-2 rounded-lg hover:bg-surface-3 text-text-secondary md:hidden"
+          aria-label="Search"
+          className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary md:hidden"
         >
           <Search className="w-5 h-5" />
         </button>
@@ -94,7 +96,8 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         <div className="relative">
           <button
             onClick={() => setShowNotifications(!showNotifications)}
-            className="p-2 rounded-lg hover:bg-surface-3 text-text-secondary relative transition-colors"
+            aria-label="Notifications"
+            className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary relative transition-colors"
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (

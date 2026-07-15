@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { X, FileText, Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { Modal } from "@/components/ui/Modal";
 
 interface Props {
   isOpen: boolean;
@@ -58,22 +59,12 @@ export function LinkReportModal({ isOpen, projectId, onLinked, onClose }: Props)
     }
   }
 
-  if (!isOpen) return null;
-
   const filtered = reports.filter(r =>
     r.title.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div 
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"
-        onClick={onClose}
-      />
-
-      {/* Modal Card */}
-      <div className="relative w-full max-w-lg bg-surface-2 border border-border rounded-xl flex flex-col z-10 shadow-2xl overflow-hidden max-h-[85vh]">
+    <Modal isOpen={isOpen} onClose={onClose} placement="center" size="lg" className="overflow-hidden max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-border bg-surface-3/30">
           <div>
@@ -145,14 +136,13 @@ export function LinkReportModal({ isOpen, projectId, onLinked, onClose }: Props)
 
         {/* Footer */}
         <div className="p-4 border-t border-border bg-surface-3/30 flex justify-end">
-          <button 
-            onClick={onClose} 
+          <button
+            onClick={onClose}
             className="px-4 py-2 border border-border hover:bg-surface-3 text-xs font-semibold text-text-primary rounded-lg transition-colors"
           >
             Close
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

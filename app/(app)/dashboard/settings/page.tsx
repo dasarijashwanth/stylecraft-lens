@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
+import { Spinner } from "@/components/ui/Spinner";
 
 export default function SettingsPage() {
   const { user, refreshSession } = useAuth();
@@ -134,7 +135,7 @@ export default function SettingsPage() {
                   disabled={savingProfile}
                   className="px-4 py-2 bg-accent hover:bg-accent-hover text-white font-bold rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  {savingProfile && <span className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />}
+                  {savingProfile && <Spinner size="xs" className="text-white" />}
                   <span>Save Profile</span>
                 </button>
               </form>

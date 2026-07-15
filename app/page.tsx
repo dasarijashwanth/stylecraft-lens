@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Sparkles, Target, FolderOpen, FileText, ArrowRight, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/authStore";
+import { Spinner } from "@/components/ui/Spinner";
 
 export default function LandingPage() {
   const router = useRouter();
@@ -36,7 +37,7 @@ export default function LandingPage() {
 
         <div>
           {checking ? (
-            <div className="w-4 h-4 border border-accent border-t-transparent rounded-full animate-spin" />
+            <Spinner size="sm" className="text-accent" />
           ) : user ? (
             <Link
               href="/dashboard"

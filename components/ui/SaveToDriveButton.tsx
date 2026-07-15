@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { HardDrive, CheckCircle, Loader2 } from "lucide-react";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 export type DriveDocType = "sales-kit" | "tds" | "gtm" | "active-report";
 
@@ -16,6 +17,7 @@ interface Props {
 export function SaveToDriveButton({ docType, id, initialDriveUrl }: Props) {
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(initialDriveUrl ? "saved" : "idle");
   const [driveUrl, setDriveUrl] = useState<string | null>(initialDriveUrl ?? null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // initialDriveUrl usually arrives asynchronously, after this component has
   // already mounted with it undefined (useState's initial value only runs
@@ -47,61 +49,87 @@ export function SaveToDriveButton({ docType, id, initialDriveUrl }: Props) {
 
   function handleClick() {
     if (driveUrl) {
-      const replace = window.confirm(
-        "This document was already saved to Drive.\n\nOK = Replace the existing file\nCancel = Save as a new file"
-      );
-      save(replace);
+      setConfirmOpen(true);
     } else {
       save(false);
     }
   }
 
+  function handleReplace() {
+    setConfirmOpen(false);
+    save(true);
+  }
+
+  function handleSaveAsNew() {
+    setConfirmOpen(false);
+    save(false);
+  }
+
+  const confirmDialog = (
+    <ConfirmDialog
+      isOpen={confirmOpen}
+      title="Already saved to Drive"
+      description="This document was already saved to Google Drive. Replace the existing file, or save this as a new file?"
+      confirmLabel="Replace existing"
+      cancelLabel="Save as new"
+      tone="neutral"
+      onConfirm={handleReplace}
+      onClose={handleSaveAsNew}
+    />
+  );
+
   if (state === "saved" && driveUrl) {
     return (
-      <div className="inline-flex items-center gap-1.5">
-        <a
-          href={driveUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-semibold rounded-lg hover:bg-emerald-500/20 transition-all"
-        >
-          <CheckCircle className="w-3.5 h-3.5" />
-          <span>Saved to Drive · Open ↗</span>
-        </a>
-        <button
-          type="button"
-          onClick={handleClick}
-          className="px-2 py-1.5 text-[11px] font-semibold text-text-muted hover:text-text-primary transition-colors"
-        >
-          Save again
-        </button>
-      </div>
+      <Fragment>
+        <div className="inline-flex items-center gap-1.5">
+          <a
+            href={driveUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] font-semibold rounded-lg hover:bg-emerald-500/20 transition-all"
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            <span>Saved to Drive · Open ↗</span>
+          </a>
+          <button
+            type="button"
+            onClick={handleClick}
+            className="px-2 py-1.5 text-[11px] font-semibold text-text-muted hover:text-text-primary transition-colors"
+          >
+            Save again
+          </button>
+        </div>
+        {confirmDialog}
+      </Fragment>
     );
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={state === "saving"}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 text-text-primary border border-border text-[11px] font-semibold rounded-lg hover:bg-surface-3 transition-all disabled:opacity-50"
-    >
-      {state === "saving" ? (
-        <>
-          <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
-          <span>Saving to Drive…</span>
-        </>
-      ) : state === "error" ? (
-        <>
-          <HardDrive className="w-3.5 h-3.5 text-rose-500" />
-          <span>Retry Drive Sync</span>
-        </>
-      ) : (
-        <>
-          <HardDrive className="w-3.5 h-3.5 text-accent" />
-          <span>Save to Google Drive</span>
-        </>
-      )}
-    </button>
+    <Fragment>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state === "saving"}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 text-text-primary border border-border text-[11px] font-semibold rounded-lg hover:bg-surface-3 transition-all disabled:opacity-50"
+      >
+        {state === "saving" ? (
+          <>
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
+            <span>Saving to Drive…</span>
+          </>
+        ) : state === "error" ? (
+          <>
+            <HardDrive className="w-3.5 h-3.5 text-rose-500" />
+            <span>Retry Drive Sync</span>
+          </>
+        ) : (
+          <>
+            <HardDrive className="w-3.5 h-3.5 text-accent" />
+            <span>Save to Google Drive</span>
+          </>
+        )}
+      </button>
+      {confirmDialog}
+    </Fragment>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Sparkles } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { ProgressPanel } from "@/components/analyze/ProgressPanel";
 import { ResultsPanel } from "@/components/analyze/ResultsPanel";
@@ -18,6 +18,8 @@ export default function AnalyzePage() {
   // App view state: 'form' | 'running' | 'results'
   const [viewState, setViewState] = useState<"form" | "running" | "results">("form");
   const [analysisId, setAnalysisId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
   // Form Fields State
   const [selectedProductId, setSelectedProductId] = useState("");
@@ -131,17 +133,24 @@ export default function AnalyzePage() {
     }
   }, [pastAnalysisId]);
 
+  const validate = (): boolean => {
+    const errs: { [key: string]: string } = {};
+    if (!productName.trim()) errs.productName = "Product name is required";
+    if (!description.trim()) {
+      errs.description = "Product description is required";
+    } else if (description.trim().length < 10) {
+      errs.description = "Add at least 10 characters for sharper results";
+    }
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleRunAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!productName.trim()) {
-      toast.error("Product name is required");
-      return;
-    }
-    if (description.trim().length < 10) {
-      toast.error("Please add at least 10 characters in product description");
-      return;
-    }
+    if (!validate()) return;
+    if (submitting) return;
 
+    setSubmitting(true);
     try {
       // Save project defaults if associated with a project
       if (projectIdParam) {
@@ -188,6 +197,8 @@ export default function AnalyzePage() {
       setViewState("running");
     } catch (err: any) {
       toast.error(err.message || "Failed to trigger analysis");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -305,7 +316,7 @@ export default function AnalyzePage() {
 
           {/* Card 1: Product Specs */}
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
-            <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Product details</h2>
+            <h2 className="text-sm font-bold text-text-primary">Product details</h2>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1">
@@ -353,11 +364,16 @@ export default function AnalyzePage() {
                 <input
                   type="text"
                   value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
+                  onChange={(e) => {
+                    setProductName(e.target.value);
+                    if (errors.productName) setErrors(prev => { const n = { ...prev }; delete n.productName; return n; });
+                  }}
                   placeholder="e.g. Apex Cordless Clipper"
-                  className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
-                  required
+                  className={`w-full px-3 py-2 border rounded-lg bg-surface-1 outline-none text-text-primary focus:border-accent ${
+                    errors.productName ? "border-danger" : "border-border"
+                  }`}
                 />
+                {errors.productName && <p className="text-[10px] text-danger">{errors.productName}</p>}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -392,17 +408,22 @@ export default function AnalyzePage() {
               <textarea
                 rows={4}
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  if (errors.description) setErrors(prev => { const n = { ...prev }; delete n.description; return n; });
+                }}
                 placeholder="Describe key specs, blade material, batteries, target audience..."
-                className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
-                required
+                className={`w-full px-3 py-2 border rounded-lg bg-surface-1 outline-none text-text-primary focus:border-accent resize-y ${
+                  errors.description ? "border-danger" : "border-border"
+                }`}
               />
+              {errors.description && <p className="text-[10px] text-danger">{errors.description}</p>}
             </div>
           </div>
 
           {/* Card 2: Company Context */}
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
-            <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Company context</h2>
+            <h2 className="text-sm font-bold text-text-primary">Company context</h2>
             <div className="space-y-1">
               <label className="font-semibold text-text-primary block">Company context</label>
               <textarea
@@ -417,7 +438,7 @@ export default function AnalyzePage() {
 
           {/* Card 3: Precision specs */}
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
-            <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Precision targeting</h2>
+            <h2 className="text-sm font-bold text-text-primary">Precision targeting</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="font-semibold text-text-primary block">Motor technology</label>
@@ -450,16 +471,37 @@ export default function AnalyzePage() {
 
           {/* Action Row */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border border-border bg-surface-2 rounded-xl">
-            <span className="text-[10px] text-text-secondary">
-              ⚡ Runs 3-phase AI search · crawls competitive web data · outputs strategic recommendations
-            </span>
-            
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={() => router.back()}
+                disabled={submitting}
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Cancel</span>
+              </button>
+              <span className="text-[10px] text-text-secondary">
+                ⚡ Runs 3-phase AI search · crawls competitive web data · outputs strategic recommendations
+              </span>
+            </div>
+
             <button
               type="submit"
-              className="flex items-center justify-center gap-1.5 px-6 py-2.5 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-all shadow shadow-accent/25 self-end sm:self-auto"
+              disabled={submitting}
+              className="flex items-center justify-center gap-1.5 px-6 py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-all shadow shadow-accent/25 self-end sm:self-auto"
             >
-              <Sparkles className="w-4 h-4" />
-              <span>Run analysis</span>
+              {submitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Starting analysis…</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  <span>Run analysis</span>
+                </>
+              )}
             </button>
           </div>
         </form>

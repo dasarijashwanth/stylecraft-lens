@@ -15,6 +15,7 @@ import {
   X
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -38,11 +39,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     { label: "Help", href: "/dashboard/help", icon: HelpCircle },
   ];
 
-  const planColors = {
-    FREE: "bg-zinc-800 text-zinc-400 border-zinc-700",
-    PRO: "bg-indigo-950 text-indigo-300 border-indigo-900",
-    AGENCY: "bg-emerald-950 text-emerald-300 border-emerald-900",
-    ENTERPRISE: "bg-amber-950 text-amber-300 border-amber-900",
+  const planTones: Record<string, BadgeTone> = {
+    FREE: "neutral",
+    PRO: "accent",
+    AGENCY: "success",
+    ENTERPRISE: "warning",
   };
 
   const currentPlan = user?.plan || "FREE";
@@ -89,12 +90,12 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col w-[220px] border-r border-border bg-surface-1 transition-transform duration-300 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col w-[var(--sidebar-width)] border-r border-border bg-surface-1 transition-transform duration-300 lg:translate-x-0 ${
           isOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         {/* Logo Section */}
-        <div className="flex items-center justify-between h-[60px] px-4 border-b border-border">
+        <div className="flex items-center justify-between h-[var(--topbar-height)] px-4 border-b border-border">
           <Link href="/dashboard" className="flex items-center gap-2">
             <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white font-bold shadow-md shadow-accent/20">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -110,8 +111,9 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
               <span className="text-[9px] text-text-muted tracking-tight font-medium">Competitive Intelligence</span>
             </div>
           </Link>
-          <button 
+          <button
             onClick={() => setIsOpen(false)}
+            aria-label="Close menu"
             className="p-1 rounded-lg hover:bg-surface-3 text-text-secondary lg:hidden"
           >
             <X className="w-5 h-5" />
@@ -133,9 +135,9 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           {/* Plan Badge */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-muted">Subscription</span>
-            <span className={`px-2 py-0.5 text-[9px] font-semibold border rounded-full uppercase tracking-wider ${planColors[currentPlan]}`}>
+            <Badge tone={planTones[currentPlan] ?? "neutral"} uppercase className="rounded-full">
               {currentPlan}
-            </span>
+            </Badge>
           </div>
 
           {/* User Profile Summary */}

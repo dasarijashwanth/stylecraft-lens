@@ -6,6 +6,7 @@ import { X, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { normalizeUrl } from "@/lib/validations";
 import { useAuth } from "@/hooks/useAuth";
+import { Modal } from "@/components/ui/Modal";
 
 interface AddCompetitorModalProps {
   isOpen: boolean;
@@ -160,26 +161,15 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
     }
   };
 
-  if (!isOpen) return null;
-
   // Character counter helper color mapping
   const charCount = description.length;
-  const charCounterColor = 
-    charCount >= 500 ? "text-danger" : 
-    charCount >= 450 ? "text-warning" : 
+  const charCounterColor =
+    charCount >= 500 ? "text-danger" :
+    charCount >= 450 ? "text-warning" :
     "text-text-muted";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-end">
-      {/* Black backdrop overlay */}
-      <div 
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"
-        onClick={onClose}
-      />
-
-      {/* Slide-over Drawer (480px wide) */}
-      <div className="relative w-full max-w-md h-screen bg-surface-2 border-l border-border flex flex-col z-10 shadow-2xl animate-slide-in">
-        
+    <Modal isOpen={isOpen} onClose={onClose} placement="right" size="md">
         {/* Drawer Header */}
         <div className="flex items-center justify-between p-4 md:p-6 border-b border-border bg-surface-3/30">
           <div>
@@ -328,7 +318,7 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
                 <button
                   type="button"
                   onClick={addTag}
-                  className="px-3 py-2 bg-surface-3 hover:bg-surface-3-hover text-text-primary border border-border text-xs font-bold rounded-lg transition-colors shrink-0"
+                  className="px-3 py-2 bg-surface-3 hover:border-border-strong text-text-primary border border-border text-xs font-bold rounded-lg transition-colors shrink-0"
                 >
                   Add
                 </button>
@@ -388,22 +378,6 @@ export default function AddCompetitorModal({ isOpen, onClose, onSuccess }: AddCo
             )}
           </button>
         </div>
-      </div>
-      
-      {/* Slide-in styles */}
-      <style jsx global>{`
-        @keyframes slideIn {
-          from {
-            transform: translateX(100%);
-          }
-          to {
-            transform: translateX(0);
-          }
-        }
-        .animate-slide-in {
-          animation: slideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-      `}</style>
-    </div>
+    </Modal>
   );
 }
