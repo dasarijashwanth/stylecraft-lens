@@ -137,7 +137,13 @@ function callAi(systemInstruction: string, userContent: string, opts?: { timeout
 // into the same {fieldId: {answer, source}} shape the rest of the
 // pipeline already expects, so nothing downstream needs to know the call
 // was split.
-const FIELDS_PER_CHUNK = 6;
+// Confirmed live: even 6 fields per chunk at a 28s timeout still let a
+// handful of chunks time out (web-search-augmented multi-field extraction
+// with gpt-5 has consistently run 20-50s for a single focused item all
+// session, regardless of how few fields are asked for) — smaller chunks
+// trade a few more concurrent requests for a real reduction in how often
+// any one of them needs more time than it's given.
+const FIELDS_PER_CHUNK = 4;
 
 async function callAiPerSection(productName: string, schema: GtmField[], userContent: string): Promise<Record<string, { answer: string; source: string }> | null> {
   const chunks: GtmField[][] = [];
