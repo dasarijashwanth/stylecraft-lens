@@ -32,10 +32,23 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+// A hard Vercel function kill (the route ran past its own maxDuration)
+// returns a plain-text/HTML platform error page, not this route's own
+// JSON — a raw res.json() call crashes on that with a confusing
+// "Unexpected token 'A', "An error o"... is not valid JSON" surfaced
+// straight to the user. Read the body as text first and parse it
+// ourselves so a non-JSON response degrades to an honest, retryable
+// message instead (same pattern as CompetitorCard.tsx's safeJson()).
 async function fetchJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || `Request to ${url} failed`);
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(res.ok ? "Unexpected response from server" : "Server took too long to respond");
+  }
+  if (!res.ok) throw new Error(data.message || data.error || `Request to ${url} failed`);
   return data;
 }
 
