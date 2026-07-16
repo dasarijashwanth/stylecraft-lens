@@ -36,7 +36,16 @@ export async function POST(request: Request) {
       password: currentPassword,
     });
     if (verifyError) {
-      return NextResponse.json({ error: "Current password is incorrect" }, { status: 400 });
+      console.error("change-password: verify signInWithPassword failed:", {
+        message: verifyError.message,
+        status: (verifyError as any).status,
+        code: (verifyError as any).code,
+        email: user.email,
+      });
+      // Surface the real reason (e.g. a rate limit) instead of always
+      // claiming the password itself was wrong, which was masking the
+      // actual cause.
+      return NextResponse.json({ error: verifyError.message || "Current password is incorrect" }, { status: 400 });
     }
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, { password: newPassword });
