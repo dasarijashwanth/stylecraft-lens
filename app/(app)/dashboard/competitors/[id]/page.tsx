@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 
 function statusBadgeTone(status: string): BadgeTone {
   const s = (status || "").toUpperCase();
@@ -293,13 +294,13 @@ export default function CompetitorDetailPage() {
         
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
+          <MagicBentoSection className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
             {/* Left side info (8/12) */}
             <div className="lg:col-span-8 space-y-6">
-              
+
               {/* Description card */}
-              <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-3">
+              <MagicBentoCard className="p-5 space-y-3">
                 <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">About Brand</h2>
                 <p className="text-xs text-text-primary leading-relaxed">
                   {competitor.description || "No description provided for this competitor. You can add one in the Settings tab."}
@@ -315,10 +316,10 @@ export default function CompetitorDetailPage() {
                     ))}
                   </div>
                 )}
-              </div>
+              </MagicBentoCard>
 
               {/* Recent Analysis Summary */}
-              <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4">
+              <MagicBentoCard className="p-5 space-y-4">
                 <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Latest Market Intelligence</h2>
                 {analyses.length > 0 ? (
                   <div className="space-y-4">
@@ -354,14 +355,14 @@ export default function CompetitorDetailPage() {
                     <p className="text-xs">No analysis has been run on this competitor yet.</p>
                   </div>
                 )}
-              </div>
+              </MagicBentoCard>
             </div>
 
             {/* Right side charts/stats (4/12) */}
             <div className="lg:col-span-4 space-y-6">
-              
+
               {/* Circular Threat Gauge */}
-              <div className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col items-center text-center">
+              <MagicBentoCard className="p-5 flex flex-col items-center text-center">
                 <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-4 w-full text-left">Threat Level</h2>
                 
                 <div className="relative flex items-center justify-center w-28 h-28 my-2">
@@ -392,10 +393,10 @@ export default function CompetitorDetailPage() {
                 <p className="text-[10px] text-text-muted mt-1 leading-normal">
                   Based on recent competitor momentum and strategic product capability comparisons.
                 </p>
-              </div>
+              </MagicBentoCard>
 
               {/* Key Stats Cards */}
-              <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4">
+              <MagicBentoCard className="p-5 space-y-4">
                 <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Metrics Overview</h2>
                 
                 <div className="space-y-3.5 text-xs">
@@ -414,14 +415,14 @@ export default function CompetitorDetailPage() {
                     <span className="font-semibold text-text-primary">{notes.length}</span>
                   </div>
                 </div>
-              </div>
+              </MagicBentoCard>
             </div>
-          </div>
+          </MagicBentoSection>
         )}
 
         {/* ANALYSES TIMELINE TAB */}
         {activeTab === "analyses" && (
-          <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-6">
+          <MagicBentoCard className="p-5 space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-text-primary">Historical Analyses</h2>
             </div>
@@ -480,15 +481,15 @@ export default function CompetitorDetailPage() {
                 </button>
               </div>
             )}
-          </div>
+          </MagicBentoCard>
         )}
 
         {/* NOTES TAB */}
         {activeTab === "notes" && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
+          <MagicBentoSection className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
             {/* Add note inline form (5/12) */}
-            <div className="lg:col-span-5 bg-surface-2 border border-border rounded-xl p-5 h-fit">
+            <MagicBentoCard className="lg:col-span-5 p-5 h-fit">
               <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-4">Add Note</h2>
               <form onSubmit={handleAddNote} className="space-y-4">
                 <textarea
@@ -517,10 +518,10 @@ export default function CompetitorDetailPage() {
                   )}
                 </button>
               </form>
-            </div>
+            </MagicBentoCard>
 
             {/* Notes history list (7/12) */}
-            <div className="lg:col-span-7 bg-surface-2 border border-border rounded-xl p-5 space-y-4">
+            <MagicBentoCard className="lg:col-span-7 p-5 space-y-4">
               <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">Notes Timeline</h2>
               
               <div className="space-y-3.5 max-h-[400px] overflow-y-auto pr-1">
@@ -540,16 +541,16 @@ export default function CompetitorDetailPage() {
                   </div>
                 )}
               </div>
-            </div>
-          </div>
+            </MagicBentoCard>
+          </MagicBentoSection>
         )}
 
         {/* SETTINGS TAB */}
         {activeTab === "settings" && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
+          <MagicBentoSection className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
             {/* Edit fields (8/12) */}
-            <div className="lg:col-span-8 bg-surface-2 border border-border rounded-xl p-5">
+            <MagicBentoCard className="lg:col-span-8 p-5">
               <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-4">Edit Profile details</h2>
               
               <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
@@ -671,9 +672,11 @@ export default function CompetitorDetailPage() {
                   </button>
                 </div>
               </form>
-            </div>
+            </MagicBentoCard>
 
-            {/* Danger Zone (4/12) */}
+            {/* Danger Zone (4/12) — kept as a plain themed box, not a MagicBentoCard:
+                the destructive-action warning border/glow would clash with the danger
+                red styling and undercut its seriousness with a playful hover effect. */}
             <div className="lg:col-span-4 bg-surface-2 border border-danger/25 rounded-xl p-5 h-fit space-y-4">
               <div className="flex items-center gap-2 text-danger">
                 <AlertTriangle className="w-4 h-4" />
@@ -682,7 +685,7 @@ export default function CompetitorDetailPage() {
               <p className="text-[11px] text-text-muted leading-normal">
                 Permanently delete this competitor profile, all historical analysis references, and saved comments. This action is irreversible.
               </p>
-              
+
               <button
                 onClick={() => setConfirmDeleteOpen(true)}
                 className="w-full py-2 bg-danger/10 border border-danger/35 hover:bg-danger/20 text-danger text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5"
@@ -691,7 +694,7 @@ export default function CompetitorDetailPage() {
                 <span>Delete competitor</span>
               </button>
             </div>
-          </div>
+          </MagicBentoSection>
         )}
 
       </div>

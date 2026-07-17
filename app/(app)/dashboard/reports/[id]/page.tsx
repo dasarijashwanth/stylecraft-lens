@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
 import { SectionSourceLine, SourceUnavailableCaption } from "@/components/analyze/SectionSourceLine";
 import { assertProvenance } from "@/lib/provenance-format";
+import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form";
 
@@ -254,11 +255,11 @@ export default function ReportDetailPage() {
         
         {activeTab === "competitive-analysis" && (
           <div className="space-y-6">
-            
+            <h2 className="text-sm font-bold text-text-primary">Market Analysis</h2>
+
+            <MagicBentoSection className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Market Snapshot */}
-            <div className="space-y-3">
-              <h2 className="text-sm font-bold text-text-primary">Market Analysis</h2>
-              
+            <MagicBentoCard className="p-5 space-y-3 md:col-span-2">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
                 <div className="p-4 rounded-xl bg-surface-3 border border-border-strong text-center">
                   <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Growth Metric</span>
@@ -298,10 +299,10 @@ export default function ReportDetailPage() {
                   ) : null}
                 </div>
               </div>
-            </div>
+            </MagicBentoCard>
 
             {/* Key Trends */}
-            <div className="space-y-3 border-t border-border/40 pt-4">
+            <MagicBentoCard className="p-5 space-y-3">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Key Industry Trends</span>
               {editing ? (
                 <div className="space-y-3">
@@ -364,13 +365,13 @@ export default function ReportDetailPage() {
                   {(!ca.key_trends || ca.key_trends.length === 0) && <li className="italic">No trends documented</li>}
                 </ul>
               )}
-            </div>
+            </MagicBentoCard>
 
             {/* Positioning recommendation */}
-            <div className="space-y-3 border-t border-border/40 pt-4">
+            <MagicBentoCard className="p-5 space-y-3 md:col-span-2">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Positioning Recommendation</span>
               {editing ? (
-                <textarea 
+                <textarea
                   rows={4}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
                   value={editData.positioning_recommendation ?? ""}
@@ -381,7 +382,8 @@ export default function ReportDetailPage() {
                   {ca.positioning_recommendation}
                 </p>
               ) : null}
-            </div>
+            </MagicBentoCard>
+            </MagicBentoSection>
 
             {/* Mapped Competitors Discovered */}
             <div className="space-y-3 border-t border-border/40 pt-4">
@@ -420,8 +422,9 @@ export default function ReportDetailPage() {
                 No pricing data available for this report yet. Click Edit above to add pricing information manually.
               </p>
             ) : (
-              <>
+              <MagicBentoSection className="grid grid-cols-1 gap-4">
                 {/* Target Price & Positioning */}
+                <MagicBentoCard className="p-5">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
                   <div className="p-4 rounded-xl bg-surface-3 border border-border-strong text-center">
                     <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Target Price</span>
@@ -455,10 +458,11 @@ export default function ReportDetailPage() {
                     )}
                   </div>
                 </div>
+                </MagicBentoCard>
 
                 {/* Pricing benchmark grid */}
                 {((editing ? editData.competitor_prices : pa.competitor_prices)?.length > 0) && (
-                  <div className="space-y-3 border-t border-border/40 pt-4">
+                  <MagicBentoCard className="p-5 space-y-3">
                     <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Pricing Benchmarks</span>
                     <div className="bg-surface-3 border border-border rounded-lg overflow-hidden">
                       <table className="w-full border-collapse">
@@ -504,12 +508,12 @@ export default function ReportDetailPage() {
                         </tbody>
                       </table>
                     </div>
-                  </div>
+                  </MagicBentoCard>
                 )}
 
                 {/* General notes */}
                 {(editing || pa.notes) && (
-                  <div className="space-y-2 border-t border-border/40 pt-4">
+                  <MagicBentoCard className="p-5 space-y-2">
                     <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Pricing Notes & Strategy</span>
                     {editing ? (
                       <textarea
@@ -524,9 +528,9 @@ export default function ReportDetailPage() {
                         {pa.notes}
                       </p>
                     )}
-                  </div>
+                  </MagicBentoCard>
                 )}
-              </>
+              </MagicBentoSection>
             )}
           </div>
         )}
@@ -535,11 +539,12 @@ export default function ReportDetailPage() {
           <div className="space-y-6">
             <h2 className="text-sm font-bold text-text-primary">Go-To-Market Strategy</h2>
 
+            <MagicBentoSection className="grid grid-cols-1 gap-4">
             {/* GTM Positioning */}
-            <div className="space-y-2">
+            <MagicBentoCard className="p-5 space-y-2">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Core Positioning</span>
               {editing ? (
-                <textarea 
+                <textarea
                   rows={4}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
                   value={editData.positioning ?? ""}
@@ -550,10 +555,10 @@ export default function ReportDetailPage() {
                   {gtm.positioning}
                 </p>
               ) : null}
-            </div>
+            </MagicBentoCard>
 
             {/* Quick Wins */}
-            <div className="space-y-3 border-t border-border/40 pt-4">
+            <MagicBentoCard className="p-5 space-y-3">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Quick Wins</span>
               {editing ? (
                 <div className="space-y-2">
@@ -600,13 +605,13 @@ export default function ReportDetailPage() {
                   {(!gtm.quick_wins || gtm.quick_wins.length === 0) && <li className="italic">No quick wins listed</li>}
                 </ul>
               )}
-            </div>
+            </MagicBentoCard>
 
             {/* GTM Notes */}
-            <div className="space-y-2 border-t border-border/40 pt-4">
+            <MagicBentoCard className="p-5 space-y-2">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Launch Notes & Channel Strategy</span>
               {editing ? (
-                <textarea 
+                <textarea
                   rows={4}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
                   value={editData.notes ?? ""}
@@ -618,7 +623,8 @@ export default function ReportDetailPage() {
                   {gtm.notes}
                 </p>
               ) : null}
-            </div>
+            </MagicBentoCard>
+            </MagicBentoSection>
 
           </div>
         )}
@@ -627,12 +633,12 @@ export default function ReportDetailPage() {
           <div className="space-y-6">
             <h2 className="text-sm font-bold text-text-primary">Content Form & Messaging Guidelines</h2>
 
+            <MagicBentoSection className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Target Audience & Product info */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
+            <MagicBentoCard className="p-5 space-y-1">
                 <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Target Audience</span>
                 {editing ? (
-                  <input 
+                  <input
                     type="text"
                     className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs"
                     value={editData.target_audience ?? ""}
@@ -643,12 +649,12 @@ export default function ReportDetailPage() {
                     {cf.target_audience}
                   </p>
                 ) : null}
-              </div>
-              
-              <div className="space-y-1">
+            </MagicBentoCard>
+
+            <MagicBentoCard className="p-5 space-y-1">
                 <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Product Name</span>
                 {editing ? (
-                  <input 
+                  <input
                     type="text"
                     className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs"
                     value={editData.product_name ?? ""}
@@ -659,11 +665,10 @@ export default function ReportDetailPage() {
                     {cf.product_name}
                   </p>
                 ) : null}
-              </div>
-            </div>
+            </MagicBentoCard>
 
             {/* Key messages */}
-            <div className="space-y-3 border-t border-border/40 pt-4">
+            <MagicBentoCard className="p-5 space-y-3 md:col-span-2">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Key Messaging Themes</span>
               {editing ? (
                 <div className="space-y-2">
@@ -710,13 +715,13 @@ export default function ReportDetailPage() {
                   {(!cf.key_messages || cf.key_messages.length === 0) && <li className="italic">No messages documented</li>}
                 </ul>
               )}
-            </div>
+            </MagicBentoCard>
 
             {/* Content notes */}
-            <div className="space-y-2 border-t border-border/40 pt-4">
+            <MagicBentoCard className="p-5 space-y-2 md:col-span-2">
               <span className="text-[10px] text-text-muted uppercase tracking-wider block font-semibold">Copywriting Notes & Strategy</span>
               {editing ? (
-                <textarea 
+                <textarea
                   rows={4}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs resize-y"
                   value={editData.notes ?? ""}
@@ -728,7 +733,8 @@ export default function ReportDetailPage() {
                   {cf.notes}
                 </p>
               ) : null}
-            </div>
+            </MagicBentoCard>
+            </MagicBentoSection>
 
           </div>
         )}

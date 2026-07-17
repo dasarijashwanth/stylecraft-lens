@@ -22,6 +22,7 @@ import { useAmazonProduct } from "@/hooks/useAmazonProduct";
 import { toast } from "sonner";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 
 function statusBadgeTone(status: string): BadgeTone {
   const s = status.toUpperCase();
@@ -429,9 +430,9 @@ export default function CompetitorsPage() {
                 </table>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <MagicBentoSection className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {processedFixed.map(c => (
-                  <div key={c.id} className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col justify-between shadow-sm">
+                  <MagicBentoCard key={c.id} className="p-5 flex flex-col justify-between">
                     <div>
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <h4 className="text-xs font-bold text-text-primary">{c.name}</h4>
@@ -454,9 +455,9 @@ export default function CompetitorsPage() {
                         <ExternalLink size={9} />
                       </a>
                     )}
-                  </div>
+                  </MagicBentoCard>
                 ))}
-              </div>
+              </MagicBentoSection>
             )}
           </div>
 
@@ -589,20 +590,20 @@ export default function CompetitorsPage() {
                 </table>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <MagicBentoSection className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {processedUser.map(c => {
                   const isFromAnalysis = !c.status;
                   const id = c.id || `${c.analysis_id}_${c.asin || c.name}`;
                   return (
-                    <CompetitorGridCard 
-                      key={id} 
-                      competitor={c} 
-                      isFromAnalysis={isFromAnalysis} 
+                    <CompetitorGridCard
+                      key={id}
+                      competitor={c}
+                      isFromAnalysis={isFromAnalysis}
                       onDelete={() => setConfirmDeleteId(c.id)}
                     />
                   );
                 })}
-              </div>
+              </MagicBentoSection>
             )}
           </div>
 
@@ -658,9 +659,7 @@ function CompetitorGridCard({
   const amazonUrl = c.asin ? `https://www.amazon.com/dp/${c.asin}` : c.website;
 
   return (
-    <div className={`bg-surface-2 border border-border rounded-xl p-5 flex flex-col justify-between shadow hover:border-border-strong transition-all duration-200 ${
-      isFromAnalysis ? "border-l-4 border-l-accent" : ""
-    }`}>
+    <MagicBentoCard className={`p-5 flex flex-col justify-between ${isFromAnalysis ? "border-l-4 border-l-accent" : ""}`}>
       <div>
         <div className="flex justify-between items-start mb-3 gap-2">
           <div className="flex items-center gap-2">
@@ -745,6 +744,6 @@ function CompetitorGridCard({
           </button>
         )}
       </div>
-    </div>
+    </MagicBentoCard>
   );
 }

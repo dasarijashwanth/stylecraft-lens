@@ -1,0 +1,81 @@
+/* Adapted from React Bits' MagicBento. The source demo is a fixed 6-card
+   showcase grid with hardcoded title/description content; this app needs
+   the EFFECT (border glow, cursor spotlight, particles, tilt, magnetism,
+   click ripple) as a reusable WRAPPER around whatever real content
+   (forms, tables, editable fields) already lives in each tab across the
+   app — so this is split into two generic pieces:
+     - .magic-bento-section : the grid/spotlight-scope wrapper
+     - .magic-bento-card    : one interactive card, takes arbitrary children
+   Colors are parameterized via --glow-color (set inline per usage) rather
+   than this file's own hardcoded purple, so every usage matches this
+   app's accent instead of the demo's default. */
+
+.magic-bento-section {
+  position: relative;
+}
+
+.magic-bento-card {
+  position: relative;
+  border-radius: 14px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: var(--surface-2, #16161a);
+  overflow: hidden;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+
+  --glow-x: 50%;
+  --glow-y: 50%;
+  --glow-intensity: 0;
+  --glow-radius: 200px;
+  --glow-color: 99, 102, 241;
+}
+
+.magic-bento-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.magic-bento-card--border-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1.5px;
+  background: radial-gradient(
+    var(--glow-radius) circle at var(--glow-x) var(--glow-y),
+    rgba(var(--glow-color), calc(var(--glow-intensity) * 0.9)) 0%,
+    rgba(var(--glow-color), calc(var(--glow-intensity) * 0.45)) 30%,
+    transparent 60%
+  );
+  border-radius: inherit;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.magic-bento-card--particle-container {
+  position: relative;
+}
+
+.magic-bento-card .particle::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  background: rgba(var(--glow-color, 99, 102, 241), 0.2);
+  border-radius: 50%;
+  z-index: -1;
+}
+
+.magic-bento-section .global-spotlight {
+  mix-blend-mode: screen;
+  will-change: transform, opacity;
+  z-index: 200 !important;
+  pointer-events: none;
+}

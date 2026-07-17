@@ -37,6 +37,7 @@ import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-fie
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork";
 
@@ -546,7 +547,7 @@ function ReportTabContent({
 function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any) {
   if (editing) {
     return (
-      <div className="space-y-4 text-xs">
+      <MagicBentoCard className="p-5 space-y-4 text-xs">
         <div className="space-y-1">
           <label className="font-semibold text-text-primary">Market Snapshot Overview</label>
           <textarea
@@ -574,7 +575,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
             className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
           />
         </div>
-      </div>
+      </MagicBentoCard>
     );
   }
 
@@ -587,9 +588,10 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
   const emergingComps = data.indie_emerging_competitors || [];
 
   return (
-    <div className="space-y-6 text-xs">
+    <MagicBentoSection className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
       {/* Overview Block */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
+      <MagicBentoCard className="p-4 space-y-1.5 md:col-span-2">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
         <div className="p-4 border border-border bg-surface-3/20 rounded-xl space-y-1.5">
           <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-success-bg border border-success/20 text-success uppercase tracking-wider">
             growth
@@ -601,12 +603,11 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
         <p className="md:col-span-3 text-text-secondary leading-relaxed p-1">
           {snapshot.overview_paragraph}
         </p>
-      </div>
+        </div>
+      </MagicBentoCard>
 
-      {/* Lists block */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
-        {/* Trends */}
-        <div className="space-y-2.5">
+      {/* Trends */}
+      <MagicBentoCard className="p-4 space-y-2.5">
           <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Key Industry Trends</h4>
           <ul className="space-y-2">
             {trends.map((t: any, i: number) => (
@@ -618,9 +619,9 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               </li>
             ))}
           </ul>
-        </div>
-        {/* Gaps */}
-        <div className="space-y-2.5">
+      </MagicBentoCard>
+      {/* Gaps */}
+      <MagicBentoCard className="p-4 space-y-2.5">
           <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Market Gaps</h4>
           <ul className="space-y-2">
             {gaps.map((g: any, i: number) => (
@@ -630,13 +631,10 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               </li>
             ))}
           </ul>
-        </div>
-      </div>
+      </MagicBentoCard>
 
-      {/* Threats / Opportunities */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-border/40">
-        {/* Threats */}
-        <div className="space-y-2.5">
+      {/* Threats */}
+      <MagicBentoCard className="p-4 space-y-2.5">
           <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 text-danger" />
             <span>Top Threats</span>
@@ -651,9 +649,9 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               </li>
             ))}
           </ul>
-        </div>
-        {/* Opportunities */}
-        <div className="space-y-2.5">
+      </MagicBentoCard>
+      {/* Opportunities */}
+      <MagicBentoCard className="p-4 space-y-2.5">
           <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center gap-1.5">
             <Lightbulb className="w-3.5 h-3.5 text-success" />
             <span>Top Opportunities</span>
@@ -668,13 +666,12 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               </li>
             ))}
           </ul>
-        </div>
-      </div>
+      </MagicBentoCard>
 
       {/* Competitors List (Legacy) */}
-      <div className="space-y-3 pt-3 border-t border-border/40">
+      <MagicBentoCard className="p-4 space-y-3">
         <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Large & Established Brands</h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           {largeComps.map((c: any, i: number) => (
             <div key={i} className="p-3 bg-surface-3/30 border border-border rounded-lg space-y-1.5">
               <div className="flex items-center justify-between">
@@ -696,12 +693,12 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
             </div>
           ))}
         </div>
-      </div>
+      </MagicBentoCard>
 
       {/* Competitors List (Emerging) */}
-      <div className="space-y-3 pt-3 border-t border-border/40">
+      <MagicBentoCard className="p-4 space-y-3">
         <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Indie & Emerging Brands</h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           {emergingComps.map((c: any, i: number) => (
             <div key={i} className="p-3 bg-surface-3/30 border border-border rounded-lg space-y-1.5">
               <div className="flex items-center justify-between">
@@ -723,14 +720,14 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
             </div>
           ))}
         </div>
-      </div>
+      </MagicBentoCard>
 
       {/* Positioning Statement */}
-      <div className="p-4 bg-accent-bg/10 border border-accent-border/50 rounded-xl space-y-1 mt-4">
+      <MagicBentoCard className="p-4 space-y-1 md:col-span-2" glowColor="99, 102, 241">
         <h4 className="text-[10px] font-bold text-accent-text uppercase tracking-wider">Positioning Recommendation</h4>
         <p className="text-text-secondary leading-relaxed italic">{data.positioning_recommendation}</p>
-      </div>
-    </div>
+      </MagicBentoCard>
+    </MagicBentoSection>
   );
 }
 
@@ -740,7 +737,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
 function PricingTab({ data, editing, localData, setLocalData }: any) {
   if (editing) {
     return (
-      <div className="space-y-4 text-xs">
+      <MagicBentoCard className="p-5 space-y-4 text-xs">
         <div className="space-y-1">
           <label className="font-semibold text-text-primary">Pricing Index / Headline Positioning</label>
           <input
@@ -760,20 +757,20 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
             placeholder="Type strategic pricing notes here..."
           />
         </div>
-      </div>
+      </MagicBentoCard>
     );
   }
 
   const prices = data.competitors_pricing || [];
 
   return (
-    <div className="space-y-5 text-xs">
-      <div className="p-4 bg-surface-3/30 border border-border rounded-xl">
+    <MagicBentoSection className="grid grid-cols-1 gap-4 text-xs">
+      <MagicBentoCard className="p-4">
         <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Price Positioning Headline</span>
         <p className="text-sm font-bold text-text-primary mt-1">{data.price_positioning || "No pricing headline recorded."}</p>
-      </div>
+      </MagicBentoCard>
 
-      <div className="space-y-2">
+      <MagicBentoCard className="p-4 space-y-2">
         <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Competitor Price Index</h4>
         <div className="border border-border rounded-xl overflow-hidden">
           <table className="w-full border-collapse text-left">
@@ -806,15 +803,15 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
             </tbody>
           </table>
         </div>
-      </div>
+      </MagicBentoCard>
 
-      <div className="space-y-1.5">
+      <MagicBentoCard className="p-4 space-y-1.5">
         <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Pricing Strategy Notes</h4>
         <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
           {data.notes || "Add strategy notes by clicking Edit."}
         </p>
-      </div>
-    </div>
+      </MagicBentoCard>
+    </MagicBentoSection>
   );
 }
 
@@ -825,7 +822,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
   const [recsOpen, setRecsOpen] = useState(false);
 
   const editBlock = editing && (
-    <div className="space-y-4 text-xs">
+    <MagicBentoCard className="p-5 space-y-4 text-xs">
       <div className="space-y-1">
         <label className="font-semibold text-text-primary">Positioning Strategy</label>
         <textarea
@@ -845,7 +842,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
           placeholder="Type strategic details..."
         />
       </div>
-    </div>
+    </MagicBentoCard>
   );
 
   const recs = data.recommendations || [];
@@ -866,14 +863,13 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
             <ChevronRight className={`w-3.5 h-3.5 text-text-muted transition-transform ${recsOpen ? "rotate-90" : ""}`} />
           </button>
           {recsOpen && (
-            <div className="p-4 space-y-5">
-              <div className="p-4 bg-surface-3/30 border border-border rounded-xl">
+            <MagicBentoSection className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <MagicBentoCard className="p-4 md:col-span-2">
                 <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Core Positioning Statement</span>
                 <p className="text-text-primary leading-relaxed mt-1 italic">{data.positioning || "No core positioning recorded."}</p>
-              </div>
+              </MagicBentoCard>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="space-y-2.5">
+                <MagicBentoCard className="p-4 space-y-2.5">
                   <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Strategic Recommendations</h4>
                   <div className="space-y-3">
                     {recs.map((r: any, i: number) => {
@@ -898,9 +894,9 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
                       );
                     })}
                   </div>
-                </div>
+                </MagicBentoCard>
 
-                <div className="space-y-2.5">
+                <MagicBentoCard className="p-4 space-y-2.5">
                   <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Tactical Quick Wins</h4>
                   <ul className="space-y-2">
                     {wins.map((w: any, i: number) => (
@@ -910,16 +906,15 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
                       </li>
                     ))}
                   </ul>
-                </div>
-              </div>
+                </MagicBentoCard>
 
-              <div className="space-y-1.5 pt-3 border-t border-border/40">
+              <MagicBentoCard className="p-4 space-y-1.5 md:col-span-2">
                 <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">GTM Deployment Notes</h4>
                 <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
                   {data.notes || "Add deployment details by clicking Edit."}
                 </p>
-              </div>
-            </div>
+              </MagicBentoCard>
+            </MagicBentoSection>
           )}
         </div>
       )}
@@ -1481,7 +1476,7 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
 function ContentFormTab({ data, editing, localData, setLocalData }: any) {
   if (editing) {
     return (
-      <div className="space-y-4 text-xs">
+      <MagicBentoCard className="p-5 space-y-4 text-xs">
         <div className="space-y-1">
           <label className="font-semibold text-text-primary">Target Audience Personas</label>
           <textarea
@@ -1502,21 +1497,20 @@ function ContentFormTab({ data, editing, localData, setLocalData }: any) {
             placeholder="Type custom creative specifications..."
           />
         </div>
-      </div>
+      </MagicBentoCard>
     );
   }
 
   const messages = data.key_messages || [];
 
   return (
-    <div className="space-y-5 text-xs">
-      <div className="p-4 bg-surface-3/30 border border-border rounded-xl space-y-1">
+    <MagicBentoSection className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+      <MagicBentoCard className="p-4 space-y-1 md:col-span-2">
         <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider block">Initiative / Product Name</span>
         <span className="text-sm font-bold text-text-primary">{data.product_name || "Stylecraft Tool Launch"}</span>
-      </div>
+      </MagicBentoCard>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <div className="space-y-2.5">
+        <MagicBentoCard className="p-4 space-y-2.5">
           <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Core Creative Messages</h4>
           <ul className="space-y-2.5">
             {messages.map((m: any, i: number) => (
@@ -1529,23 +1523,22 @@ function ContentFormTab({ data, editing, localData, setLocalData }: any) {
               <li className="text-text-muted italic">No key messages recorded.</li>
             )}
           </ul>
-        </div>
+        </MagicBentoCard>
 
-        <div className="space-y-2.5">
+        <MagicBentoCard className="p-4 space-y-2.5">
           <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Target Audience Profile</h4>
           <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
             {data.target_audience || "Define a target audience segment by clicking Edit."}
           </p>
-        </div>
-      </div>
+        </MagicBentoCard>
 
-      <div className="space-y-1.5 pt-3 border-t border-border/40">
+      <MagicBentoCard className="p-4 space-y-1.5 md:col-span-2">
         <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Brief Notes</h4>
         <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
           {data.notes || "Add custom brief details by clicking Edit."}
         </p>
-      </div>
-    </div>
+      </MagicBentoCard>
+    </MagicBentoSection>
   );
 }
 

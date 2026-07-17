@@ -15,6 +15,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui/Spinner";
 import { KeyRound } from "lucide-react";
+import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 
 export default function SettingsPage() {
   const { user, refreshSession } = useAuth();
@@ -142,7 +143,8 @@ export default function SettingsPage() {
           
           {/* USER PROFILE TAB */}
           {activeSubTab === "profile" && (
-            <div className="space-y-6">
+            <MagicBentoSection className="grid grid-cols-1 gap-4">
+              <MagicBentoCard className="p-4 space-y-6">
               <div>
                 <h2 className="text-sm font-bold text-text-primary">Profile Details</h2>
                 <p className="text-[11px] text-text-muted mt-0.5">Manage your user profile details.</p>
@@ -178,8 +180,9 @@ export default function SettingsPage() {
                   <span>Save Profile</span>
                 </button>
               </form>
+              </MagicBentoCard>
 
-              <div className="pt-6 border-t border-border/60">
+              <MagicBentoCard className="p-4">
                 <div className="flex items-center gap-2 mb-1">
                   <KeyRound className="w-4 h-4 text-text-muted" />
                   <h2 className="text-sm font-bold text-text-primary">Change Password</h2>
@@ -229,8 +232,8 @@ export default function SettingsPage() {
                     <span>Update Password</span>
                   </button>
                 </form>
-              </div>
-            </div>
+              </MagicBentoCard>
+            </MagicBentoSection>
           )}
 
           {/* PLAN & BILLING TAB */}
@@ -242,7 +245,7 @@ export default function SettingsPage() {
               </div>
 
               {/* Limits progress bars */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 border border-border bg-surface-3/30 rounded-xl">
+              <MagicBentoCard className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                 <div className="space-y-1.5">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-semibold text-text-primary">Competitor Entries</span>
@@ -268,12 +271,12 @@ export default function SettingsPage() {
                     />
                   </div>
                 </div>
-              </div>
+              </MagicBentoCard>
 
               {/* Pricing grid */}
               <div className="space-y-3.5 pt-4">
                 <h3 className="font-bold text-text-primary">Choose Subscription Plan</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <MagicBentoSection className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   {[
                     { plan: "FREE", price: "$0", desc: "For hobbyists and individual stylists.", badge: "FREE" },
                     { plan: "PRO", price: "$49/mo", desc: "For professional barbers and salon leads.", badge: "PRO" },
@@ -281,12 +284,10 @@ export default function SettingsPage() {
                   ].map((pkg) => {
                     const isCurrent = currentPlan === pkg.plan;
                     return (
-                      <div 
+                      <MagicBentoCard
                         key={pkg.plan}
-                        className={`p-4 border rounded-xl flex flex-col justify-between space-y-4 transition-all ${
-                          isCurrent 
-                            ? "border-accent bg-accent-bg/10 shadow-sm" 
-                            : "border-border bg-surface-3/30 hover:border-border-strong"
+                        className={`p-4 flex flex-col justify-between space-y-4 ${
+                          isCurrent ? "border-accent bg-accent-bg/10 shadow-sm" : ""
                         }`}
                       >
                         <div className="space-y-1">
@@ -314,10 +315,10 @@ export default function SettingsPage() {
                         >
                           {isCurrent ? "Active Plan" : `Upgrade to ${pkg.plan}`}
                         </button>
-                      </div>
+                      </MagicBentoCard>
                     );
                   })}
-                </div>
+                </MagicBentoSection>
               </div>
 
             </div>
@@ -331,7 +332,7 @@ export default function SettingsPage() {
                 <p className="text-[11px] text-text-muted mt-0.5 font-display">Configure API keys inside your local `.env.local` file.</p>
               </div>
 
-              <div className="p-4 border border-border bg-surface-3/30 rounded-xl space-y-3.5">
+              <MagicBentoCard className="p-4 space-y-3.5">
                 <div className="flex gap-3.5 items-start">
                   <Sliders className="w-5 h-5 text-accent shrink-0 mt-0.5" />
                   <div className="space-y-1 leading-relaxed">
@@ -358,8 +359,10 @@ export default function SettingsPage() {
                     </pre>
                   </div>
                 </div>
-              </div>
+              </MagicBentoCard>
 
+              {/* Warning banner kept as a plain themed box, not a card — same rationale as
+                  the competitor Danger Zone: a semantic warning color shouldn't get a glow. */}
               <div className="flex gap-2.5 p-3 rounded-lg border border-warning/25 bg-warning-bg/15 text-warning items-start">
                 <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
                 <p className="leading-normal">
