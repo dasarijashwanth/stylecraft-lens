@@ -17,7 +17,7 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Logo, Wordmark } from "@/components/ui/Logo";
-import { GooeyNav } from "@/components/ui/GooeyNav";
+import { PillNav } from "@/components/ui/PillNav";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -119,7 +119,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
         {/* Navigation Section */}
         <nav className="flex-1 px-3 py-4 overflow-y-auto">
-          <GooeyNav items={navItems} activeIndex={activeNavIndex} onItemClick={() => setIsOpen(false)} />
+          <PillNav items={navItems} activeIndex={activeNavIndex} onItemClick={() => setIsOpen(false)} />
 
           <div className="my-4 border-t border-border/60" />
           <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Support</p>

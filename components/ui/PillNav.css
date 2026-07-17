@@ -1,0 +1,113 @@
+/* Adapted from React Bits' PillNav for a VERTICAL sidebar list, dropping
+   the source's own logo-button/hamburger/mobile-popover chrome (this app's
+   Sidebar already has its own logo header and mobile close button — no
+   need for a second copy). The hover-circle growth math is unchanged from
+   source: it only depends on each item's own width/height ratio, which is
+   still a wide/short rectangle in a vertical list, same as a horizontal
+   pill — no re-derivation needed, just flex-direction: column instead of
+   row. */
+
+.pill-nav-vertical {
+  width: 100%;
+}
+
+.pill-nav-vertical .pill-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
+.pill-nav-vertical .pill-list > li {
+  width: 100%;
+}
+
+.pill-nav-vertical .pill {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  height: 40px;
+  padding: 0 0.75rem;
+  background: transparent;
+  color: var(--pill-text, var(--text-secondary));
+  text-decoration: none;
+  border-radius: 10px;
+  box-sizing: border-box;
+  font-weight: 500;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: color 0.2s ease;
+}
+
+.pill-nav-vertical .pill:hover {
+  color: var(--text-primary);
+}
+
+.pill-nav-vertical .pill .hover-circle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  border-radius: 50%;
+  background: var(--base, var(--accent));
+  z-index: 1;
+  display: block;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.pill-nav-vertical .pill .pill-icon {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  shrink: 0;
+}
+
+.pill-nav-vertical .pill .label-stack {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  line-height: 1;
+}
+
+.pill-nav-vertical .pill .pill-label {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  line-height: 1;
+  will-change: transform;
+}
+
+.pill-nav-vertical .pill .pill-label-hover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--hover-text, #ffffff);
+  z-index: 3;
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+/* Small persistent left-edge tick for the active item — a subtler
+   always-on cue than a full pill fill, and matches this sidebar's
+   previous "current tab" indicator convention. The main visual "you are
+   here" signal is the persistently-filled hover-circle driven by JS
+   (see PillNav.tsx's active-state effect), not this dot. */
+.pill-nav-vertical .pill.is-active::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: #ffffff;
+  z-index: 4;
+  opacity: 0.9;
+}
