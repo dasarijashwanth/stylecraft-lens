@@ -5,6 +5,8 @@ import { memoryDb, MockReport } from "@/lib/memoryDb";
 import { STYLECRAFT_PRODUCTS } from "@/lib/stylecraft-products";
 import { buildPricingAnalysis, isPricingAnalysisEmpty, type PricingAnalysis } from "@/lib/pricing-analysis";
 import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
+import { getAllLatestProvenance, ProvenanceRow } from "@/lib/db/section-provenance";
+import { resolveCacheKey } from "@/lib/product-cache-key";
 
 // Find the catalog entry for a product being analyzed, if it's a known
 // StyleCraft SKU (matched by name/shortName, case- and punctuation-insensitive).
@@ -117,8 +119,30 @@ function buildGoToMarketNotes(
   return lines.join("\n");
 }
 
+// Best-effort — pulls each competitor's latest per-section provenance
+// (lib/db/section-provenance.ts) at report-save time, so both PDF pipelines
+// and the saved-report UI can read a self-contained trail straight from
+// report.content (mirrors the existing precedent of `citations` already
+// living inside competitive_analysis) instead of a live DB join at
+// render/export time. A missing/failed lookup for one competitor never
+// blocks building the rest of the report.
+async function collectCompetitorProvenance(competitors: any[]): Promise<ProvenanceRow[]> {
+  const rows: ProvenanceRow[] = [];
+  for (const c of competitors) {
+    if (!c?.name) continue;
+    try {
+      const key = resolveCacheKey(c.asin ?? "", c.name);
+      const bySection = await getAllLatestProvenance(key);
+      rows.push(...Object.values(bySection));
+    } catch (e) {
+      console.warn(`Failed to load provenance for competitor "${c.name}":`, e);
+    }
+  }
+  return rows;
+}
+
 // Helper to structure report sections from analysis results
-export function buildReportSections(analysis: {
+export async function buildReportSections(analysis: {
   phase1: any;
   phase2: any;
   phase3: any;
@@ -143,6 +167,22 @@ export function buildReportSections(analysis: {
   const catalogProduct = matchCatalogProduct(analysis.productName);
   const legacyPrices = p1Comps.map((c: any) => c.price).filter(Boolean);
 
+  const sectionProvenanceRows = await collectCompetitorProvenance([...p1Comps, ...p2Comps]);
+  const pricingProvenanceRows = sectionProvenanceRows.filter(r => r.section === "pricing");
+  const pricingSuccessCount = pricingProvenanceRows.filter(r => r.tiers?.[0]?.outcome === "success").length;
+  const pricingProvenance = pricingProvenanceRows.length ? {
+    tiers: [{
+      tier: "Rainforest product API",
+      attempted: true,
+      outcome: (pricingSuccessCount === pricingProvenanceRows.length ? "success" : pricingSuccessCount > 0 ? "partial" : "empty") as "success" | "partial" | "empty",
+      itemCount: pricingSuccessCount,
+    }],
+    queries: [],
+  } : undefined;
+  const pricingProvenanceResolvedAt = pricingProvenanceRows.length
+    ? [...pricingProvenanceRows].sort((a, b) => a.resolved_at.localeCompare(b.resolved_at)).slice(-1)[0]?.resolved_at
+    : undefined;
+
   return {
     competitive_analysis: {
       product_name: analysis.productName,
@@ -157,15 +197,20 @@ export function buildReportSections(analysis: {
       strategic_recommendations: recommendations,
       quick_wins: wins,
       citations,
+      section_provenance: sectionProvenanceRows,
     },
-    pricing_analysis: buildPricingAnalysis({
-      competitors: [...p1Comps, ...p2Comps],
-      targetPriceCandidates: [
-        [analysis.pricePoint, "project_record"],
-        [catalogProduct?.pricePoint, "catalog_default"],
-      ],
-      identity: analysis.identity,
-    }),
+    pricing_analysis: {
+      ...buildPricingAnalysis({
+        competitors: [...p1Comps, ...p2Comps],
+        targetPriceCandidates: [
+          [analysis.pricePoint, "project_record"],
+          [catalogProduct?.pricePoint, "catalog_default"],
+        ],
+        identity: analysis.identity,
+      }),
+      provenance: pricingProvenance,
+      provenance_resolved_at: pricingProvenanceResolvedAt,
+    },
     go_to_market: {
       recommendations: recommendations,
       quick_wins: wins,
@@ -226,7 +271,7 @@ export async function createReportFromAnalysis(
   },
   orgId: string = "dev_org_id"
 ) {
-  const sections = buildReportSections(analysis);
+  const sections = await buildReportSections(analysis);
   const title = `Competitive Analysis — ${analysis.productName}`;
 
   if (isSupabaseConfigured) {
@@ -675,7 +720,11 @@ async function saveAnalysisCompetitors(
     brand:                c.brand,
     tier:                 c.tier,
     asin:                 c.asin   || null,
-    amazon_url:           c.asin   ? `https://www.amazon.com/dp/${c.asin}` : null,
+    // Prefer the already-computed amazon_url (a search link for unverified
+    // competitors) over recomputing a bare /dp/{asin} link — a kept-but-
+    // unverified ASIN should keep pointing at a search, not a possibly-wrong
+    // direct listing presented as authoritative.
+    amazon_url:           c.amazon_url || (c.asin ? `https://www.amazon.com/dp/${c.asin}` : null),
     price:                c.price  || null,
     rating:               c.rating || null,
     review_count:         c.review_count || null,

@@ -31,11 +31,11 @@ function field(id: string, section: string, question: string): TdsField {
 // exclusively on the GTM sheet.
 const REUSED_GTM_FIELD_IDS = [
   // General — identification/spec facts only
-  "product_title", "approved_pricing", "trademark_symbol", "warranty", "certification_needed",
+  "product_title", "approved_pricing", "trademark_symbol", "warranty", "certification_needed", "manufacturer",
   // Packaging & Logistics
   "dieline", "box_type", "product_lwh", "product_weight", "box_lwh", "measurement_by", "box_weight", "pallet_tier_total", "pallets_high",
   // Tool Description
-  "material", "care_directions",
+  "material", "care_directions", "product_description",
   // Motor
   "motor_type", "motor_rpm", "motor_run_time", "motor_speed",
   // Blades
@@ -52,7 +52,7 @@ const REUSED_GTM_FIELD_IDS = [
   "screw_driver_color", "screw_driver_brand", "screw_driver_other", "stretch_bracket_color",
   "axis_shield_qty", "axis_shield_color", "axis_shield_material", "axis_shield_description",
   "cam_follower_qty", "cam_follower_color", "cleaning_brush_qty", "cleaning_brush_color",
-  "oil_bottle_qty", "extra_screws_qty", "extra_screws_color",
+  "oil_bottle_qty", "extra_screws_qty", "extra_screws_color", "whats_in_box_list",
 ];
 
 const gtmById = new Map(GTM_FIELD_SCHEMA.map(f => [f.id, f]));

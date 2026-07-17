@@ -53,10 +53,13 @@ export async function captureProductSnapshot(input: {
 
   const projection: SnapshotProjection = {
     title: scraped?.title || amazonProduct?.title,
-    brand: scraped?.brand,
+    // Amazon-sourced fallback lets a pure-ASIN project (no separate site
+    // URL) still auto-fill a description/brand — zero extra cost, since
+    // amazonProduct was already fetched above.
+    brand: scraped?.brand || amazonProduct?.brand || undefined,
     price: scraped?.price || amazonProduct?.price,
     image: scraped?.image || amazonProduct?.image || undefined,
-    description: scraped?.description,
+    description: scraped?.description || amazonProduct?.description || undefined,
   };
 
   const snapshot = await insertSnapshot({

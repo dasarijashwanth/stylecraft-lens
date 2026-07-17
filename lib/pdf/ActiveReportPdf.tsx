@@ -1,6 +1,8 @@
 import { Document, Page, View, Text } from "@react-pdf/renderer";
-import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, CitationList } from "./shared";
+import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, CitationList, SourceLine, ProvenanceAppendix } from "./shared";
 import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
+import { summarizeSource } from "@/lib/provenance-format";
+import type { ProvenanceRow } from "@/lib/db/section-provenance";
 
 // Never render a bare "—" for a competitor with partial data — omit the
 // missing part instead, and only fall back to an explicit sentence when
@@ -10,6 +12,8 @@ function competitorSummary(c: any): string {
   if (c.price) parts.push(c.price);
   if (c.rating) parts.push(`★${c.rating}${c.review_count ? ` (${c.review_count} reviews)` : ""}`);
   else if (c.review_count) parts.push(`${c.review_count} reviews`);
+  if (c.manufacturer) parts.push(`Mfr: ${c.manufacturer}`);
+  if (c.model_number) parts.push(`Model: ${c.model_number}`);
   if (c.verified_by_rainforest === false) parts.push("unverified");
   return parts.length > 0 ? parts.join(" · ") : "No verified pricing/rating data found for this competitor";
 }
@@ -39,6 +43,7 @@ export function ActiveReportPdf({
   const recs = gtm.recommendations || [];
   const wins = gtm.quick_wins || [];
   const citations = ca.citations || [];
+  const provenanceRows: ProvenanceRow[] = ca.section_provenance || [];
 
   return (
     <Document>
@@ -84,6 +89,7 @@ export function ActiveReportPdf({
         {!isPricingAnalysisEmpty(pricing) && (
           <View>
             <SectionHeader title="Pricing Analysis & Benchmarks" />
+            {pricing.provenance && <SourceLine text={summarizeSource("pricing", pricing.provenance, pricing.provenance_resolved_at)} />}
             {pricing.target_price && <Text style={{ fontSize: 9, fontWeight: 700, marginBottom: 4 }}>Target Price: {pricing.target_price}</Text>}
             {pricing.price_positioning && <Text style={{ fontSize: 9, marginBottom: 6, lineHeight: 1.5 }}>{pricing.price_positioning}</Text>}
             {prices.map((p: any, i: number) => (
@@ -119,6 +125,13 @@ export function ActiveReportPdf({
       {citations.length > 0 && (
         <Page size="A4" style={styles.page}>
           <CitationList claims={citations} />
+          <PageFooter />
+        </Page>
+      )}
+
+      {provenanceRows.length > 0 && (
+        <Page size="A4" style={styles.page}>
+          <ProvenanceAppendix rows={provenanceRows} />
           <PageFooter />
         </Page>
       )}

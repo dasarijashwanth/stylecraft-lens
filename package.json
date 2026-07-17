@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "create-admin": "tsx scripts/create-admin-user.ts",
-    "backfill-gtm": "tsx scripts/backfill-gtm.ts"
+    "backfill-gtm": "tsx scripts/backfill-gtm.ts",
+    "backfill-amazon-fields": "tsx scripts/backfill-amazon-fields.ts",
+    "verify-review-tiers": "tsx scripts/verify-review-tiers.ts",
+    "verify-section-provenance": "tsx scripts/verify-section-provenance.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.5.9",

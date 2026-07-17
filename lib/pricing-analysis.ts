@@ -9,6 +9,7 @@
 // Plain TS, no server-only imports — must be importable from "use client"
 // components as well as server-side route/db code.
 import { firstOf } from "./gtm-derive";
+import type { SectionProvenanceData } from "./section-provenance";
 
 export type PricingTier = "Good" | "Better" | "Best";
 export type TargetPriceSource = "project_record" | "gtm_approved_pricing" | "catalog_default";
@@ -34,6 +35,14 @@ export interface PricingAnalysis {
   competitor_prices: PricingBenchmarkRow[];
   price_positioning: string | null;
   notes: string | null;
+  // Best-effort, attached at report-save time (lib/db/reports.ts) or the
+  // pre-save ephemeral export path — absent for reports saved before this
+  // was added (see lib/section-provenance.ts). `provenance_resolved_at` is
+  // separate from `provenance` itself (which only carries tiers/queries)
+  // since it's the timestamp of a row/fetch, not part of the resolver's
+  // own SectionProvenanceData shape.
+  provenance?: SectionProvenanceData;
+  provenance_resolved_at?: string | null;
 }
 
 export function parsePriceToNumber(price: string | null | undefined): number | null {

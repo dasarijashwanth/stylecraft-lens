@@ -68,12 +68,16 @@ interface ResultsPanelProps {
       citations?: Claim[];
     };
   };
+  // Best-effort — lets each competitor's live per-section provenance writes
+  // (lib/db/section-provenance.ts) carry a real analysis_id when one exists.
+  // Never required: a missing id never blocks a provenance write.
+  analysisId?: string | null;
   onSaveAsReport: () => void;
   savingReport: boolean;
   onNewAnalysis: () => void;
 }
 
-export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
+export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   const [exporting, setExporting] = useState(false);
   // Populated as each CompetitorCard's own Key Features fetch resolves, so
@@ -436,7 +440,7 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
             phase1.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="legacy" onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+              <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
@@ -464,7 +468,7 @@ export function ResultsPanel({ analysis, onSaveAsReport, savingReport, onNewAnal
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors && phase2.competitors.length > 0 ? (
             phase2.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="emerging" onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+              <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>
@@ -507,6 +511,8 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
     { label: "Monthly Sales", getValue: (c) => c.monthly_sales || null },
     { label: "Best Seller Rank", getValue: (c) => c.bsr_rank || null },
     { label: "Brand", getValue: (c) => c.brand || null },
+    { label: "Manufacturer", getValue: (c) => c.manufacturer || null },
+    { label: "Model Number", getValue: (c) => c.model_number || null },
     { label: "ASIN", getValue: (c) => c.asin || null },
     {
       label: "Top Feature",

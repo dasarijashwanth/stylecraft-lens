@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { useAmazonProduct } from "@/hooks/useAmazonProduct";
 import { ChevronDown, ChevronUp, ExternalLink, Star, RefreshCw, Newspaper, TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
-import type { ReviewAnalysis } from "@/lib/amazon-review-analysis";
+import type { ReviewAnalysis, TierResult, ListingStats } from "@/lib/amazon-review-analysis";
 import type { ProductNewsResult } from "@/lib/product-news";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { CitationMarker, SourcesFootnoteList, useCitationNumbering } from "./CitationMarker";
 import { enqueue } from "@/lib/fetch-queue";
 import { SkeletonRows } from "@/components/ui/Skeleton";
+import { SectionSourceLine, SourceUnavailableCaption } from "./SectionSourceLine";
+import { assertProvenance, domainOf } from "@/lib/provenance-format";
 
 interface Competitor {
   name:               string;
@@ -27,6 +29,10 @@ interface Competitor {
   recent_news:        string[];
   top_feature_summary?: string;
   verified_by_rainforest?: boolean;
+  manufacturer?:      string | null;
+  model_number?:      string | null;
+  description?:       string | null;
+  images?:            string[];
 }
 
 interface CompetitorCardProps {
@@ -36,6 +42,10 @@ interface CompetitorCardProps {
   // the same resolved Key Features instead of re-running the resolver —
   // fired once per successful/refreshed fetch.
   onFeaturesResolved?: (result: KeyFeaturesResult) => void;
+  // Best-effort — threaded into each section fetch so its persisted
+  // provenance row (lib/db/section-provenance.ts) carries a real
+  // analysis_id when one exists. Never required for a provenance write.
+  analysisId?: string | null;
 }
 
 type FeaturesState =
@@ -67,15 +77,99 @@ function RefreshButton({ onClick, disabled }: { onClick: () => void; disabled?: 
   );
 }
 
-function TimeoutChip({ onRetry }: { onRetry: () => void }) {
+function TimeoutChip({ onRetry, label }: { onRetry: () => void; label?: string }) {
   return (
     <button
       type="button"
       onClick={onRetry}
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-warning/10 border border-warning/25 text-warning hover:bg-warning/20 transition-colors"
     >
-      <AlertTriangle className="w-2.5 h-2.5" /> Some sources timed out — Retry
+      <AlertTriangle className="w-2.5 h-2.5" /> {label || "Some sources timed out — Retry"}
     </button>
+  );
+}
+
+// Turns one tier's outcome into a short, honest phrase — "returned 0" and
+// "request failed" must read differently, since they mean very different
+// things (the product genuinely has no reviews vs. the source was
+// unreachable this time).
+function describeTier(t: TierResult): string {
+  if (!t.attempted) return "not attempted (no ASIN)";
+  if (t.outcome === "success") return t.itemCount != null ? `found ${t.itemCount}` : "found supporting content";
+  if (t.outcome === "empty") return "returned 0";
+  return `request failed${t.errorMessage ? ` (${t.errorMessage})` : ""}`;
+}
+
+// Renders whichever notice applies for the Strengths/Weaknesses sections —
+// shared so the two sections can't drift out of sync. Order matters: an AI
+// outage is reported before a sources outage, which is reported before a
+// genuine "nothing found anywhere" — these are three different situations
+// and must never collapse into the same generic message.
+function ReviewSourcesNotice({ data, onRetry }: { data: ReviewAnalysis; onRetry: () => void }) {
+  if (data.aiUnavailable) {
+    return (
+      <div className="flex items-center justify-between gap-2 py-2">
+        <span className="text-warning">Fetched real reviews, but no AI provider is available right now to analyze them.</span>
+        <TimeoutChip onRetry={onRetry} />
+      </div>
+    );
+  }
+  if (data.sourcesUnavailable) {
+    const errored = (data.sourcesSummary.tiers ?? []).filter(t => t.attempted && t.outcome === "error");
+    return (
+      <div className="flex items-center justify-between gap-2 py-2">
+        <span className="text-warning">
+          Live review sources unavailable right now{errored.length ? ` (${errored.map(t => t.tier).join(", ")})` : ""} — this is a temporary source outage, not a lack of reviews.
+        </span>
+        <TimeoutChip onRetry={onRetry} label="Retry" />
+      </div>
+    );
+  }
+  if (data.insufficientData) {
+    const tiers = data.sourcesSummary.tiers;
+    if (tiers && tiers.length) {
+      return (
+        <div className="italic text-text-muted space-y-0.5">
+          <p>No review data found across any source:</p>
+          <ul className="pl-3 list-disc space-y-0.5 not-italic">
+            {tiers.map((t, i) => <li key={i}>{t.tier}: {describeTier(t)}</li>)}
+          </ul>
+        </div>
+      );
+    }
+    // Backward-compat fallback for older cached payloads without `tiers`.
+    return (
+      <p className="italic text-text-muted">
+        No review data found on Amazon, retailers, or the web (searched {data.sourcesSummary.tiersTried.join(", ")}).
+      </p>
+    );
+  }
+  return null;
+}
+
+function reviewSourceLabel(sourceType: string): string | null {
+  if (sourceType === "customer_reviews") return "Amazon customer reviews";
+  if (sourceType === "amazon_listing") return "Amazon product listing";
+  return null;
+}
+
+// Visible, inline (not hover-only) label naming a review theme's source
+// type — distinct from reviewSourceLabel above, which only feeds the
+// citation marker's tooltip title.
+function reviewThemeSourceLabel(theme: { sourceType: string; sourceUrl?: string | null }): string {
+  if (theme.sourceType === "customer_reviews") return "customer reviews (Amazon)";
+  if (theme.sourceType === "amazon_listing") return "Amazon listing";
+  if (theme.sourceType === "expert_review") return `expert review${theme.sourceUrl ? ` (${domainOf(theme.sourceUrl)})` : ""}`;
+  if (theme.sourceType === "forum") return `forum${theme.sourceUrl ? ` (${domainOf(theme.sourceUrl)})` : ""}`;
+  return theme.sourceType;
+}
+
+function ListingStatsCaption({ stats }: { stats: ListingStats }) {
+  if (stats.rating == null && stats.reviewsTotal == null) return null;
+  return (
+    <p className="text-[10px] text-text-muted">
+      Based on the Amazon listing{stats.rating != null ? `: ${stats.rating.toFixed(1)}★` : ""}{stats.reviewsTotal != null ? ` across ${stats.reviewsTotal.toLocaleString()} ratings` : ""}.
+    </p>
   );
 }
 
@@ -114,13 +208,18 @@ async function safeJson(res: Response): Promise<any> {
   }
 }
 
-export function CompetitorCard({ competitor: c, onFeaturesResolved }: CompetitorCardProps) {
+export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }: CompetitorCardProps) {
   // All 4 sections load automatically on mount — collapsing is purely a
   // visual/reading-convenience toggle, never a fetch trigger.
   const [featuresOpen, setFeaturesOpen] = useState(true);
   const [strengthsOpen, setStrengthsOpen] = useState(true);
   const [weaknessesOpen, setWeaknessesOpen] = useState(true);
   const [newsOpen, setNewsOpen] = useState(true);
+  const [descOpen, setDescOpen] = useState(false);
+  const [featuresSourceOpen, setFeaturesSourceOpen] = useState(false);
+  const [strengthsSourceOpen, setStrengthsSourceOpen] = useState(false);
+  const [weaknessesSourceOpen, setWeaknessesSourceOpen] = useState(false);
+  const [newsSourceOpen, setNewsSourceOpen] = useState(false);
 
   const [featuresState, setFeaturesState] = useState<FeaturesState>({ status: "loading" });
   const [reviewAnalysis, setReviewAnalysis] = useState<ReviewAnalysisState>({ status: "loading" });
@@ -137,6 +236,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
     try {
       const params = new URLSearchParams({ productName: c.name });
       if (refresh) params.set("refresh", "true");
+      if (analysisId) params.set("analysisId", analysisId);
       const res = await enqueue(() => fetchWithTimeout(`/api/product-data/key-features/${asinPathSegment}?${params.toString()}`));
       const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Live feature data unavailable — retry");
@@ -152,6 +252,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
     try {
       const params = new URLSearchParams({ productName: c.name });
       if (refresh) params.set("refresh", "true");
+      if (analysisId) params.set("analysisId", analysisId);
       const res = await enqueue(() => fetchWithTimeout(`/api/amazon/reviews-analysis/${asinPathSegment}?${params.toString()}`));
       const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Live Amazon data unavailable — retry");
@@ -166,6 +267,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
     try {
       const params = new URLSearchParams({ productName: c.name, brand: c.brand || "" });
       if (refresh) params.set("refresh", "true");
+      if (analysisId) params.set("analysisId", analysisId);
       const res = await enqueue(() => fetchWithTimeout(`/api/amazon/product-news/${asinPathSegment}?${params.toString()}`));
       const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Live news search unavailable — retry");
@@ -184,6 +286,9 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
   const displayReviews = live?.reviews_str  ?? c.review_count ?? "—";
   const displayBSR     = live?.bsr          ?? c.bsr_rank     ?? null;
   const displaySales   = live?.monthly_str  ?? c.monthly_sales ?? null;
+  const displayManufacturer = live?.manufacturer ?? c.manufacturer ?? null;
+  const displayModelNumber  = live?.model_number ?? c.model_number ?? null;
+  const displayDescription  = live?.description  ?? c.description  ?? null;
 
   // Per-section citation numbering — same URL cited twice in one section
   // keeps one number (components/analyze/CitationMarker.tsx).
@@ -274,6 +379,43 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
 
       {isValidAsin && <div className="text-[10px] text-text-muted font-mono leading-none">ASIN: {c.asin}</div>}
 
+      {/* Manufacturer / Model — fill-or-hide, never a placeholder dash */}
+      {(displayManufacturer || displayModelNumber) && (
+        <div className="flex flex-wrap gap-x-3 text-[10px] text-text-muted">
+          {displayManufacturer && <span>Manufacturer: <span className="text-text-secondary">{displayManufacturer}</span></span>}
+          {displayModelNumber && <span>Model: <span className="text-text-secondary">{displayModelNumber}</span></span>}
+        </div>
+      )}
+
+      {/* Description — sanitized, clamped preview from the Amazon listing */}
+      {displayDescription && (
+        <div className="text-[11px] text-text-secondary leading-normal">
+          <p className={descOpen ? "" : "line-clamp-3"}>{displayDescription}</p>
+          <button type="button" onClick={() => setDescOpen(!descOpen)} className="text-accent text-[10px] font-semibold hover:underline mt-0.5">
+            {descOpen ? "Show less" : "Show more"}
+          </button>
+        </div>
+      )}
+
+      {/* Rating distribution — from the listing, when present */}
+      {live?.rating_breakdown && (
+        <div className="space-y-0.5 pt-0.5">
+          {([["five_star", 5], ["four_star", 4], ["three_star", 3], ["two_star", 2], ["one_star", 1]] as const).map(([key, stars]) => {
+            const pct = live.rating_breakdown?.[key];
+            if (pct == null) return null;
+            return (
+              <div key={key} className="flex items-center gap-1.5 text-[9px] text-text-muted">
+                <span className="w-6 shrink-0">{stars}★</span>
+                <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden">
+                  <div className="h-full bg-warning" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="w-8 text-right">{pct}%</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* ==================== SECTION 1: KEY FEATURES ==================== */}
       <div className="border-t border-border/40 pt-3">
         <div className="w-full flex items-center justify-between text-text-muted">
@@ -283,6 +425,19 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
           </button>
           {featuresState.status === "loaded" && <RefreshButton onClick={() => loadFeatures(true)} />}
         </div>
+
+        {featuresState.status === "loaded" && (
+          assertProvenance(featuresState.data.provenance, "key_features", c.name) ? (
+            <SectionSourceLine
+              flavor="key_features"
+              provenance={featuresState.data.provenance!}
+              resolvedAt={featuresState.data.retrievedAt}
+              asin={isValidAsin ? c.asin : null}
+              open={featuresSourceOpen}
+              onToggle={() => setFeaturesSourceOpen(o => !o)}
+            />
+          ) : <SourceUnavailableCaption />
+        )}
 
         {featuresOpen && (
           <div className="mt-3 space-y-2.5 animate-slide-down">
@@ -305,7 +460,14 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-bold text-text-primary">{f.headline}</span>
                       <CitationMarker source={sourceFor(featuresCitations, f.sourceUrl, f.sourceTitle, f.quote, f.retrievedAt)} />
-                      <span className="px-1 py-0.2 rounded bg-surface-3 text-[8px] text-text-muted uppercase font-bold">{f.source}</span>
+                      <a
+                        href={f.sourceUrl || amazonUrl || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-1 py-0.2 rounded bg-surface-3 text-[8px] text-text-muted uppercase font-bold hover:text-accent"
+                      >
+                        [{f.source === "Amazon" ? "Amazon" : f.source === "Brand site" ? "Brand site" : (domainOf(f.sourceUrl) || f.source)}]
+                      </a>
                     </div>
                     <p className="text-[11px] text-text-secondary leading-normal">{f.detail}</p>
                   </div>
@@ -329,6 +491,19 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
           {reviewAnalysis.status === "loaded" && <RefreshButton onClick={() => loadReviewAnalysis(true)} />}
         </div>
 
+        {reviewAnalysis.status === "loaded" && (
+          assertProvenance(reviewAnalysis.data.provenance, "reviews", c.name) ? (
+            <SectionSourceLine
+              flavor="reviews"
+              provenance={reviewAnalysis.data.provenance!}
+              resolvedAt={reviewAnalysis.data.retrievedAt}
+              asin={isValidAsin ? c.asin : null}
+              open={strengthsSourceOpen}
+              onToggle={() => setStrengthsSourceOpen(o => !o)}
+            />
+          ) : <SourceUnavailableCaption />
+        )}
+
         {strengthsOpen && (
           <div className="mt-3 space-y-2.5 animate-slide-down">
             {reviewAnalysis.status === "loading" && <SkeletonRows count={2} />}
@@ -338,25 +513,21 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
                 <TimeoutChip onRetry={() => loadReviewAnalysis()} />
               </div>
             )}
-            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.insufficientData && (
-              <p className="italic text-text-muted">
-                No review data found on Amazon, retailers, or the web (searched {reviewAnalysis.data.sourcesSummary.tiersTried.join(", ")}).
-              </p>
+            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.listingStats && (
+              <ListingStatsCaption stats={reviewAnalysis.data.listingStats} />
             )}
-            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.aiUnavailable && (
-              <div className="flex items-center justify-between gap-2 py-2">
-                <span className="text-warning">Fetched real reviews, but no AI provider is available right now to analyze them.</span>
-                <TimeoutChip onRetry={() => loadReviewAnalysis()} />
-              </div>
+            {reviewAnalysis.status === "loaded" && (reviewAnalysis.data.aiUnavailable || reviewAnalysis.data.sourcesUnavailable || reviewAnalysis.data.insufficientData) && (
+              <ReviewSourcesNotice data={reviewAnalysis.data} onRetry={() => loadReviewAnalysis()} />
             )}
-            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && !reviewAnalysis.data.aiUnavailable && (
+            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && !reviewAnalysis.data.sourcesUnavailable && !reviewAnalysis.data.aiUnavailable && (
               <>
                 {reviewAnalysis.data.strengths.length === 0 && <p className="italic text-text-muted">None with verified support.</p>}
                 {reviewAnalysis.data.strengths.map((s, idx) => (
                   <div key={idx} className="space-y-1">
-                    <p className="text-success font-semibold flex items-center flex-wrap">
+                    <p className="text-success font-semibold flex items-center flex-wrap gap-1">
                       {s.theme}
-                      <CitationMarker source={sourceFor(strengthsCitations, s.sourceUrl, s.sourceType === "customer_reviews" ? "Amazon customer reviews" : s.evidence[0]?.quote?.slice(0, 40) || "Source", s.evidence[0]?.quote || "", new Date().toISOString())} />
+                      <CitationMarker source={sourceFor(strengthsCitations, s.sourceUrl, reviewSourceLabel(s.sourceType) || s.evidence[0]?.quote?.slice(0, 40) || "Source", s.evidence[0]?.quote || "", reviewAnalysis.data.retrievedAt)} />
+                      <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(s)}]</span>
                     </p>
                     {s.evidence.slice(0, 2).map((e, i) => (
                       <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
@@ -368,7 +539,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
                   {reviewAnalysis.data.sourcesSummary.expertReviews > 0 && ` + ${reviewAnalysis.data.sourcesSummary.expertReviews} expert reviews`}
                   {reviewAnalysis.data.sourcesSummary.forumDiscussions > 0 && ` + ${reviewAnalysis.data.sourcesSummary.forumDiscussions} forum discussions`}
                 </p>
-                <SourcesFootnoteList sources={strengthsCitations.allSources().map((url, i) => ({ number: i + 1, url, title: domainLabel(url), publisher: domainLabel(url), quote: "", retrievedAt: new Date().toISOString() }))} />
+                <SourcesFootnoteList sources={strengthsCitations.allSources().map((url, i) => ({ number: i + 1, url, title: domainLabel(url), publisher: domainLabel(url), quote: "", retrievedAt: reviewAnalysis.data.retrievedAt }))} />
               </>
             )}
           </div>
@@ -385,6 +556,19 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
           {reviewAnalysis.status === "loaded" && <RefreshButton onClick={() => loadReviewAnalysis(true)} />}
         </div>
 
+        {reviewAnalysis.status === "loaded" && (
+          assertProvenance(reviewAnalysis.data.provenance, "reviews", c.name) ? (
+            <SectionSourceLine
+              flavor="reviews"
+              provenance={reviewAnalysis.data.provenance!}
+              resolvedAt={reviewAnalysis.data.retrievedAt}
+              asin={isValidAsin ? c.asin : null}
+              open={weaknessesSourceOpen}
+              onToggle={() => setWeaknessesSourceOpen(o => !o)}
+            />
+          ) : <SourceUnavailableCaption />
+        )}
+
         {weaknessesOpen && (
           <div className="mt-3 space-y-2.5 animate-slide-down">
             {reviewAnalysis.status === "loading" && <SkeletonRows count={2} />}
@@ -394,27 +578,23 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
                 <TimeoutChip onRetry={() => loadReviewAnalysis()} />
               </div>
             )}
-            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.insufficientData && (
-              <p className="italic text-text-muted">
-                No review data found on Amazon, retailers, or the web (searched {reviewAnalysis.data.sourcesSummary.tiersTried.join(", ")}).
-              </p>
+            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.listingStats && (
+              <ListingStatsCaption stats={reviewAnalysis.data.listingStats} />
             )}
-            {reviewAnalysis.status === "loaded" && reviewAnalysis.data.aiUnavailable && (
-              <div className="flex items-center justify-between gap-2 py-2">
-                <span className="text-warning">Fetched real reviews, but no AI provider is available right now to analyze them.</span>
-                <TimeoutChip onRetry={() => loadReviewAnalysis()} />
-              </div>
+            {reviewAnalysis.status === "loaded" && (reviewAnalysis.data.aiUnavailable || reviewAnalysis.data.sourcesUnavailable || reviewAnalysis.data.insufficientData) && (
+              <ReviewSourcesNotice data={reviewAnalysis.data} onRetry={() => loadReviewAnalysis()} />
             )}
-            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && !reviewAnalysis.data.aiUnavailable && (
+            {reviewAnalysis.status === "loaded" && !reviewAnalysis.data.insufficientData && !reviewAnalysis.data.sourcesUnavailable && !reviewAnalysis.data.aiUnavailable && (
               <>
                 <div className="space-y-1.5">
                   <p className="font-bold text-danger text-[10px] uppercase tracking-wider">Weaknesses</p>
                   {reviewAnalysis.data.weaknesses.length === 0 && <p className="italic text-text-muted">None with verified support.</p>}
                   {reviewAnalysis.data.weaknesses.map((w, idx) => (
                     <div key={idx} className="space-y-1">
-                      <p className="text-text-secondary font-semibold flex items-center flex-wrap">
+                      <p className="text-text-secondary font-semibold flex items-center flex-wrap gap-1">
                         {w.theme}
-                        <CitationMarker source={sourceFor(weaknessesCitations, w.sourceUrl, w.sourceType === "customer_reviews" ? "Amazon customer reviews" : w.evidence[0]?.quote?.slice(0, 40) || "Source", w.evidence[0]?.quote || "", new Date().toISOString())} />
+                        <CitationMarker source={sourceFor(weaknessesCitations, w.sourceUrl, reviewSourceLabel(w.sourceType) || w.evidence[0]?.quote?.slice(0, 40) || "Source", w.evidence[0]?.quote || "", reviewAnalysis.data.retrievedAt)} />
+                        <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(w)}]</span>
                       </p>
                       {w.evidence.slice(0, 2).map((e, i) => (
                         <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
@@ -441,7 +621,10 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
                       </div>
                       {reviewAnalysis.data.recentSentiment.dominantThemes.map((t, idx) => (
                         <div key={idx} className="space-y-1">
-                          <p className="text-text-secondary font-semibold">{t.theme}</p>
+                          <p className="text-text-secondary font-semibold flex items-center flex-wrap gap-1">
+                            {t.theme}
+                            <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(t)}]</span>
+                          </p>
                           {t.evidence.slice(0, 2).map((e, i) => (
                             <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
                           ))}
@@ -469,6 +652,18 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
           {newsState.status === "loaded" && <RefreshButton onClick={() => loadNews(true)} />}
         </div>
 
+        {newsState.status === "loaded" && (
+          assertProvenance(newsState.data.provenance, "news", c.name) ? (
+            <SectionSourceLine
+              flavor="news"
+              provenance={newsState.data.provenance!}
+              resolvedAt={newsState.data.retrievedAt}
+              open={newsSourceOpen}
+              onToggle={() => setNewsSourceOpen(o => !o)}
+            />
+          ) : <SourceUnavailableCaption />
+        )}
+
         {newsOpen && (
           <div className="mt-3 space-y-2.5 animate-slide-down">
             {newsState.status === "loading" && <SkeletonRows count={2} />}
@@ -493,14 +688,16 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved }: Competitor
                   <div key={idx} className="p-2 rounded-lg border border-border/60 space-y-0.5">
                     <p className="font-semibold text-text-primary flex items-center flex-wrap">
                       {item.title}
-                      <CitationMarker source={sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, new Date().toISOString())} />
+                      <CitationMarker source={sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, newsState.data.searchedAt)} />
                     </p>
                     <p className="text-[11px] text-text-secondary leading-normal">{item.summary}</p>
-                    <p className="text-[9px] text-text-muted">{item.publisher}{item.date && ` · ${item.date}`}</p>
+                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-text-muted hover:text-accent inline-flex items-center gap-1">
+                      {item.publisher}{item.date && ` · ${item.date}`} <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
                   </div>
                 ))}
                 {newsState.data.items.length > 0 && (
-                  <SourcesFootnoteList sources={newsState.data.items.map(item => sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, new Date().toISOString()))} />
+                  <SourcesFootnoteList sources={newsState.data.items.map(item => sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, newsState.data.searchedAt))} />
                 )}
               </>
             )}

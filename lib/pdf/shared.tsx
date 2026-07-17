@@ -1,4 +1,6 @@
 import { StyleSheet, View, Text } from "@react-pdf/renderer";
+import { describeProvenanceTier } from "../provenance-format";
+import type { ProvenanceRow } from "../db/section-provenance";
 
 export const APP_NAME = "Stylecraft Lens";
 
@@ -291,6 +293,56 @@ export function CitationList({ claims }: { claims: PdfClaim[] }) {
           <Text style={{ fontSize: 8, fontWeight: 700, color: "#92400e", marginTop: 2 }}>
             ⚠ No verifiable source found — treat as unverified estimate
           </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// A section-level "where did this come from" line — distinct from
+// CitationList above (per-claim quote citations). ASCII-only text expected
+// (see lib/provenance-format.ts's summarizeSource) since this file has no
+// Font.register() anywhere and only the base-14 Helvetica font.
+export function SourceLine({ text }: { text: string }) {
+  return <Text style={{ fontSize: 8, color: "#666666", fontStyle: "italic", marginTop: 2, marginBottom: 6 }}>{text}</Text>;
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  key_features: "Key Features", reviews: "Reviews", news: "News Updates", pricing: "Pricing",
+};
+
+// "Data Sources & Methodology" appendix, modeled directly on CitationList
+// above — one block per product+section, tier list, verbatim queries.
+// ASCII-only status words throughout (describeProvenanceTier already
+// produces these) — no checkmark/emoji/star glyphs, matching this file's
+// lack of a registered font capable of rendering them reliably.
+export function ProvenanceAppendix({ rows }: { rows: ProvenanceRow[] }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <View>
+      <SectionHeader title="Data Sources & Methodology" />
+      {rows.map((row, i) => (
+        <View key={row.id || i} style={{ marginBottom: 8 }} wrap={false}>
+          <Text style={{ fontSize: 9, fontWeight: 700 }}>
+            {row.product_name || "Unknown product"} — {SECTION_LABELS[row.section] || row.section}
+          </Text>
+          {row.tiers.map((t, ti) => (
+            <View key={ti} style={{ marginLeft: 8, marginTop: 1 }}>
+              <Text style={{ fontSize: 8 }}>{t.tier}: {describeProvenanceTier(t)}</Text>
+              {!!t.rejectedReasons?.length && t.rejectedReasons.map((r, ri) => (
+                <Text key={ri} style={{ fontSize: 7, color: "#666666", marginLeft: 8 }}>- {r}</Text>
+              ))}
+            </View>
+          ))}
+          {row.queries.length > 0 && (
+            <View style={{ marginLeft: 8, marginTop: 2 }}>
+              {row.queries.map((q, qi) => (
+                <Text key={qi} style={{ fontSize: 7, fontFamily: "Courier", color: "#4F46E5" }}>
+                  {q.query}{q.verified === false ? " (self-reported, unverified)" : ""}
+                </Text>
+              ))}
+            </View>
+          )}
         </View>
       ))}
     </View>

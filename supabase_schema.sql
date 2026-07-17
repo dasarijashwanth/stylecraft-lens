@@ -368,3 +368,31 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for profiles" ON profiles FOR ALL USING (true) WITH CHECK (true);
+
+-- Persisted, per-section data provenance — which source tier won, the
+-- verbatim queries run, item counts used vs. rejected (with reasons), and
+-- when — for each of Key Features / Reviews / News / Pricing. Append-only
+-- (mirrors product_snapshots, NOT amazon_cache's overwrite-on-refresh
+-- pattern): every resolver run INSERTs a new row so there's a real history,
+-- never UPDATE/upsert. Keyed by product_key (== resolveCacheKey() output,
+-- lib/product-cache-key.ts — the same stable identity amazon_cache already
+-- uses for an in-progress, not-yet-saved competitor) + section.
+-- analysis_id is best-effort/nullable (no analysis_id exists yet for a
+-- competitor until an analysis job is created); product_name is denormalized
+-- so the Details panel/PDF appendix can render without a join.
+CREATE TABLE IF NOT EXISTS section_provenance (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    product_key VARCHAR(20) NOT NULL,
+    section VARCHAR(20) NOT NULL,
+    analysis_id UUID REFERENCES analyses(id) ON DELETE SET NULL,
+    product_name TEXT,
+    tiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    queries JSONB NOT NULL DEFAULT '[]'::jsonb,
+    resolved_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+-- "Latest row per (product_key, section)": filters on the two leading
+-- columns, ORDER BY resolved_at DESC LIMIT 1 rides this index directly.
+CREATE INDEX IF NOT EXISTS section_provenance_key_section_resolved_idx
+    ON section_provenance(product_key, section, resolved_at DESC);
+ALTER TABLE section_provenance ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for section_provenance" ON section_provenance FOR ALL USING (true) WITH CHECK (true);

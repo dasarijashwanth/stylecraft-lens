@@ -84,6 +84,7 @@ export function deriveFieldsFromSources(
   set("warranty", pick(t.warranty, "tds"));
   set("certification_needed", pick(t.certification_needed, "tds"));
   set("trademark_symbol", pick(t.trademark_symbol, "tds"));
+  set("manufacturer", pick(t.manufacturer, "tds"));
 
   // Packaging & Logistics — TDS carries product (not box/pallet) dimensions
   set("dieline", pick(t.dieline, "tds"));
@@ -100,6 +101,7 @@ export function deriveFieldsFromSources(
   set("material", pick(t.material, "tds"));
   set("top_6_features", pick((salesKit?.key_features || []).slice(0, 6).map((f: any) => f.headline).filter(Boolean).join("; "), "sales_kit"));
   set("care_directions", pick(t.care_directions, "tds"));
+  set("product_description", pick(t.product_description, "tds"));
 
   // Motor — project.motorTech (team-entered) outranks TDS's captured specs.
   set("motor_type", firstOf([project.motorTech, "project_record"], [t.motor_type, "tds"]));
@@ -152,6 +154,7 @@ export function deriveFieldsFromSources(
   set("oil_bottle_qty", pick(t.oil_bottle_qty, "tds"));
   set("extra_screws_qty", pick(t.extra_screws_qty, "tds"));
   set("extra_screws_color", pick(t.extra_screws_color, "tds"));
+  set("whats_in_box_list", pick(t.whats_in_box_list, "tds"));
 
   return fields;
 }

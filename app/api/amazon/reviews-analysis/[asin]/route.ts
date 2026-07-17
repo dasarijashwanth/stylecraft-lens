@@ -3,6 +3,7 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { getAmazonProduct } from "@/lib/rainforest";
 import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
 import { resolveCacheKey } from "@/lib/product-cache-key";
+import { insertProvenance } from "@/lib/db/section-provenance";
 
 // 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
 // the multi-tier resolver (Amazon -> expert reviews -> forums) sometimes
@@ -62,6 +63,7 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
   }
 
   const forceRefresh = req.nextUrl.searchParams.get("refresh") === "true";
+  const analysisId = req.nextUrl.searchParams.get("analysisId") || null;
   const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName || rawAsin || "product");
 
   try {
@@ -73,12 +75,30 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     }
 
     const product = isRealAsin ? await getAmazonProduct(rawAsin) : null;
-    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product");
+    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product", new Date(), product);
 
-    // Don't cache an "AI unavailable" result for 24h — that's a transient
-    // provider outage, not a real answer, and should be retried freely.
-    if (!analysis.aiUnavailable) {
+    // Don't cache an "AI unavailable" or "sources unavailable" result for
+    // 24h — both are transient (AI provider outage / Rainforest auth-credit
+    // outage), not a real answer, and should be retried freely rather than
+    // locking in a false negative for a full day.
+    if (!analysis.aiUnavailable && !analysis.sourcesUnavailable) {
       await setCachedAnalysis(cacheKey, analysis);
+    }
+
+    // Best-effort — a slow/broken provenance write must never turn a good
+    // resolver result into an error response. Only on a genuine fresh
+    // resolve (the cache-hit branch above already returns its own stored
+    // trail, no new row needed).
+    if (analysis.provenance) {
+      try {
+        await insertProvenance({
+          productKey: cacheKey, section: "reviews", analysisId,
+          productName: productName || product?.title || rawAsin,
+          tiers: analysis.provenance.tiers, queries: analysis.provenance.queries,
+        });
+      } catch (e) {
+        console.warn("Failed to persist reviews provenance:", e);
+      }
     }
 
     return NextResponse.json({ ...analysis, retrievedAt: new Date().toISOString(), cached: false });

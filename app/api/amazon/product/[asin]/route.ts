@@ -16,5 +16,11 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     return NextResponse.json({ error: "Live Amazon data unavailable — retry" }, { status: 503 });
   }
 
-  return NextResponse.json(product);
+  // Strip the heavy, internal-only fields (raw_product is the full
+  // untrimmed Rainforest payload kept for future zero-cost re-mapping;
+  // variants/full attributes/specifications are rarely needed client-side)
+  // before sending this to the browser — keeps useAmazonProduct's payload
+  // small while still exposing everything CompetitorCard actually renders.
+  const { raw_product, variants, attributes, ...clientProduct } = product;
+  return NextResponse.json(clientProduct);
 }

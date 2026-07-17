@@ -530,6 +530,7 @@ export default function AnalyzePage() {
       {viewState === "results" && analysisResult && (
         <ResultsPanel
           analysis={{ ...analysisResult, pricePoint }}
+          analysisId={analysisId}
           onSaveAsReport={handleSaveAsReport}
           savingReport={savingReport}
           onNewAnalysis={() => setViewState("form")}

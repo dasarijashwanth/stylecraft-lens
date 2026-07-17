@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { findProductNews, ProductNewsResult } from "@/lib/product-news";
 import { resolveCacheKey } from "@/lib/product-cache-key";
+import { insertProvenance } from "@/lib/db/section-provenance";
 
 // 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
 // a real news search can take 30s+ and a hard Vercel kill mid-response
@@ -59,6 +60,7 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
   }
 
   const forceRefresh = req.nextUrl.searchParams.get("refresh") === "true";
+  const analysisId = req.nextUrl.searchParams.get("analysisId") || null;
   const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName);
 
   try {
@@ -73,6 +75,17 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
 
     if (!result.aiUnavailable) {
       await setCachedNews(cacheKey, result);
+    }
+
+    if (result.provenance) {
+      try {
+        await insertProvenance({
+          productKey: cacheKey, section: "news", analysisId, productName,
+          tiers: result.provenance.tiers, queries: result.provenance.queries,
+        });
+      } catch (e) {
+        console.warn("Failed to persist news provenance:", e);
+      }
     }
 
     return NextResponse.json({ ...result, retrievedAt: new Date().toISOString(), cached: false });

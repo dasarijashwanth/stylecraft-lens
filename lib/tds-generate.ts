@@ -26,6 +26,7 @@ function buildSystemInstruction(productTitle: string, schema: TdsField[]) {
 
 Rules:
 - Answer using ONLY the scraped product page data and Amazon listing data provided below, plus the project record.
+- For manufacturer/model/mpn/brand fields, also check inside any schema.org JSON-LD structured data in the scraped site snapshot (look for "manufacturer", "model", "mpn", "sku" keys) — sites often only expose these there, not in visible page text.
 - Copy spec values EXACTLY as written in the source, including units (e.g. "7,500 RPM", "3.6V", "50cm | 19.68 in").
 - NEVER estimate, infer, round, or reuse a value from a different/similar product.
 - If a value is not present anywhere in the provided data, return exactly "${TDS_NOT_LISTED}".
@@ -94,6 +95,33 @@ export async function generateTdsFields(
   }
   if (project.productName && result.product_title?.source === "none") {
     result.product_title = { answer: project.productName, source: "project_record" };
+  }
+
+  // Deterministic floor from the widened Rainforest product payload
+  // (lib/rainforest.ts) — a real, credit-costing Rainforest fetch already
+  // ran to capture this snapshot; make sure its manufacturer/model/
+  // description/dimensions/weight/box-contents data is never silently
+  // wasted just because the AI didn't surface it. Only fills fields the AI
+  // left at "none" — never overwrites something it already found.
+  const az = snapshotRawData?.amazon;
+  if (az) {
+    const fillFromAmazon = (id: string, value: string | null | undefined) => {
+      if (value && result[id]?.source === "none") {
+        result[id] = { answer: value, source: "amazon", sourceDetail: { url: az.amazon_url, retrieved_at: az.last_updated } };
+      }
+    };
+    fillFromAmazon("manufacturer", az.manufacturer);
+    fillFromAmazon("model_number", az.model_number);
+    fillFromAmazon("product_description", az.description);
+    fillFromAmazon("product_lwh", az.dimensions);
+    fillFromAmazon("product_weight", az.weight);
+    if (Array.isArray(az.whats_in_the_box) && az.whats_in_the_box.length) {
+      fillFromAmazon("whats_in_box_list", az.whats_in_the_box.join("; "));
+    }
+    const voltageSpec = Array.isArray(az.specifications)
+      ? az.specifications.find((s: any) => /voltage/i.test(s?.name || ""))?.value
+      : null;
+    fillFromAmazon("charging_voltage", voltageSpec);
   }
 
   return verifyGrounding(result, schema, [snapshotText, recordText], TDS_NOT_LISTED);

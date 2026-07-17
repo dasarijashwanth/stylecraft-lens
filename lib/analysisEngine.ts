@@ -14,6 +14,9 @@ import { identifyProduct, needsUserInput, IdentityCard } from "./product-identif
 import { getKnownBrandsHint } from "./known-brands-by-category";
 import { competitorMatchesCategory } from "./category-synonyms";
 import { finalizeCitations } from "./citations";
+import { insertProvenance } from "./db/section-provenance";
+import { resolveCacheKey } from "./product-cache-key";
+import { buildPricingProvenanceTier } from "./section-provenance";
 
 export interface AnalysisContext {
   id: string;
@@ -540,14 +543,25 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
       }
 
       if (!product) {
+        // Keep a format-valid, AI-discovered ASIN instead of wiping it —
+        // Rainforest verification can fail (credit/auth outage, transient
+        // network issue) even when the ASIN itself is correct, and nulling
+        // it here previously meant the reviews-analysis endpoint never even
+        // attempted the Amazon tier for an otherwise-correct competitor.
+        // `verified_by_rainforest: false` already signals "unconfirmed" to
+        // every downstream reader — nothing else treats asin === null as a
+        // hard "no ASIN exists" sentinel.
+        const keptAsin = /^[A-Z0-9]{10}$/i.test(c.asin ?? "") ? c.asin : null;
         return {
           ...c,
-          asin: null,
+          asin: keptAsin,
           price: "—",
           rating: "—",
           review_count: "—",
           verified_by_rainforest: false,
-          amazon_url: `https://www.amazon.com/s?k=${encodeURIComponent(`${c.brand || ""} ${c.name}`.trim())}`,
+          amazon_url: keptAsin
+            ? `https://www.amazon.com/dp/${keptAsin}`
+            : `https://www.amazon.com/s?k=${encodeURIComponent(`${c.brand || ""} ${c.name}`.trim())}`,
         };
       }
 
@@ -574,10 +588,36 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
         bsr_rank: product.bsr || c.bsr_rank,
         amazon_url: product.amazon_url,
         image: product.image,
+        images: product.images.length ? product.images : (product.image ? [product.image] : []),
+        manufacturer: product.manufacturer,
+        model_number: product.model_number,
+        description: product.description,
         key_features: realFeatures.length > 0 ? realFeatures : c.key_features,
         verified_by_rainforest: true,
       };
   });
+}
+
+// Pricing has no separate resolver/search step of its own (see
+// lib/pricing-analysis.ts's header comment) — its "provenance" is simply
+// whether the Rainforest product lookup just performed above resolved a
+// real price for each competitor. Best-effort per competitor; a slow/broken
+// write here must never affect the analysis result itself.
+async function persistPricingProvenance(competitors: any[], analysisId: string): Promise<void> {
+  for (const comp of competitors) {
+    try {
+      await insertProvenance({
+        productKey: resolveCacheKey(comp.asin ?? "", comp.name ?? ""),
+        section: "pricing",
+        analysisId,
+        productName: comp.name ?? null,
+        tiers: [buildPricingProvenanceTier(comp)],
+        queries: [],
+      });
+    } catch (e) {
+      console.warn("Failed to persist pricing provenance:", e);
+    }
+  }
 }
 
 export interface AnalysisStepResult {
@@ -702,6 +742,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       result.competitors = cleanCompetitors(result.competitors, "legacy", identityCard);
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+        await persistPricingProvenance(result.competitors, analysisId);
       }
       webSearchCount += result.web_searches_performed || 0;
 
@@ -725,6 +766,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       result.competitors = cleanCompetitors(result.competitors, "emerging", identityCard);
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+        await persistPricingProvenance(result.competitors, analysisId);
       }
       webSearchCount += result.web_searches_performed || 0;
 

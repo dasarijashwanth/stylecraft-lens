@@ -6,18 +6,38 @@
 // verify is dropped before it ever reaches the UI. This makes
 // hallucination structurally impossible to reach the client.
 //
-// Amazon reviews are one source, not the only one: when Amazon has fewer
-// than MIN_REVIEWS_REQUIRED reviews (no ASIN, sparse listing, or the
-// reviews endpoint is down — a real, observed Rainforest outage), this
-// falls through to expert review articles and forum discussions found via
-// web search, fetched and verified the same way.
+// Resolver order (each tier is recorded — attempted/outcome/itemCount — so
+// the UI can report exactly what happened instead of a generic message):
+//   Tier A: Rainforest full reviews endpoint (multi-pass: all/positive/
+//           negative/recent) — the richest source when it works.
+//   Tier B: the product listing's own `top_reviews` + `rating_breakdown`
+//           (from the `type=product` payload the caller already fetched —
+//           zero additional Rainforest calls) — a floor so a product with
+//           a real Amazon listing never renders bare "no data" just
+//           because the dedicated reviews endpoint came back thin/erroring.
+//   Tier C: expert review articles + forum discussions found via web
+//           search, fetched and verified the same way.
+// Tier A failing outright (auth/credit error, endpoint down) is recorded
+// distinctly from Tier A succeeding with genuinely zero reviews — those
+// must never be presented to the user as the same thing.
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { callOpenAiForJson, hasOpenAIKey } from "./openai";
-import { AmazonReview, getAmazonReviews, getAmazonReviewsByStars, getRecentReviews } from "./rainforest";
+import {
+  AmazonReview,
+  RainforestProduct,
+  ReviewFetchStatus,
+  ReviewSetResult,
+  combineFetchResults,
+  getAmazonReviews,
+  getAmazonReviewsByStars,
+  getRecentReviews,
+} from "./rainforest";
 import { searchForUrls } from "./web-search";
 import { fetchPageText, quoteAppearsInText } from "./citations";
+import { logCall } from "./obs";
+import { SectionProvenanceData, ProvenanceTier, ProvenanceQuery, fromTierResult } from "./section-provenance";
 
-export type ReviewSourceType = "customer_reviews" | "expert_review" | "forum";
+export type ReviewSourceType = "customer_reviews" | "amazon_listing" | "expert_review" | "forum";
 
 export interface ReviewEvidence {
   quote: string;
@@ -40,11 +60,36 @@ export interface RecentSentiment {
   dominantThemes: ReviewTheme[];
 }
 
+// Honest, per-tier outcome — replaces treating "returned zero" and "the
+// request failed" as the same thing. `attempted: false` means the tier was
+// never even tried (e.g. no valid ASIN), which is distinct from both.
+export type TierOutcome = "success" | "empty" | "error";
+
+export interface TierResult {
+  tier: string;
+  attempted: boolean;
+  outcome: TierOutcome;
+  itemCount?: number;
+  errorMessage?: string;
+}
+
 export interface SourcesSummary {
   amazonReviews: number;
   expertReviews: number;
   forumDiscussions: number;
+  // Kept for backward-compatibility with cached (pre-existing) payloads and
+  // any reader that only knows this shape — now honestly derived from
+  // `tiers` (only tiers that were actually attempted), instead of being
+  // unconditionally seeded with every tier name regardless of what ran.
   tiersTried: string[];
+  tiers: TierResult[];
+}
+
+export interface ListingStats {
+  rating: number | null;
+  reviewsTotal: number | null;
+  ratingBreakdown: RainforestProduct["rating_breakdown"];
+  source: "amazon_product_listing";
 }
 
 export interface ReviewAnalysis {
@@ -53,12 +98,27 @@ export interface ReviewAnalysis {
   recentSentiment: RecentSentiment | null;
   reviewCountAnalyzed: number;
   dateRange: { earliest: string | null; latest: string | null } | null;
+  // True only when every tier that ran found genuinely nothing AND no tier
+  // errored (a real, verifiably-searched "no data exists" case).
   insufficientData: boolean;
+  // True when the reason nothing came back is that a tier's request itself
+  // failed (Rainforest auth/credit error, endpoint down, etc.) — distinct
+  // from insufficientData; the UI should say "sources unavailable, retry"
+  // rather than the misleading "no review data found".
+  sourcesUnavailable: boolean;
   // True when reviews were fetched fine but no AI provider could analyze
-  // them (both OpenAI and Gemini unavailable) — distinct from
-  // insufficientData, which means no source (Amazon or web) had anything.
+  // them (both OpenAI and Gemini unavailable) — distinct from both of the
+  // above, which are about data availability, not analysis availability.
   aiUnavailable: boolean;
+  // Rating + count + distribution straight from the product listing —
+  // populated whenever a product payload exists, independent of whether
+  // any theme was verified, so a real listing never renders as if it had
+  // zero information at all.
+  listingStats: ListingStats | null;
   sourcesSummary: SourcesSummary;
+  // Persisted, section-level source trail (see lib/section-provenance.ts) —
+  // additive/optional so cached pre-existing payloads without it stay valid.
+  provenance?: SectionProvenanceData;
 }
 
 const MIN_REVIEWS_REQUIRED = 5;
@@ -73,6 +133,50 @@ function quoteAppearsInReviews(quote: string, reviews: AmazonReview[]): boolean 
   const needle = normalizeWhitespace(quote);
   if (needle.length < 8) return false; // too short to be a meaningful citation
   return reviews.some(r => normalizeWhitespace(`${r.title} ${r.body}`).includes(needle));
+}
+
+// Shared by the Rainforest-reviews tier (A) and the product-listing
+// top_reviews tier (B) — both verify AI-extracted themes against a real
+// AmazonReview[] the same way. The web tier (C) verifies against raw page
+// text instead (a different shape) and keeps its own inline verifier.
+export function verifyThemes(
+  themes: any[],
+  sourceReviews: AmazonReview[],
+  sourceType: ReviewSourceType,
+  rejected?: { count: number; reasons: string[] }
+): ReviewTheme[] {
+  if (!Array.isArray(themes)) return [];
+  const out: ReviewTheme[] = [];
+  for (const t of themes) {
+    if (!t?.theme || !Array.isArray(t.evidence)) continue;
+    const verifiedEvidence = t.evidence.filter((e: any) => e?.quote && quoteAppearsInReviews(e.quote, sourceReviews));
+    if (verifiedEvidence.length >= MIN_EVIDENCE_PER_THEME) {
+      out.push({
+        theme: t.theme,
+        evidence: verifiedEvidence.map((e: any) => ({ quote: e.quote, date: e.date ?? null })),
+        sourceType,
+      });
+    } else if (rejected) {
+      rejected.count++;
+      rejected.reasons.push(`"${t.theme}" — only ${verifiedEvidence.length}/${MIN_EVIDENCE_PER_THEME} quotes verified`);
+    }
+  }
+  return out;
+}
+
+// Maps the product listing's top_reviews (from the type=product payload)
+// into the same AmazonReview shape the full reviews endpoint returns, so
+// the exact same prompt-building/verification pipeline can be reused.
+export function topReviewsToAmazonReviews(product: RainforestProduct): AmazonReview[] {
+  return (product.top_reviews ?? [])
+    .map(r => ({
+      title: r.title || "",
+      body: r.body || "",
+      rating: r.rating ?? null,
+      date: r.date ?? null,
+      verifiedPurchase: !!r.verified_purchase,
+    }))
+    .filter(r => r.body.trim().length > 0);
 }
 
 function computeDateRange(reviews: AmazonReview[]): { earliest: string | null; latest: string | null } | null {
@@ -156,24 +260,31 @@ async function callAi(systemPrompt: string, userPrompt: string): Promise<any> {
   return null;
 }
 
-// Fetches the three targeted Amazon review sets for this ASIN. Each fetch
-// is independent — a failure on one (e.g. Rainforest temporarily rejects
-// the star filter, or the reviews endpoint is down entirely) doesn't block
-// the others; analyzeReviews works with whatever combination came back.
-async function fetchAmazonReviewSets(asin: string, referenceDate: Date) {
+// Fetches the four targeted Amazon review sets for this ASIN. Each fetch is
+// independent and returns a tri-state ReviewSetResult — a failure on one
+// (e.g. Rainforest temporarily rejects the star filter, or the reviews
+// endpoint is down entirely) doesn't block the others; analyzeReviews works
+// with whatever combination came back, and can tell an error apart from a
+// genuine empty result.
+async function fetchAmazonReviewSets(asin: string, referenceDate: Date): Promise<{
+  all: ReviewSetResult;
+  positive: ReviewSetResult;
+  negative: ReviewSetResult;
+  recent: ReviewSetResult;
+}> {
   const [all, positive, negative, recent] = await Promise.all([
     getAmazonReviews(asin),
     getAmazonReviewsByStars(asin, "four_star,five_star"),
     getAmazonReviewsByStars(asin, "one_star,two_star"),
     getRecentReviews(asin, referenceDate),
   ]);
-  return { all: all ?? [], positive: positive ?? [], negative: negative ?? [], recent: recent ?? [] };
+  return { all, positive, negative, recent };
 }
 
 // Web fallback tier — expert review articles + forum discussions, fetched
 // and verified the same way as Amazon reviews (quote must be a real
-// substring of the actual fetched page). Runs only when Amazon didn't
-// provide enough reviews on its own.
+// substring of the actual fetched page). Runs only when Tiers A and B
+// didn't provide any verified themes.
 // Confirmed live: extracting strengths+weaknesses from a full ~20k-char
 // article at effort:"low" routinely exceeds 20s and hits the OpenAI client
 // timeout — bumped alongside the text-window increase above.
@@ -184,11 +295,22 @@ async function resolveWebReviewThemes(productName: string): Promise<{
   weaknesses: ReviewTheme[];
   expertReviewCount: number;
   forumCount: number;
+  queries: ProvenanceQuery[];
 }> {
+  const expertQuery = `"${productName}" review pros and cons`;
+  const forumQuery = `"${productName}" reddit`;
+  const t0 = Date.now();
   const [expertHits, forumHits] = await Promise.all([
-    searchForUrls(`"${productName}" review pros and cons`, 3),
-    searchForUrls(`"${productName}" reddit`, 2),
+    searchForUrls(expertQuery, 3),
+    searchForUrls(forumQuery, 2),
   ]);
+  const elapsedMs = Date.now() - t0;
+  logCall("review-tier", { op: "web-search", query: expertQuery, outcome: expertHits.length ? "ok" : "empty", itemCount: expertHits.length, elapsedMs });
+  logCall("review-tier", { op: "web-search", query: forumQuery, outcome: forumHits.length ? "ok" : "empty", itemCount: forumHits.length, elapsedMs });
+  const queries: ProvenanceQuery[] = [
+    { tier: "Expert reviews", query: expertQuery, outcome: expertHits.length ? "success" : "empty", itemCount: expertHits.length, elapsedMs, verified: true },
+    { tier: "Forum discussions", query: forumQuery, outcome: forumHits.length ? "success" : "empty", itemCount: forumHits.length, elapsedMs, verified: true },
+  ];
 
   const strengths: ReviewTheme[] = [];
   const weaknesses: ReviewTheme[] = [];
@@ -196,8 +318,12 @@ async function resolveWebReviewThemes(productName: string): Promise<{
   let forumCount = 0;
 
   const processHit = async (url: string, sourceType: ReviewSourceType) => {
+    const hitT0 = Date.now();
     const text = await fetchPageText(url);
-    if (!text || text.length < 100) return;
+    if (!text || text.length < 100) {
+      logCall("review-tier", { op: `hit:${sourceType}`, outcome: "empty", pagesFetched: 1, extractedTextLength: text?.length ?? 0, elapsedMs: Date.now() - hitT0 });
+      return;
+    }
 
     const result = await callOpenAiForJson<{ strengths: any[]; weaknesses: any[] }>(
       `From the text below about "${productName}", list recurring strengths and weaknesses mentioned. Using ONLY this text — no outside knowledge. Each theme needs at least 2 verbatim quote fragments from the text. If the text isn't really about this product, or doesn't support a theme, omit it.
@@ -211,7 +337,10 @@ Return ONLY valid JSON: { "strengths": [{ "theme": "...", "evidence": [{ "quote"
       `web review themes (${sourceType})`,
       { timeoutMs: WEB_REVIEW_TIMEOUT_MS }
     );
-    if (!result) return;
+    if (!result) {
+      logCall("review-tier", { op: `hit:${sourceType}`, outcome: "error", pagesFetched: 1, extractedTextLength: text.length, elapsedMs: Date.now() - hitT0, errorMessage: "AI extraction unavailable" });
+      return;
+    }
 
     const verify = (themes: any[]): ReviewTheme[] => {
       if (!Array.isArray(themes)) return [];
@@ -228,6 +357,7 @@ Return ONLY valid JSON: { "strengths": [{ "theme": "...", "evidence": [{ "quote"
 
     const s = verify(result.strengths);
     const w = verify(result.weaknesses);
+    logCall("review-tier", { op: `hit:${sourceType}`, outcome: (s.length + w.length) > 0 ? "ok" : "empty", pagesFetched: 1, extractedTextLength: text.length, itemCount: s.length + w.length, elapsedMs: Date.now() - hitT0 });
     if (s.length || w.length) {
       if (sourceType === "expert_review") expertReviewCount++;
       else forumCount++;
@@ -241,13 +371,21 @@ Return ONLY valid JSON: { "strengths": [{ "theme": "...", "evidence": [{ "quote"
     ...forumHits.map(h => processHit(h.url, "forum" as ReviewSourceType)),
   ]);
 
-  return { strengths, weaknesses, expertReviewCount, forumCount };
+  return { strengths, weaknesses, expertReviewCount, forumCount, queries };
 }
 
-export async function analyzeReviews(asin: string, productTitle: string, referenceDate: Date = new Date()): Promise<ReviewAnalysis> {
-  const tiersTried: string[] = ["Amazon reviews"];
+export async function analyzeReviews(
+  asin: string,
+  productTitle: string,
+  referenceDate: Date = new Date(),
+  product?: RainforestProduct | null
+): Promise<ReviewAnalysis> {
+  const asinValid = /^[A-Z0-9]{10}$/i.test(asin || "");
+
+  // ---- Tier A: Rainforest full reviews endpoint (multi-pass) ----
   const { all, positive, negative, recent } = await fetchAmazonReviewSets(asin, referenceDate);
-  const combined = dedupeReviews([...all, ...positive, ...negative, ...recent]);
+  const amazonOutcome: ReviewSetResult = combineFetchResults([all, positive, negative, recent]);
+  const combined = dedupeReviews([...all.reviews, ...positive.reviews, ...negative.reviews, ...recent.reviews]);
   const dateRange = computeDateRange(combined);
 
   const amazonSufficient = combined.length >= MIN_REVIEWS_REQUIRED;
@@ -255,17 +393,21 @@ export async function analyzeReviews(asin: string, productTitle: string, referen
   let strengths: ReviewTheme[] = [];
   let weaknesses: ReviewTheme[] = [];
   let recentSentiment: RecentSentiment | null = null;
-  let expertReviewCount = 0;
-  let forumCount = 0;
   let anyAiUnavailable = false;
+
+  let tierAOutcome: TierOutcome = !asinValid
+    ? "empty"
+    : amazonOutcome.status === "ok" ? "success" : amazonOutcome.status === "empty" ? "empty" : "error";
+
+  const tierARejected = { count: 0, reasons: [] as string[] };
 
   if (amazonSufficient) {
     // Prior-period average — everything NOT in the last-90-days set — lets
     // the trend badge below be a real, code-computed comparison rather
     // than an AI guess at whether sentiment is "improving".
-    const recentKeys = new Set(recent.map(r => `${r.date}|${normalizeWhitespace(r.title)}`));
+    const recentKeys = new Set(recent.reviews.map(r => `${r.date}|${normalizeWhitespace(r.title)}`));
     const priorReviews = combined.filter(r => !recentKeys.has(`${r.date}|${normalizeWhitespace(r.title)}`));
-    const recentAvg = avgRating(recent);
+    const recentAvg = avgRating(recent.reviews);
     const priorAvg = avgRating(priorReviews);
 
     let trend: RecentSentiment["trend"] = "unknown";
@@ -274,54 +416,136 @@ export async function analyzeReviews(asin: string, productTitle: string, referen
       trend = Math.abs(delta) < RATING_TREND_EPSILON ? "stable" : delta > 0 ? "improving" : "declining";
     }
 
-    const { systemPrompt, userPrompt } = buildPrompt(asin, productTitle, positive, negative, recent);
+    const { systemPrompt, userPrompt } = buildPrompt(asin, productTitle, positive.reviews, negative.reviews, recent.reviews);
     const raw = await callAi(systemPrompt, userPrompt);
 
     if (!raw) {
       anyAiUnavailable = true;
     } else {
-      const verifyThemes = (themes: any[], sourceReviews: AmazonReview[]): ReviewTheme[] => {
-        if (!Array.isArray(themes)) return [];
-        const out: ReviewTheme[] = [];
-        for (const t of themes) {
-          if (!t?.theme || !Array.isArray(t.evidence)) continue;
-          const verifiedEvidence = t.evidence.filter((e: any) => e?.quote && quoteAppearsInReviews(e.quote, sourceReviews));
-          if (verifiedEvidence.length >= MIN_EVIDENCE_PER_THEME) {
-            out.push({
-              theme: t.theme,
-              evidence: verifiedEvidence.map((e: any) => ({ quote: e.quote, date: e.date ?? null })),
-              sourceType: "customer_reviews",
-            });
-          }
-        }
-        return out;
-      };
+      strengths = verifyThemes(raw.strengths, positive.reviews.length ? positive.reviews : combined, "customer_reviews", tierARejected);
+      weaknesses = verifyThemes(raw.weaknesses, negative.reviews.length ? negative.reviews : combined, "customer_reviews", tierARejected);
+      const dominantThemes = verifyThemes(raw.recentDominantThemes, recent.reviews.length ? recent.reviews : combined, "customer_reviews", tierARejected);
 
-      strengths = verifyThemes(raw.strengths, positive.length ? positive : combined);
-      weaknesses = verifyThemes(raw.weaknesses, negative.length ? negative : combined);
-      const dominantThemes = verifyThemes(raw.recentDominantThemes, recent.length ? recent : combined);
-
-      recentSentiment = recent.length > 0 ? {
-        reviewCount: recent.length,
+      recentSentiment = recent.reviews.length > 0 ? {
+        reviewCount: recent.reviews.length,
         avgRating: recentAvg,
         priorAvgRating: priorAvg,
         trend,
         dominantThemes,
       } : null;
     }
-  } else {
-    // Amazon alone isn't enough — fall through to expert reviews + forum
-    // discussions found via web search, verified the same independent way.
-    tiersTried.push("Expert reviews", "Forum discussions");
-    const web = await resolveWebReviewThemes(productTitle);
-    strengths = web.strengths;
-    weaknesses = web.weaknesses;
-    expertReviewCount = web.expertReviewCount;
-    forumCount = web.forumCount;
+    tierAOutcome = (strengths.length + weaknesses.length) > 0 ? "success" : "empty";
   }
 
+  const tierA: TierResult = {
+    tier: "Amazon reviews",
+    attempted: asinValid,
+    outcome: tierAOutcome,
+    itemCount: combined.length,
+    errorMessage: asinValid && amazonOutcome.status === "error" ? amazonOutcome.errorMessage : undefined,
+  };
+
+  // ---- Tier B: product listing's top_reviews + rating_breakdown ----
+  // Reuses the product payload the caller already fetched (route already
+  // calls getAmazonProduct before this function) — zero additional
+  // Rainforest calls. Only runs when Tier A produced no themes.
+  const listingStats: ListingStats | null = product ? {
+    rating: product.rating,
+    reviewsTotal: product.reviews_total,
+    ratingBreakdown: product.rating_breakdown,
+    source: "amazon_product_listing",
+  } : null;
+
+  let tierBAttempted = false;
+  let tierBOutcome: TierOutcome = "empty";
+  let tierBItemCount = 0;
+  const tierBRejected = { count: 0, reasons: [] as string[] };
+
+  if (strengths.length + weaknesses.length === 0 && product) {
+    const tierBReviews = topReviewsToAmazonReviews(product);
+    tierBItemCount = tierBReviews.length;
+    tierBAttempted = true;
+
+    if (tierBReviews.length > 0) {
+      const positiveTB = tierBReviews.filter(r => (r.rating ?? 0) >= 4);
+      const negativeTB = tierBReviews.filter(r => (r.rating ?? 0) <= 2);
+      const { systemPrompt, userPrompt } = buildPrompt(product.asin, productTitle, positiveTB, negativeTB, []);
+      const raw = await callAi(systemPrompt, userPrompt);
+      if (!raw) {
+        anyAiUnavailable = true;
+      } else {
+        strengths = [...strengths, ...verifyThemes(raw.strengths, tierBReviews, "amazon_listing", tierBRejected)];
+        weaknesses = [...weaknesses, ...verifyThemes(raw.weaknesses, tierBReviews, "amazon_listing", tierBRejected)];
+      }
+    }
+    tierBOutcome = (strengths.length + weaknesses.length) > 0 ? "success" : "empty";
+  }
+
+  const tierB: TierResult = {
+    tier: "Amazon listing (top reviews)",
+    attempted: tierBAttempted,
+    outcome: tierBOutcome,
+    itemCount: tierBItemCount,
+  };
+
+  // ---- Tier C: web expert reviews + forum discussions ----
+  // Only when Tiers A and B together still found nothing — merges in.
+  let expertReviewCount = 0;
+  let forumCount = 0;
+  let tierCAttempted = false;
+  let tierCQueries: ProvenanceQuery[] = [];
+
+  if (strengths.length + weaknesses.length === 0) {
+    tierCAttempted = true;
+    const web = await resolveWebReviewThemes(productTitle);
+    strengths = [...strengths, ...web.strengths];
+    weaknesses = [...weaknesses, ...web.weaknesses];
+    expertReviewCount = web.expertReviewCount;
+    forumCount = web.forumCount;
+    tierCQueries = web.queries;
+  }
+
+  const tierExpert: TierResult = {
+    tier: "Expert reviews",
+    attempted: tierCAttempted,
+    outcome: tierCAttempted ? (expertReviewCount > 0 ? "success" : "empty") : "empty",
+  };
+  const tierForum: TierResult = {
+    tier: "Forum discussions",
+    attempted: tierCAttempted,
+    outcome: tierCAttempted ? (forumCount > 0 ? "success" : "empty") : "empty",
+  };
+
+  const tiers: TierResult[] = [tierA, tierB, tierExpert, tierForum];
+
   const totalThemesFound = strengths.length + weaknesses.length + (recentSentiment?.dominantThemes.length ?? 0);
-  const noDataAnywhere = combined.length === 0 && expertReviewCount === 0 && forumCount === 0;
+  const hasListingFloor = !!listingStats && (listingStats.rating != null || listingStats.reviewsTotal != null);
+  const anyTierErrored = tiers.some(t => t.attempted && t.outcome === "error");
+
+  // Preserves the original gate (Amazon's own full-reviews count below
+  // MIN_REVIEWS_REQUIRED AND no themes found anywhere) for when nothing
+  // errored; when a tier DID error, that's sourcesUnavailable instead of a
+  // (false) claim that no data exists. A real listing's rating/count floor
+  // means neither notice should show — there's always something to display.
+  const noThemesAnywhere = totalThemesFound === 0 && expertReviewCount === 0 && forumCount === 0 && combined.length < MIN_REVIEWS_REQUIRED;
+
+  const insufficientData = noThemesAnywhere && !hasListingFloor && !anyTierErrored;
+  const sourcesUnavailable = noThemesAnywhere && !hasListingFloor && anyTierErrored;
+
+  const provenanceTiers: ProvenanceTier[] = [
+    { ...fromTierResult(tierA), rejectedCount: tierARejected.count || undefined, rejectedReasons: tierARejected.reasons.length ? tierARejected.reasons : undefined },
+    { ...fromTierResult(tierB), rejectedCount: tierBRejected.count || undefined, rejectedReasons: tierBRejected.reasons.length ? tierBRejected.reasons : undefined },
+    fromTierResult(tierExpert),
+    fromTierResult(tierForum),
+  ];
+  const provenanceQueries: ProvenanceQuery[] = [];
+  if (asinValid) {
+    provenanceQueries.push({ tier: "Amazon reviews", query: `Rainforest reviews API — ASIN ${asin} (all/positive/negative/recent passes)`, outcome: tierAOutcome, itemCount: combined.length, verified: true });
+  }
+  if (tierBAttempted) {
+    provenanceQueries.push({ tier: "Amazon listing (top reviews)", query: `Rainforest product API top_reviews — ASIN ${product?.asin ?? asin}`, outcome: tierBOutcome, itemCount: tierBItemCount, verified: true });
+  }
+  provenanceQueries.push(...tierCQueries);
 
   return {
     strengths,
@@ -329,13 +553,17 @@ export async function analyzeReviews(asin: string, productTitle: string, referen
     recentSentiment,
     reviewCountAnalyzed: combined.length,
     dateRange,
-    insufficientData: noDataAnywhere || (combined.length < MIN_REVIEWS_REQUIRED && totalThemesFound === 0 && expertReviewCount === 0 && forumCount === 0),
+    insufficientData,
+    sourcesUnavailable,
     aiUnavailable: anyAiUnavailable && totalThemesFound === 0,
+    listingStats,
     sourcesSummary: {
       amazonReviews: combined.length,
       expertReviews: expertReviewCount,
       forumDiscussions: forumCount,
-      tiersTried,
+      tiersTried: tiers.filter(t => t.attempted).map(t => t.tier),
+      tiers,
     },
+    provenance: { tiers: provenanceTiers, queries: provenanceQueries },
   };
 }

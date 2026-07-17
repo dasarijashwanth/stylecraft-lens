@@ -21,6 +21,8 @@ import { downloadReportPDF } from "@/lib/export-pdf";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
+import { SectionSourceLine, SourceUnavailableCaption } from "@/components/analyze/SectionSourceLine";
+import { assertProvenance } from "@/lib/provenance-format";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form";
 
@@ -45,6 +47,7 @@ export default function ReportDetailPage() {
   const [exporting, setExporting] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [pricingSourceOpen, setPricingSourceOpen] = useState(false);
 
   const fetchReport = async () => {
     try {
@@ -399,6 +402,18 @@ export default function ReportDetailPage() {
         {activeTab === "pricing" && (
           <div className="space-y-6">
             <h2 className="text-sm font-bold text-text-primary">Pricing Analysis & Benchmarks</h2>
+
+            {!pricingEmpty && (
+              assertProvenance(pa.provenance, "pricing") ? (
+                <SectionSourceLine
+                  flavor="pricing"
+                  provenance={pa.provenance}
+                  resolvedAt={pa.provenance_resolved_at}
+                  open={pricingSourceOpen}
+                  onToggle={() => setPricingSourceOpen(o => !o)}
+                />
+              ) : <SourceUnavailableCaption />
+            )}
 
             {!editing && pricingEmpty ? (
               <p className="text-text-muted italic py-6 text-center">

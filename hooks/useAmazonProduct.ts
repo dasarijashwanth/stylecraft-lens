@@ -14,6 +14,17 @@ export interface AmazonData {
   amazon_url:   string;
   in_stock:     boolean;
   last_updated: string;
+
+  // Widened fields — mirrors the curated (non-heavy) subset the
+  // /api/amazon/product/[asin] route now returns.
+  title?:            string;
+  brand?:            string | null;
+  manufacturer?:     string | null;
+  model_number?:     string | null;
+  description?:      string | null;
+  images?:           string[];
+  feature_bullets?:  string[];
+  rating_breakdown?: { five_star?: number; four_star?: number; three_star?: number; two_star?: number; one_star?: number } | null;
 }
 
 interface UseAmazonProductResult {

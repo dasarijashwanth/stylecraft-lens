@@ -175,6 +175,17 @@ export interface MockProductSnapshot {
   capturedAt: Date;
 }
 
+export interface MockSectionProvenance {
+  id: string;
+  productKey: string;
+  section: string;
+  analysisId: string | null;
+  productName: string | null;
+  tiers: any[];
+  queries: any[];
+  resolvedAt: Date;
+}
+
 export interface MockProjectGenerationState {
   projectId: string;
   phase: string;
@@ -229,6 +240,10 @@ class MemoryDatabase {
   documentFields: MockDocumentField[] = [];
   documentFieldHistory: MockDocumentFieldHistory[] = [];
   productSnapshots: MockProductSnapshot[] = [];
+  // Deliberately excluded from saveSnapshot/loadSnapshot/reviveDates below —
+  // same precedent as productSnapshots itself: doesn't survive a local
+  // dev-server restart without Supabase configured, which is expected.
+  sectionProvenance: MockSectionProvenance[] = [];
   projectGenerationState: MockProjectGenerationState[] = [];
 
   constructor() {

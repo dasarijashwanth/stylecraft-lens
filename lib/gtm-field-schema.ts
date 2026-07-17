@@ -58,6 +58,7 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("warranty", "General", "Warranty"),
   field("certification_needed", "General", "Certification Needed"),
   field("rating_label", "General", "Rating Label"),
+  field("manufacturer", "General", "Manufacturer"),
 
   // Packaging & Logistics
   field("dieline", "Packaging & Logistics", "Dieline"),
@@ -76,6 +77,9 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("top_6_features", "Tool Description", "Top 6 Features in Priority Order"),
   field("feature_icons", "Tool Description", "6 Icons for the Features"),
   field("care_directions", "Tool Description", "Care Directions"),
+  // Grounded (verbatim from the Amazon listing), not written — see kind
+  // classification above. Deliberately excluded from WRITTEN_FIELD_IDS.
+  field("product_description", "Tool Description", "Product Description"),
 
   // Motor
   field("motor_type", "Motor", "Motor Type"),
@@ -128,6 +132,13 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("oil_bottle_qty", "Included in Box", "Oil Bottle Qty"),
   field("extra_screws_qty", "Included in Box", "Extra Screws Qty"),
   field("extra_screws_color", "Included in Box", "Extra Screws Color"),
+  // Generic aggregate from Amazon's whats_in_the_box[] — kept alongside the
+  // hand-tailored fields above (which are precise per-component slots for
+  // this catalog's clipper products) rather than folded into them, since a
+  // flat vendor list can't be reliably decomposed into those specific slots
+  // without guessing. Serves non-clipper products and anything the
+  // tailored fields miss.
+  field("whats_in_box_list", "Included in Box", "What's in the Box (full list)"),
 ];
 
 export const GTM_SECTIONS = Array.from(new Set(GTM_FIELD_SCHEMA.map(f => f.section)));

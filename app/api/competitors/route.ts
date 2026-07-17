@@ -48,7 +48,10 @@ export async function GET(request: Request) {
             brand: c.brand,
             tier: "legacy",
             asin: c.asin || null,
-            amazon_url: c.asin ? `https://www.amazon.com/dp/${c.asin}` : null,
+            // Prefer the already-computed amazon_url (a search link for
+            // unverified competitors) over recomputing a bare /dp/{asin}
+            // link from asin alone.
+            amazon_url: c.amazon_url || (c.asin ? `https://www.amazon.com/dp/${c.asin}` : null),
             price: c.price || null,
             rating: c.rating || null,
             review_count: c.review_count || null,
@@ -76,7 +79,10 @@ export async function GET(request: Request) {
             brand: c.brand,
             tier: "emerging",
             asin: c.asin || null,
-            amazon_url: c.asin ? `https://www.amazon.com/dp/${c.asin}` : null,
+            // Prefer the already-computed amazon_url (a search link for
+            // unverified competitors) over recomputing a bare /dp/{asin}
+            // link from asin alone.
+            amazon_url: c.amazon_url || (c.asin ? `https://www.amazon.com/dp/${c.asin}` : null),
             price: c.price || null,
             rating: c.rating || null,
             review_count: c.review_count || null,

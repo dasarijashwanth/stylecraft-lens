@@ -1,5 +1,56 @@
 // lib/export-pdf.ts
 import { isPricingAnalysisEmpty } from "./pricing-analysis";
+import { summarizeSource, describeProvenanceTier } from "./provenance-format";
+import type { ProvenanceRow } from "./db/section-provenance";
+
+// This file otherwise interpolates every value unescaped — queries are the
+// field most likely to contain <, >, &, or quotes from search syntax, so
+// they're the one place worth guarding explicitly.
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// "Data Sources & Methodology" appendix — one block per product+section,
+// rendered from whatever persisted provenance rows ended up on the report
+// (lib/db/reports.ts attaches these at save time; see lib/section-provenance.ts).
+// ASCII-only status words (no checkmark/emoji glyphs) — matches this file's
+// own renderStarRating()-established precedent of never relying on a bare
+// Unicode glyph for something print-critical.
+function renderProvenanceAppendixHTML(report: any): string {
+  const ca = report.competitive_analysis || {};
+  const pa = report.pricing_analysis || {};
+  const rows: ProvenanceRow[] = [...(ca.section_provenance || [])];
+  if (pa.provenance) {
+    rows.push({
+      id: "pricing-summary", product_key: "", section: "pricing", analysis_id: null,
+      product_name: "All competitors", tiers: pa.provenance.tiers, queries: pa.provenance.queries || [],
+      resolved_at: pa.provenance_resolved_at || "",
+    });
+  }
+  if (rows.length === 0) return "";
+
+  const SECTION_LABELS: Record<string, string> = {
+    key_features: "Key Features", reviews: "Reviews", news: "News Updates", pricing: "Pricing",
+  };
+
+  return `
+    <div class="page-break"></div>
+    <h2>Data Sources &amp; Methodology</h2>
+    ${rows.map(row => `
+      <div class="comp-specs" style="margin-bottom: 10px;">
+        <p><strong>${escapeHtml(row.product_name || "Unknown product")} — ${SECTION_LABELS[row.section] || row.section}</strong></p>
+        <ul>
+          ${row.tiers.map(t => `<li>${escapeHtml(t.tier)}: ${escapeHtml(describeProvenanceTier(t))}</li>`).join("")}
+        </ul>
+        ${row.queries.length ? `
+          <p style="font-family: monospace; font-size: 9px;">
+            ${row.queries.map(q => `${escapeHtml(q.query)}${q.verified === false ? " (self-reported, unverified)" : ""}`).join("<br/>")}
+          </p>
+        ` : ""}
+      </div>
+    `).join("")}
+  `;
+}
 
 export async function downloadReportPDF(report: any) {
   // Create a print-ready HTML document
@@ -446,8 +497,11 @@ function generatePrintHTML(report: any, activeTab?: string): string {
             ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
             <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
             ${c.bsr_rank ? `<div><strong>Rank:</strong> ${c.bsr_rank}</div>` : ""}
+            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${c.manufacturer}</div>` : ""}
+            ${c.model_number ? `<div><strong>Model:</strong> ${c.model_number}</div>` : ""}
           </div>
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
+          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${c.description.slice(0, 300)}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
             <strong>Specs:</strong> Motor: ${c.confirmed_technical_specs?.motor_type || "—"} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
           </div>
@@ -502,8 +556,11 @@ function generatePrintHTML(report: any, activeTab?: string): string {
             ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
             <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
             ${c.bsr_rank ? `<div><strong>Rank:</strong> ${c.bsr_rank}</div>` : ""}
+            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${c.manufacturer}</div>` : ""}
+            ${c.model_number ? `<div><strong>Model:</strong> ${c.model_number}</div>` : ""}
           </div>
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
+          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${c.description.slice(0, 300)}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
             <strong>Specs:</strong> Motor: ${c.confirmed_technical_specs?.motor_type || "—"} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
           </div>
@@ -549,6 +606,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   ${(showAll || activeTab === "pricing") && !isPricingAnalysisEmpty(pa) ? `
     ${showAll ? "" : '<div class="page-break"></div>'}
     <h2>3. Pricing Analysis & Benchmarks</h2>
+    ${pa.provenance ? `<p class="comp-specs">Source: ${escapeHtml(summarizeSource("pricing", pa.provenance, pa.provenance_resolved_at))}</p>` : ""}
     ${pa.target_price ? `<p><strong>Target Price:</strong> ${pa.target_price}</p>` : ""}
     ${pa.price_positioning ? `<p><strong>Price Positioning:</strong> ${pa.price_positioning}</p>` : ""}
 
@@ -626,6 +684,8 @@ function generatePrintHTML(report: any, activeTab?: string): string {
       <p>${cf.notes}</p>
     ` : ""}
   ` : ""}
+
+  ${renderProvenanceAppendixHTML(report)}
 
 </body>
 </html>`;

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { resolveKeyFeatures, KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { resolveCacheKey } from "@/lib/product-cache-key";
+import { insertProvenance } from "@/lib/db/section-provenance";
 
 // Multi-tier feature resolution (Amazon -> brand site -> retailers ->
 // expert reviews) can genuinely take 30-40s when Amazon has nothing and
@@ -55,6 +56,7 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
   }
 
   const forceRefresh = req.nextUrl.searchParams.get("refresh") === "true";
+  const analysisId = req.nextUrl.searchParams.get("analysisId") || null;
   const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName);
 
   try {
@@ -67,6 +69,17 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
 
     const result = await resolveKeyFeatures(productName, isRealAsin ? rawAsin : null);
     await setCachedFeatures(cacheKey, result);
+
+    if (result.provenance) {
+      try {
+        await insertProvenance({
+          productKey: cacheKey, section: "key_features", analysisId, productName,
+          tiers: result.provenance.tiers, queries: result.provenance.queries,
+        });
+      } catch (e) {
+        console.warn("Failed to persist key-features provenance:", e);
+      }
+    }
 
     return NextResponse.json({ ...result, retrievedAt: new Date().toISOString(), cached: false });
   } catch (err: any) {
