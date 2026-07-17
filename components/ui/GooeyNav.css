@@ -1,0 +1,242 @@
+/* Adapted from React Bits' GooeyNav for a VERTICAL sidebar and this app's
+   dark theme — layout switched from a horizontal pill row to a full-width
+   column list, and colors retargeted from the original's white/black
+   scheme to this app's accent + status palette (see --gooey-color-* below,
+   set inline by Sidebar.tsx / defaulted here). The particle-burst mechanics
+   (imperative DOM node creation in GooeyNav.tsx) are unchanged from source. */
+
+.gooey-nav-container {
+  position: relative;
+}
+
+.gooey-nav-container nav {
+  display: flex;
+  position: relative;
+  transform: translate3d(0, 0, 0.01px);
+}
+
+.gooey-nav-container nav ul {
+  display: flex;
+  gap: 0.35em;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  position: relative;
+  z-index: 3;
+  width: 100%;
+}
+
+/* Vertical (sidebar) layout — the default for this app's usage */
+.gooey-nav-vertical nav {
+  width: 100%;
+}
+.gooey-nav-vertical nav ul {
+  flex-direction: column;
+}
+.gooey-nav-vertical nav ul li {
+  width: 100%;
+}
+.gooey-nav-vertical nav ul li a {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.6em 0.75em;
+}
+
+.gooey-nav-container nav ul li {
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease;
+  color: var(--text-secondary);
+}
+
+.gooey-nav-container nav ul li a {
+  display: inline-block;
+  padding: 0.6em 1em;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: inherit;
+}
+
+.gooey-nav-container nav ul li:hover {
+  background-color: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.gooey-nav-container nav ul li:focus-within:has(:focus-visible) {
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+/* The PERSISTENT active-pill background — plain CSS transition driven
+   directly by React's `.active` class (always in sync with activeIndex),
+   independent of the imperative particle burst below. This is what keeps
+   showing a filled pill on whichever item is active; the particle/gooey
+   effect is an additional decorative flourish that plays ON TOP of this
+   during a transition, not a replacement for it. (This rule was present in
+   the original React Bits source and is easy to miss when re-theming.) */
+.gooey-nav-container nav ul li::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scale(0.85);
+  transition: all 0.3s ease;
+  z-index: -1;
+}
+
+.gooey-nav-container nav ul li.active {
+  color: #ffffff;
+}
+
+.gooey-nav-container nav ul li.active::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.gooey-nav-container .effect {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  opacity: 1;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+
+.gooey-nav-container .effect.text {
+  color: transparent;
+  transition: color 0.3s ease;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  justify-content: flex-start;
+  padding-left: 0.75rem;
+}
+
+.gooey-nav-vertical .effect.text {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 2.75rem; /* clears the icon width so only the label ghosts over */
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.gooey-nav-container .effect.text.active {
+  color: #ffffff;
+}
+
+.gooey-nav-container .effect.filter {
+  filter: blur(7px) contrast(100) blur(0);
+  mix-blend-mode: lighten;
+}
+
+.gooey-nav-container .effect.filter::before {
+  content: "";
+  position: absolute;
+  inset: -75px;
+  z-index: -2;
+  background: #000000;
+}
+
+.gooey-nav-container .effect.filter::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform: scale(0);
+  opacity: 0;
+  z-index: -1;
+  border-radius: 10px;
+}
+
+.gooey-nav-container .effect.active::after {
+  animation: gooey-pill 0.3s ease both;
+}
+
+@keyframes gooey-pill {
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.gooey-nav-container .particle,
+.gooey-nav-container .point {
+  display: block;
+  opacity: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 100%;
+  transform-origin: center;
+}
+
+.gooey-nav-container .particle {
+  --time: 5s;
+  position: absolute;
+  top: calc(50% - 8px);
+  left: calc(50% - 8px);
+  animation: gooey-particle calc(var(--time)) ease 1 -350ms;
+}
+
+.gooey-nav-container .point {
+  background: var(--color);
+  opacity: 1;
+  animation: gooey-point calc(var(--time)) ease 1 -350ms;
+}
+
+@keyframes gooey-particle {
+  0% {
+    transform: rotate(0deg) translate(calc(var(--start-x)), calc(var(--start-y)));
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+  }
+  70% {
+    transform: rotate(calc(var(--rotate) * 0.5)) translate(calc(var(--end-x) * 1.2), calc(var(--end-y) * 1.2));
+    opacity: 1;
+    animation-timing-function: ease;
+  }
+  85% {
+    transform: rotate(calc(var(--rotate) * 0.66)) translate(calc(var(--end-x)), calc(var(--end-y)));
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(calc(var(--rotate) * 1.2)) translate(calc(var(--end-x) * 0.5), calc(var(--end-y) * 0.5));
+    opacity: 1;
+  }
+}
+
+@keyframes gooey-point {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+  }
+  25% {
+    transform: scale(calc(var(--scale) * 0.25));
+  }
+  38% {
+    opacity: 1;
+  }
+  65% {
+    transform: scale(var(--scale));
+    opacity: 1;
+    animation-timing-function: ease;
+  }
+  85% {
+    transform: scale(var(--scale));
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0);
+    opacity: 0;
+  }
+}

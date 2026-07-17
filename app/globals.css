@@ -27,6 +27,14 @@
   --accent-border:   rgba(99, 102, 241, 0.3);
   --accent-text:     #A5B4FC;
 
+  /* GooeyNav particle burst palette (components/ui/GooeyNav.tsx) — light,
+     saturated colors needed for the mix-blend-mode:lighten gooey-merge
+     trick to read against the effect layer's own black backdrop. */
+  --gooey-color-1: #818CF8; /* light indigo */
+  --gooey-color-2: #6366F1; /* accent */
+  --gooey-color-3: #34D399; /* light emerald */
+  --gooey-color-4: #FBBF24; /* light amber */
+
   /* Semantic */
   --success:         #22C55E;
   --success-bg:      rgba(34, 197, 94, 0.1);
@@ -222,4 +230,38 @@ h3 {
 }
 .animate-pulse-once {
   animation: pulse-once 0.6s ease-out;
+}
+
+/* Landing page visual effects */
+@keyframes float-slow {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(2%, -4%) scale(1.05); }
+}
+.animate-float-slow {
+  animation: float-slow 10s infinite ease-in-out;
+}
+
+@keyframes float-slow-reverse {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-3%, 3%) scale(1.08); }
+}
+.animate-float-slow-reverse {
+  animation: float-slow-reverse 12s infinite ease-in-out;
+}
+
+@keyframes glow-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 0.9; transform: scale(1.06); }
+}
+.animate-glow-breathe {
+  animation: glow-breathe 4s infinite ease-in-out;
+}
+
+/* Faint dot grid used behind the landing page hero — masked to fade at the
+   edges so it reads as texture, not a hard-edged tile. */
+.bg-dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.09) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 40%, #000 40%, transparent 85%);
+  mask-image: radial-gradient(ellipse 60% 55% at 50% 40%, #000 40%, transparent 85%);
 }

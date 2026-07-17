@@ -7,6 +7,7 @@ import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { useAuthStore } from "@/stores/authStore";
+import { Logo } from "@/components/ui/Logo";
 
 function SignInForm() {
   const router = useRouter();
@@ -46,12 +47,7 @@ function SignInForm() {
       <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-accent/15 blur-3xl" />
 
       <div className="flex flex-col items-center space-y-2 relative z-10 text-center">
-        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-accent text-white font-bold shadow-md shadow-accent/20">
-          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <circle cx="12" cy="12" r="5" strokeWidth="2.5" />
-            <path strokeLinecap="round" strokeWidth="2.5" d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-          </svg>
-        </div>
+        <Logo size="md" />
         <h1 className="text-xl font-bold tracking-tight text-text-primary mt-3">
           STYLECRAFT <span className="text-accent">LENS</span>
         </h1>

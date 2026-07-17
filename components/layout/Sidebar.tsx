@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { Logo, Wordmark } from "@/components/ui/Logo";
+import { GooeyNav } from "@/components/ui/GooeyNav";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -48,11 +50,14 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
   const currentPlan = user?.plan || "FREE";
 
+  const isItemActive = (href: string) =>
+    href === "/dashboard" ? pathname === "/dashboard" : pathname === href || pathname.startsWith(href + "/");
+
+  const activeNavIndex = navItems.findIndex((item) => isItemActive(item.href));
+
   const renderNavLinks = (items: typeof navItems) => {
     return items.map((item) => {
-      const isActive = item.href === "/dashboard"
-        ? pathname === "/dashboard"
-        : pathname === item.href || pathname.startsWith(item.href + "/");
+      const isActive = isItemActive(item.href);
       const Icon = item.icon;
       
       return (
@@ -97,17 +102,9 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         {/* Logo Section */}
         <div className="flex items-center justify-between h-[var(--topbar-height)] px-4 border-b border-border">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white font-bold shadow-md shadow-accent/20">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <circle cx="12" cy="12" r="5" strokeWidth="2.5" />
-                <path strokeLinecap="round" strokeWidth="2.5" d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-              </svg>
-            </div>
+            <Logo size="sm" />
             <div>
-              <div className="flex items-center text-sm font-black tracking-wider leading-none">
-                <span>STYLECRAFT</span>
-                <span className="text-accent ml-1">LENS</span>
-              </div>
+              <Wordmark className="text-sm" />
               <span className="text-[9px] text-text-muted tracking-tight font-medium">Competitive Intelligence</span>
             </div>
           </Link>
@@ -121,13 +118,15 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         </div>
 
         {/* Navigation Section */}
-        <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
-          {renderNavLinks(navItems)}
-          
+        <nav className="flex-1 px-3 py-4 overflow-y-auto">
+          <GooeyNav items={navItems} activeIndex={activeNavIndex} onItemClick={() => setIsOpen(false)} />
+
           <div className="my-4 border-t border-border/60" />
           <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Support</p>
-          
-          {renderNavLinks(subItems)}
+
+          <div className="space-y-1.5">
+            {renderNavLinks(subItems)}
+          </div>
         </nav>
 
         {/* User / Plan Section at Bottom */}
