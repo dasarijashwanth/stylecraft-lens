@@ -1197,6 +1197,8 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
   const [loading, setLoading] = useState(true);
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
+  const [fillingAll, setFillingAll] = useState(false);
+  const [fillProgress, setFillProgress] = useState<{ done: number; total: number } | null>(null);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -1262,6 +1264,64 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
     } finally {
       setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
     }
+  }
+
+  // Tops up whatever's still N/A after the initial 74-field bulk generation.
+  // The bulk pass (lib/gtm-generate.ts) has to fit ~74 fields' worth of AI
+  // calls inside Vercel's fixed 60s function ceiling, so it chunks fields
+  // and gives each chunk a tight timeout — some genuinely-findable answers
+  // don't make it back in time and settle as N/A. The single-field
+  // regenerate route below has no such competition (45s all to itself, one
+  // field), so re-running it per still-empty field is the same OpenAI
+  // web-search path but with real room to actually finish the search. A
+  // small concurrency cap (not all-at-once) keeps this from firing 70+
+  // simultaneous OpenAI requests when a document is mostly unfilled.
+  const FILL_REMAINING_CONCURRENCY = 3;
+
+  async function handleFillRemaining() {
+    if (!documentId || fillingAll) return;
+    const pendingIds = GTM_FIELD_SCHEMA.filter(f => !isFieldComplete(fields[f.id]?.answer)).map(f => f.id);
+    if (pendingIds.length === 0) {
+      toast.success("Every field is already filled");
+      return;
+    }
+
+    setFillingAll(true);
+    setFillProgress({ done: 0, total: pendingIds.length });
+    let filledCount = 0;
+
+    const queue = [...pendingIds];
+    const worker = async () => {
+      while (queue.length > 0) {
+        const fieldId = queue.shift();
+        if (!fieldId) return;
+        setFieldStatus(prev => ({ ...prev, [fieldId]: "regenerating" }));
+        try {
+          const res = await fetch(`/api/documents/gtm/${documentId}/fields/${fieldId}/regenerate`, { method: "POST" });
+          const data = await res.json();
+          if (res.ok) {
+            setFields(prev => ({ ...prev, [fieldId]: data.field }));
+            if (isFieldComplete(data.field?.answer)) filledCount++;
+          }
+        } catch {
+          // Leave this one as-is — it's still counted in the progress total
+          // below, and the user can retry it individually via its own button.
+        } finally {
+          setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+          setFillProgress(prev => (prev ? { ...prev, done: prev.done + 1 } : prev));
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(FILL_REMAINING_CONCURRENCY, pendingIds.length) }, worker));
+
+    setFillingAll(false);
+    setFillProgress(null);
+    toast.success(
+      filledCount > 0
+        ? `Filled ${filledCount} of ${pendingIds.length} remaining field${pendingIds.length === 1 ? "" : "s"}`
+        : "No additional answers found via web search for the remaining fields"
+    );
   }
 
   async function handleRevert(fieldId: string) {
@@ -1346,13 +1406,27 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
           )}
         </div>
         {hasDocument && (
-          <a
-            href={`/api/documents/gtm/${documentId}/export-csv`}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download CSV</span>
-          </a>
+          <div className="flex items-center gap-2">
+            {completedCount < GTM_FIELD_SCHEMA.length && (
+              <button
+                type="button"
+                onClick={handleFillRemaining}
+                disabled={fillingAll}
+                title="Re-run AI web search on every N/A or empty field"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-60"
+              >
+                {fillingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                <span>{fillingAll && fillProgress ? `Filling ${fillProgress.done}/${fillProgress.total}…` : "Fill remaining fields"}</span>
+              </button>
+            )}
+            <a
+              href={`/api/documents/gtm/${documentId}/export-csv`}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download CSV</span>
+            </a>
+          </div>
         )}
       </div>
 
