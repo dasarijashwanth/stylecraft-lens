@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "sonner";
+import TargetCursor from "@/components/ui/TargetCursor";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,6 +19,7 @@ export default function RootLayout({
 
   const content = (
     <>
+      <TargetCursor cursorColor="#ffffff" cursorColorOnTarget="#6366F1" />
       {children}
       <Toaster theme="dark" position="top-right" closeButton richColors />
     </>

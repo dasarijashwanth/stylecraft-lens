@@ -155,7 +155,7 @@ export function PillNav({
               <Link
                 role="menuitem"
                 href={item.href}
-                className={`pill${activeIndex === i ? " is-active" : ""}`}
+                className={`pill cursor-target${activeIndex === i ? " is-active" : ""}`}
                 onMouseEnter={() => handleEnter(i)}
                 onMouseLeave={() => handleLeave(i)}
                 onClick={onItemClick}

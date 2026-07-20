@@ -221,7 +221,7 @@ export function MagicBentoCard({
     <div
       ref={cardRef}
       onClick={onClick}
-      className={`magic-bento-card ${enableBorderGlow ? "magic-bento-card--border-glow" : ""} ${enableStars ? "magic-bento-card--particle-container" : ""} ${className}`}
+      className={`magic-bento-card cursor-target ${enableBorderGlow ? "magic-bento-card--border-glow" : ""} ${enableStars ? "magic-bento-card--particle-container" : ""} ${className}`}
       style={{ ...style, ["--glow-color" as string]: glowColor }}
     >
       {children}

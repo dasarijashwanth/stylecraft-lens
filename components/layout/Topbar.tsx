@@ -45,7 +45,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         <button
           onClick={onMenuClick}
           aria-label="Open menu"
-          className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary lg:hidden"
+          className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary lg:hidden"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -53,7 +53,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         {showBack && (
           <button
             onClick={() => router.back()}
-            className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors"
+            className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors"
             aria-label="Go back"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -69,7 +69,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
       <div className="flex-1 max-w-md mx-6 hidden md:block">
         <button
           onClick={onSearchClick}
-          className="flex items-center justify-between w-full px-3 py-1.5 text-sm text-text-muted border border-border rounded-lg bg-surface-2 hover:bg-surface-3 transition-colors text-left"
+          className="cursor-target flex items-center justify-between w-full px-3 py-1.5 text-sm text-text-muted border border-border rounded-lg bg-surface-2 hover:bg-surface-3 transition-colors text-left"
         >
           <div className="flex items-center gap-2">
             <Search className="w-4 h-4 text-text-muted" />
@@ -87,7 +87,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         <button
           onClick={onSearchClick}
           aria-label="Search"
-          className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary md:hidden"
+          className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary md:hidden"
         >
           <Search className="w-5 h-5" />
         </button>
@@ -97,7 +97,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
           <button
             onClick={() => setShowNotifications(!showNotifications)}
             aria-label="Notifications"
-            className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary relative transition-colors"
+            className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary relative transition-colors"
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (

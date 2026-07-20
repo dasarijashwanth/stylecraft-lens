@@ -78,7 +78,7 @@ export default function LandingPage() {
           ) : user ? (
             <Link
               href="/dashboard"
-              className="text-xs font-bold text-accent-text hover:text-accent flex items-center gap-1 transition-colors"
+              className="cursor-target text-xs font-bold text-accent-text hover:text-accent flex items-center gap-1 transition-colors"
             >
               <span>Go to Dashboard</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -86,7 +86,7 @@ export default function LandingPage() {
           ) : (
             <Link
               href="/sign-in"
-              className="px-4 py-2 rounded-lg bg-surface-3 hover:bg-surface-2/80 text-xs font-bold transition-all"
+              className="cursor-target px-4 py-2 rounded-lg bg-surface-3 hover:bg-surface-2/80 text-xs font-bold transition-all"
             >
               Sign In
             </Link>
@@ -149,7 +149,7 @@ export default function LandingPage() {
         >
           <Link
             href="/sign-in"
-            className="w-full sm:w-auto px-6 py-3 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-xl transition-all shadow shadow-accent/30 flex items-center justify-center gap-2 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-accent/40"
+            className="cursor-target w-full sm:w-auto px-6 py-3 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-xl transition-all shadow shadow-accent/30 flex items-center justify-center gap-2 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-accent/40"
           >
             <span>Start Tracking the Market</span>
             <ArrowRight className="w-4 h-4" />
@@ -157,7 +157,7 @@ export default function LandingPage() {
 
           <a
             href="#features"
-            className="w-full sm:w-auto px-6 py-3 border border-border bg-surface-2 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-xl transition-all text-center hover:-translate-y-0.5"
+            className="cursor-target w-full sm:w-auto px-6 py-3 border border-border bg-surface-2 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-xl transition-all text-center hover:-translate-y-0.5"
           >
             Learn More
           </a>
@@ -191,7 +191,7 @@ export default function LandingPage() {
                 variants={fadeUp}
                 transition={{ duration: 0.45, ease: EASE_OUT_EXPO }}
                 whileHover={{ y: -4 }}
-                className="p-5 rounded-xl border border-border bg-surface-2/40 space-y-2.5 transition-colors hover:border-accent-border/50 hover:bg-surface-2/70"
+                className="cursor-target p-5 rounded-xl border border-border bg-surface-2/40 space-y-2.5 transition-colors hover:border-accent-border/50 hover:bg-surface-2/70"
               >
                 <div className={`w-8 h-8 rounded-lg border flex items-center justify-center ${f.tone}`}>
                   <Icon className="w-4 h-4" />

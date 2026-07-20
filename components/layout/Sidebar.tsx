@@ -65,7 +65,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           key={item.href}
           href={item.href}
           onClick={() => setIsOpen(false)}
-          className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
+          className={`cursor-target flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
             isActive
               ? "bg-accent-bg text-accent-text border-l-2 border-accent rounded-l-none"
               : "text-text-secondary hover:bg-surface-3 hover:text-text-primary"
@@ -151,10 +151,10 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
                 <p className="text-xs font-semibold text-text-primary truncate">{user.name}</p>
                 <p className="text-[10px] text-text-muted truncate">{user.email}</p>
               </div>
-              <button 
+              <button
                 onClick={logout}
                 title="Log out"
-                className="p-1.5 rounded-md hover:bg-surface-3 text-text-muted hover:text-danger transition-colors"
+                className="cursor-target p-1.5 rounded-md hover:bg-surface-3 text-text-muted hover:text-danger transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
               </button>
