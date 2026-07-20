@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Caveat:wght@600;700&display=swap');
 
 :root {
   /* Base surfaces */
@@ -26,6 +26,13 @@
   --accent-bg:       rgba(99, 102, 241, 0.12);
   --accent-border:   rgba(99, 102, 241, 0.3);
   --accent-text:     #A5B4FC;
+
+  /* Brand mark only (components/ui/Logo.tsx) — the real Stylecraft
+     wordmark's signature magenta/pink script accent. Deliberately kept
+     separate from --accent above: the logo references the parent brand,
+     but every other UI accent (buttons, active nav, badges) stays indigo. */
+  --brand-pink:      #ED1E79;
+  --brand-pink-glow: rgba(237, 30, 121, 0.35);
 
   /* GooeyNav particle burst palette (components/ui/GooeyNav.tsx) — light,
      saturated colors needed for the mix-blend-mode:lighten gooey-merge
@@ -52,6 +59,7 @@
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-display: 'DM Sans', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+  --font-script: 'Caveat', cursive;
 
   /* Radius */
   --radius-sm: 6px;

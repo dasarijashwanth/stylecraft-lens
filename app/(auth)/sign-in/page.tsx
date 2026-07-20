@@ -7,7 +7,7 @@ import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { useAuthStore } from "@/stores/authStore";
-import { Logo } from "@/components/ui/Logo";
+import { Logo, Wordmark } from "@/components/ui/Logo";
 
 function SignInForm() {
   const router = useRouter();
@@ -48,9 +48,7 @@ function SignInForm() {
 
       <div className="flex flex-col items-center space-y-2 relative z-10 text-center">
         <Logo size="md" />
-        <h1 className="text-xl font-bold tracking-tight text-text-primary mt-3">
-          STYLECRAFT <span className="text-accent">LENS</span>
-        </h1>
+        <Wordmark className="text-xl text-text-primary mt-3" />
         <p className="text-text-muted leading-normal max-w-xs">
           Know your competition. Own your market. AI-powered competitive intelligence SaaS.
         </p>

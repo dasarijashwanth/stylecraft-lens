@@ -20,7 +20,8 @@ export type LogoSize = keyof typeof WRAPPER_SIZES;
 export function Logo({ size = "sm", className = "" }: { size?: LogoSize; className?: string }) {
   return (
     <div
-      className={`flex items-center justify-center shrink-0 bg-accent text-white shadow shadow-accent/30 ${WRAPPER_SIZES[size]} ${className}`}
+      className={`flex items-center justify-center shrink-0 text-white ${WRAPPER_SIZES[size]} ${className}`}
+      style={{ backgroundColor: "var(--brand-pink)", boxShadow: "0 4px 14px var(--brand-pink-glow)" }}
     >
       <svg className={ICON_SIZES[size]} fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <circle cx="12" cy="12" r="5" strokeWidth="2.5" />
@@ -30,11 +31,19 @@ export function Logo({ size = "sm", className = "" }: { size?: LogoSize; classNa
   );
 }
 
+// Mirrors the real Stylecraft wordmark's own treatment (STYLECRAFT in wide-
+// tracked caps, with one short word picked out in a magenta brush-script —
+// "Art" on the parent brand, "Lens" here since it's this product's name).
 export function Wordmark({ className = "" }: { className?: string }) {
   return (
-    <div className={`flex items-center font-black tracking-wider leading-none ${className}`}>
+    <div className={`flex items-baseline gap-1.5 font-black tracking-wider leading-none ${className}`}>
       <span>STYLECRAFT</span>
-      <span className="text-accent ml-1">LENS</span>
+      <span
+        className="text-[1.55em] font-normal tracking-normal relative top-[0.09em]"
+        style={{ fontFamily: "var(--font-script)", color: "var(--brand-pink)" }}
+      >
+        Lens
+      </span>
     </div>
   );
 }
