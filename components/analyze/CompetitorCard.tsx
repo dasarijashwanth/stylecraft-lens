@@ -215,7 +215,6 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
   const [strengthsOpen, setStrengthsOpen] = useState(true);
   const [weaknessesOpen, setWeaknessesOpen] = useState(true);
   const [newsOpen, setNewsOpen] = useState(true);
-  const [descOpen, setDescOpen] = useState(false);
   const [featuresSourceOpen, setFeaturesSourceOpen] = useState(false);
   const [strengthsSourceOpen, setStrengthsSourceOpen] = useState(false);
   const [weaknessesSourceOpen, setWeaknessesSourceOpen] = useState(false);
@@ -288,7 +287,6 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
   const displaySales   = live?.monthly_str  ?? c.monthly_sales ?? null;
   const displayManufacturer = live?.manufacturer ?? c.manufacturer ?? null;
   const displayModelNumber  = live?.model_number ?? c.model_number ?? null;
-  const displayDescription  = live?.description  ?? c.description  ?? null;
 
   // Per-section citation numbering — same URL cited twice in one section
   // keeps one number (components/analyze/CitationMarker.tsx).
@@ -384,16 +382,6 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
         <div className="flex flex-wrap gap-x-3 text-[10px] text-text-muted">
           {displayManufacturer && <span>Manufacturer: <span className="text-text-secondary">{displayManufacturer}</span></span>}
           {displayModelNumber && <span>Model: <span className="text-text-secondary">{displayModelNumber}</span></span>}
-        </div>
-      )}
-
-      {/* Description — sanitized, clamped preview from the Amazon listing */}
-      {displayDescription && (
-        <div className="text-[11px] text-text-secondary leading-normal">
-          <p className={descOpen ? "" : "line-clamp-3"}>{displayDescription}</p>
-          <button type="button" onClick={() => setDescOpen(!descOpen)} className="text-accent text-[10px] font-semibold hover:underline mt-0.5">
-            {descOpen ? "Show less" : "Show more"}
-          </button>
         </div>
       )}
 
