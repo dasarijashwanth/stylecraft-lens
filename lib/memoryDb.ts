@@ -149,6 +149,9 @@ export interface MockDocumentField {
   section: string;
   question: string;
   answer: string | null;
+  // The AI/derivation-generated value, preserved across manual edits to
+  // `answer` — see supabase_schema.sql's ai_answer column comment.
+  aiAnswer: string | null;
   source: string | null;
   sourceDetail: any;
   flagged: boolean;

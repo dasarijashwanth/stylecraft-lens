@@ -396,3 +396,12 @@ CREATE INDEX IF NOT EXISTS section_provenance_key_section_resolved_idx
     ON section_provenance(product_key, section, resolved_at DESC);
 ALTER TABLE section_provenance ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for section_provenance" ON section_provenance FOR ALL USING (true) WITH CHECK (true);
+
+-- Preserves the AI/derivation-generated answer separately from `answer`
+-- (the current, possibly hand-edited value) so a GTM/TDS CSV export can
+-- show both side by side. Only ever written by an AI-driven save (full
+-- generation or per-field regenerate) — a plain manual edit (PATCH with
+-- just {answer}) leaves this column untouched, so it always reflects "what
+-- the pipeline last said" regardless of how many times a human edits
+-- `answer` afterward.
+ALTER TABLE document_fields ADD COLUMN IF NOT EXISTS ai_answer TEXT;

@@ -51,17 +51,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
       const source = GTM_SOURCE_LABELS[(entry?.source as GtmFieldSource) || "none"] ?? GTM_SOURCE_LABELS.none;
 
+      // Only filled in when a hand edit has moved `answer` away from what
+      // the AI/derivation pipeline last produced — blank for every
+      // never-edited field, so the column reads as "what changed", not a
+      // full duplicate of every row.
+      const aiOriginal = (entry?.ai_answer ?? "").trim();
+      const editedByUser = aiOriginal !== "" && aiOriginal !== trimmed;
+
       return [
         sanitizeCsvCell(`PRODUCT KNOWLEDGE — ${schemaField.section}`),
         sanitizeCsvCell(schemaField.question),
         sanitizeCsvCell(answer),
+        sanitizeCsvCell(editedByUser ? aiOriginal : ""),
         sanitizeCsvCell(source),
       ];
     });
 
     const csvBody = stringify(rows, {
       header: true,
-      columns: ["Section", "Question", "Answer", "Source"],
+      columns: ["Section", "Question", "Answer", "AI Original", "Source"],
       quoted: true,
       record_delimiter: "\r\n",
     });

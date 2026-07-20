@@ -34,6 +34,11 @@ export interface DocumentFieldRow {
   section: string;
   question: string;
   answer: string | null;
+  // The AI/derivation-generated value, preserved across manual edits to
+  // `answer` — set only by an AI-driven save (full generation or per-field
+  // regenerate), never by a plain manual edit. Lets a CSV export show the
+  // pipeline's original answer alongside a hand-edited current value.
+  ai_answer: string | null;
   source: string | null;
   source_detail: any;
   flagged: boolean;
@@ -165,7 +170,7 @@ export async function getDocumentFields(documentId: string): Promise<DocumentFie
     .filter(f => f.documentId === documentId)
     .map(f => ({
       id: f.id, document_id: f.documentId, field_id: f.fieldId, section: f.section, question: f.question,
-      answer: f.answer, source: f.source, source_detail: f.sourceDetail, flagged: f.flagged,
+      answer: f.answer, ai_answer: f.aiAnswer ?? null, source: f.source, source_detail: f.sourceDetail, flagged: f.flagged,
       owner: f.owner ?? "Product Marketing", notes: f.notes ?? null, updated_at: f.updatedAt.toISOString(),
     }));
 }
@@ -228,6 +233,7 @@ export async function saveDocumentFields(
         section: f.section,
         question: f.question,
         answer: next.answer,
+        ai_answer: next.answer,
         source: next.source,
         source_detail: next.sourceDetail ?? {},
         flagged: !!next.flagged,
@@ -245,6 +251,7 @@ export async function saveDocumentFields(
         section: f.section,
         question: f.question,
         answer: next.answer,
+        aiAnswer: next.answer,
         source: next.source,
         sourceDetail: next.sourceDetail ?? {},
         flagged: !!next.flagged,
@@ -292,8 +299,13 @@ export async function updateDocumentField(
     await writeHistory(prior.id, prior.answer, updatedBy);
   }
 
+  // `opts` is only ever passed by the AI regenerate route — a plain manual
+  // edit (opts omitted entirely) must never move ai_answer, so it keeps
+  // reflecting whatever the pipeline last generated regardless of how many
+  // times a human edits `answer` afterward.
   const update = {
     answer: newAnswer,
+    ai_answer: opts !== undefined ? newAnswer : prior.ai_answer,
     source: opts?.source ?? prior.source,
     source_detail: opts?.sourceDetail ?? prior.source_detail,
     flagged: opts?.flagged ?? false,
@@ -315,13 +327,14 @@ export async function updateDocumentField(
   const row = memoryDb.documentFields.find(f => f.id === prior.id);
   if (row) {
     row.answer = newAnswer;
+    row.aiAnswer = update.ai_answer;
     row.source = update.source;
     row.sourceDetail = update.source_detail;
     row.flagged = update.flagged;
     row.updatedBy = updatedBy;
     row.updatedAt = new Date();
   }
-  return { ...prior, answer: newAnswer, source: update.source, source_detail: update.source_detail, flagged: update.flagged };
+  return { ...prior, answer: newAnswer, ai_answer: update.ai_answer, source: update.source, source_detail: update.source_detail, flagged: update.flagged };
 }
 
 // Owner/Notes are metadata about the field, not the generated answer — an
