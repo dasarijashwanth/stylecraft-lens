@@ -193,10 +193,10 @@ async function writeHistory(documentFieldId: string, previousAnswer: string | nu
 // exists with a different answer, its OLD value is written to history
 // before the row is updated — so every real change (not just edits) is
 // captured in the audit trail.
-// Batches all 74 field writes into (at most) two round trips instead of
-// one upsert + one history-insert per field. The sequential per-field
-// version was issuing 74-148 individual Supabase requests in a sitting
-// `for` loop — measured at 80+ seconds by itself, which is what was
+// Batches all field writes (77 for GTM) into (at most) two round trips
+// instead of one upsert + one history-insert per field. The sequential
+// per-field version was issuing one-to-two-hundred individual Supabase
+// requests in a sitting `for` loop — measured at 80+ seconds by itself, which was
 // pushing full GTM generation past Vercel's fixed 60s function timeout
 // and surfacing to the user as a raw "FUNCTION_INVOCATION_TIMEOUT" page
 // that the frontend then failed to JSON.parse.

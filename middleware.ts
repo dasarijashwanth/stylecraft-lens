@@ -20,7 +20,7 @@ export default async function middleware(request: NextRequest) {
     return response;
   }
 
-  if (pathname.startsWith("/api/auth/")) {
+  if (pathname.startsWith("/api/auth/") || pathname === "/api/health") {
     return response;
   }
 

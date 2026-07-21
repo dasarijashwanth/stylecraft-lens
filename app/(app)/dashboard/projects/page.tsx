@@ -3,16 +3,18 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { 
-  FolderOpen, 
-  Plus, 
-  Search, 
-  Sparkles, 
-  Target, 
-  FileText, 
+import {
+  FolderOpen,
+  Plus,
+  Search,
+  Sparkles,
+  Target,
+  FileText,
   ChevronRight,
   Clock,
-  Briefcase
+  Briefcase,
+  AlertTriangle,
+  RefreshCw
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,6 +24,7 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [industryFilter, setIndustryFilter] = useState("ALL");
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const fetchProjects = async () => {
     try {
@@ -40,6 +43,21 @@ export default function ProjectsPage() {
   useEffect(() => {
     fetchProjects();
   }, []);
+
+  async function handleRetryGeneration(projectId: string) {
+    setRetryingId(projectId);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/pipeline/retry`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Retry failed");
+      toast.success("Generation retry started");
+      await fetchProjects();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to retry generation");
+    } finally {
+      setRetryingId(null);
+    }
+  }
 
   const formatRelativeTime = (dateString: string) => {
     if (!dateString) return "Never";
@@ -148,6 +166,25 @@ export default function ProjectsPage() {
                 <p className="text-xs text-text-secondary leading-normal mt-3 line-clamp-2" title={p.description}>
                   {p.description}
                 </p>
+
+                {p.generationState?.status === "failed" && (
+                  <div className="flex items-center justify-between gap-2 mt-3 p-2 rounded-lg bg-danger-bg border border-danger/20">
+                    <div className="flex items-center gap-1.5 min-w-0 text-danger">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span className="text-[10px] font-semibold truncate" title={p.generationState.errorMessage || undefined}>
+                        {p.generationState.errorMessage || "Generation failed"}
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleRetryGeneration(p.id); }}
+                      disabled={retryingId === p.id}
+                      className="flex items-center gap-1 px-1.5 py-0.5 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger text-[9px] font-bold rounded-md transition-colors shrink-0 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-2.5 h-2.5 ${retryingId === p.id ? "animate-spin" : ""}`} />
+                      <span>Retry</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Stats & footer */}

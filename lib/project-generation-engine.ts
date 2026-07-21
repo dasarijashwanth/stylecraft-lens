@@ -7,7 +7,7 @@
 // single call risks Vercel's fixed 60s cap the way "do everything in one
 // request" would.
 import { getProject, updateProject } from "./db/projects";
-import { getGenerationState, updateGenerationState, GenerationStateRow } from "./db/generation-state";
+import { getGenerationState, updateGenerationState, reclaimStaleRunningState, GenerationStateRow } from "./db/generation-state";
 import { captureProductSnapshot } from "./snapshot-capture";
 import { getLatestSnapshot } from "./db/snapshots";
 import { generateTdsFields } from "./tds-generate";
@@ -17,6 +17,7 @@ import { TDS_FIELD_SCHEMA } from "./tds-field-schema";
 import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
 import { getLatestOutput } from "./project-outputs";
 import { getProjectReports } from "./db/reports";
+import { logCall } from "./obs";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
@@ -24,7 +25,10 @@ export interface GenerationStepResult {
 }
 
 export async function runProjectGenerationStep(projectId: string, orgId: string, userId: string): Promise<GenerationStepResult> {
-  const state = await getGenerationState(projectId);
+  // Self-heals a job stuck at status:"running" forever from a hard platform
+  // kill mid-step (not a catchable JS exception, so the catch block below
+  // never got a chance to run) — reclassifies it "failed" so it's retryable.
+  const state = await reclaimStaleRunningState(projectId);
   if (!state) throw new Error("No generation pipeline started for this project");
 
   if (state.status === "complete" || state.status === "failed") {
@@ -36,6 +40,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     await updateGenerationState(projectId, { status: "failed", errorMessage: "Project not found" });
     throw new Error("Project not found");
   }
+
+  const stepStart = Date.now();
+  logCall("generation-pipeline", { op: "phase-start", projectId, phase: state.phase, outcome: "ok", elapsedMs: 0 });
 
   try {
     if (state.phase === "pending") {
@@ -61,6 +68,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       }
 
       await updateGenerationState(projectId, { phase: "snapshot", status: "running" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "pending->snapshot", outcome: "ok", elapsedMs: Date.now() - stepStart });
       return { state: { ...state, phase: "snapshot", status: "running" }, phaseCompleted: "snapshot" };
     }
 
@@ -80,13 +88,14 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         keyDiff: project.keyDiff,
         pricePoint: project.pricePoint,
         companyContext: project.companyContext,
-      });
+      }, projectId);
 
       const document = await getOrCreateDocument(projectId, "tds");
       await saveDocumentFields(document.id, TDS_FIELD_SCHEMA, fields, userId);
       if (snapshot) await setDocumentSnapshot(document.id, snapshot.id);
 
       await updateGenerationState(projectId, { phase: "tds", status: "running" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "snapshot->tds", outcome: "ok", elapsedMs: Date.now() - stepStart });
       return { state: { ...state, phase: "tds", status: "running" }, phaseCompleted: "tds" };
     }
 
@@ -120,6 +129,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       await saveDocumentFields(document.id, GTM_FIELD_SCHEMA, fields, userId);
 
       await updateGenerationState(projectId, { phase: "gtm", status: "complete" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "tds->gtm", outcome: "ok", elapsedMs: Date.now() - stepStart });
       return { state: { ...state, phase: "gtm", status: "complete" }, phaseCompleted: "gtm" };
     }
 
@@ -128,6 +138,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     return { state: { ...state, status: "complete" }, phaseCompleted: null };
   } catch (err: any) {
     await updateGenerationState(projectId, { status: "failed", errorMessage: err.message || "Generation step failed" });
+    logCall("generation-pipeline", { op: "phase-failed", projectId, phase: state.phase, outcome: "error", errorMessage: err.message || "Generation step failed", elapsedMs: Date.now() - stepStart });
     throw err;
   }
 }

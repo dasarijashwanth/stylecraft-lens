@@ -15,13 +15,14 @@ export async function callAiForJson<T = any>(
   systemInstruction: string,
   userContent: string,
   label: string,
-  opts?: { webSearch?: boolean; maxToolCalls?: number; timeoutMs?: number }
+  opts?: { webSearch?: boolean; maxToolCalls?: number; timeoutMs?: number; projectId?: string }
 ): Promise<T | null> {
   if (hasOpenAIKey) {
     const result = await callOpenAiForJson<T>(systemInstruction, userContent, label, {
       timeoutMs: opts?.timeoutMs ?? 25_000,
       webSearch: opts?.webSearch,
       maxToolCalls: opts?.maxToolCalls,
+      projectId: opts?.projectId,
     });
     if (result) return result;
   }
@@ -48,7 +49,7 @@ export async function callAiForFields(
   systemInstruction: string,
   userContent: string,
   label: string,
-  opts?: { webSearch?: boolean; maxToolCalls?: number; timeoutMs?: number }
+  opts?: { webSearch?: boolean; maxToolCalls?: number; timeoutMs?: number; projectId?: string }
 ): Promise<Record<string, { answer: string; source: string }> | null> {
   return callAiForJson(systemInstruction, userContent, label, opts);
 }

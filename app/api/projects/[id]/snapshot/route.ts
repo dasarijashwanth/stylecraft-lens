@@ -46,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       keyDiff: project.keyDiff,
       pricePoint: project.pricePoint,
       companyContext: project.companyContext,
-    });
+    }, params.id);
 
     const document = await getOrCreateDocument(params.id, "tds");
     await saveDocumentFields(document.id, TDS_FIELD_SCHEMA, fields, session.userId);

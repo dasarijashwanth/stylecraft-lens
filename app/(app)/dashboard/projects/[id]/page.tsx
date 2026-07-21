@@ -343,7 +343,7 @@ export default function ProjectDetailPage() {
           {pipelineState && pipelineState.status !== "complete" && (
             <ProjectGenerationProgress projectId={id} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
-          <TdsKnowledgeSection projectId={id} />
+          <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />
           <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
         </div>
       </div>
@@ -954,7 +954,7 @@ function snapshotDomain(sourceUrl: string | null | undefined, asin: string | nul
   return asin ? `Amazon (${asin})` : null;
 }
 
-function TdsKnowledgeSection({ projectId }: { projectId: string }) {
+function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string; pipelineStatus?: string }) {
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [snapshotMeta, setSnapshotMeta] = useState<{ capturedAt: string | null; sourceUrl: string | null; asin: string | null }>({ capturedAt: null, sourceUrl: null, asin: null });
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
@@ -983,7 +983,12 @@ function TdsKnowledgeSection({ projectId }: { projectId: string }) {
       } catch (e) {}
       setLoading(false);
     })();
-  }, [projectId]);
+    // Re-fetch whenever the auto-generation pipeline's status changes (e.g.
+    // transitions to "complete") — otherwise a freshly-finished TDS document
+    // only ever appeared after a manual page reload, since this fetch used
+    // to depend only on projectId (same bug already fixed for GTM's
+    // ProductKnowledgeSection below — applying the identical fix here).
+  }, [projectId, pipelineStatus]);
 
   const completedCount = TDS_FIELD_SCHEMA.reduce((n, f) => n + (isTdsFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
 
@@ -1162,7 +1167,7 @@ function TdsKnowledgeSection({ projectId }: { projectId: string }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// PRODUCT KNOWLEDGE (74-field GTM generator)
+// PRODUCT KNOWLEDGE (77-field GTM generator)
 // ────────────────────────────────────────────────────────────────────────────
 const SOURCE_LABELS = GTM_SOURCE_LABELS;
 
@@ -1266,8 +1271,8 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
     }
   }
 
-  // Tops up whatever's still N/A after the initial 74-field bulk generation.
-  // The bulk pass (lib/gtm-generate.ts) has to fit ~74 fields' worth of AI
+  // Tops up whatever's still N/A after the initial 77-field bulk generation.
+  // The bulk pass (lib/gtm-generate.ts) has to fit ~77 fields' worth of AI
   // calls inside Vercel's fixed 60s function ceiling, so it chunks fields
   // and gives each chunk a tight timeout — some genuinely-findable answers
   // don't make it back in time and settle as N/A. The single-field
@@ -1377,7 +1382,12 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
   // read-only reflection of the same project_generation_state the top-level
   // ProjectGenerationProgress banner drives; deliberately not a second
   // independent poller/retry (see that banner for the Retry action).
-  const isGtmPhaseRunning = pipelinePhase === "gtm" && (pipelineStatus === "running" || pipelineStatus === "pending");
+  // The engine's `phase` column names the step just COMPLETED, not the one
+  // in flight — it only ever becomes the literal string "gtm" in the same
+  // write that also sets status:"complete", so "gtm"+"running"/"pending" can
+  // never actually be true while GTM generation is running. The real window
+  // GTM's generateAllFields is in flight is phase:"tds" + status:"running".
+  const isGtmPhaseRunning = pipelinePhase === "tds" && pipelineStatus === "running";
   const isQueued = !hasDocument && !isGtmPhaseRunning && (pipelineStatus === "pending" || pipelineStatus === "running");
   const pipelineFailed = !hasDocument && pipelineStatus === "failed";
 
@@ -1435,7 +1445,7 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
       ) : !hasDocument ? (
         <p className="p-4 text-text-muted text-[11px]">
           {isGtmPhaseRunning
-            ? "Generating the 74-field product knowledge sheet now…"
+            ? "Generating the 77-field product knowledge sheet now…"
             : isQueued
             ? "Queued for automatic generation from this project's Sales Kit, TDS, and Active Report."
             : pipelineFailed
@@ -1457,7 +1467,7 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                   // needs attention) from "AI/derivation explicitly decided N/A"
                   // (a real, settled answer) — both used to render as an
                   // identical amber "N/A" chip, indistinguishable at a glance
-                  // across a 74-row grid.
+                  // across a 77-row grid.
                   const isPending = !complete && (entry?.answer ?? "").trim() === "";
                   const isSettledNA = !complete && !isPending;
                   const chipClass = flagged
@@ -1840,7 +1850,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
             <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
               <span>🎯 Go-To-Market (Product Knowledge)</span>
             </h4>
-            <p className="text-[10px] text-text-muted">74-field spec sheet — generate it from the Go To Market tab</p>
+            <p className="text-[10px] text-text-muted">77-field spec sheet — generate it from the Go To Market tab</p>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             <button

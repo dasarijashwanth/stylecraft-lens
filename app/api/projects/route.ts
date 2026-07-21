@@ -3,6 +3,7 @@ import { getAuthSession } from "@/lib/auth";
 import { NewProjectSchema } from "@/lib/validations";
 import { createProject, getUserProjects } from "@/lib/db/projects";
 import { startGenerationState } from "@/lib/db/generation-state";
+import { logCall } from "@/lib/obs";
 
 export async function GET(request: Request) {
   try {
@@ -39,10 +40,24 @@ export async function POST(request: Request) {
     // URL/ASIN is no longer required — lib/project-generation-engine.ts
     // degrades gracefully with no anchor. Never fails project creation
     // itself over a state-row hiccup.
+    const startT0 = Date.now();
     try {
       await startGenerationState(project.id);
     } catch (err) {
-      console.error("Failed to start generation pipeline for new project:", err);
+      // One cheap retry — a transient Supabase blip is the most likely cause
+      // and a second attempt costs nothing. If it fails again, log it
+      // structurally (was a silent console.error) so it's visible via
+      // `vercel logs` instead of vanishing — the pipeline GET route's
+      // self-heal (see app/api/projects/[id]/pipeline/route.ts) is the
+      // safety net for a project that ends up with no state row at all.
+      try {
+        await startGenerationState(project.id);
+      } catch (err2: any) {
+        logCall("generation-pipeline", {
+          op: "start_failed", projectId: project.id, outcome: "error",
+          errorMessage: err2.message || "Failed to start generation pipeline", elapsedMs: Date.now() - startT0,
+        });
+      }
     }
 
     return NextResponse.json({ project }, { status: 201 });

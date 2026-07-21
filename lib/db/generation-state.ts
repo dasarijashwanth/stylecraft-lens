@@ -84,6 +84,31 @@ export async function retryFailedGeneration(projectId: string): Promise<Generati
   return getGenerationState(projectId);
 }
 
+// A hard Vercel platform kill mid-step (the function exceeds its own
+// maxDuration) is not a catchable JS exception — engine.ts's own try/catch
+// never runs, so the row can get stuck at status:"running" forever with no
+// error, and retryFailedGeneration above only ever acts on "failed". This is
+// the self-heal for that: called lazily wherever generation state is read
+// (never a proactive cron/sweep — this app has no queue infra and doesn't
+// need one for this), it detects a "running" row that's stayed running well
+// past any real step's possible duration and reclassifies it as "failed"
+// with an honest reason, making it immediately eligible for retry.
+export const STALE_RUNNING_THRESHOLD_MS = 120_000; // comfortably past /continue's own maxDuration=60
+
+export async function reclaimStaleRunningState(projectId: string): Promise<GenerationStateRow | null> {
+  const state = await getGenerationState(projectId);
+  if (!state || state.status !== "running") return state;
+
+  const staleMs = Date.now() - new Date(state.updated_at).getTime();
+  if (staleMs < STALE_RUNNING_THRESHOLD_MS) return state;
+
+  await updateGenerationState(projectId, {
+    status: "failed",
+    errorMessage: "Generation stalled — no progress for over 2 minutes, most likely a platform timeout mid-step. Safe to retry from the last saved phase.",
+  });
+  return getGenerationState(projectId);
+}
+
 export async function updateGenerationState(
   projectId: string,
   update: { phase?: GenerationPhase; status: GenerationStatus; errorMessage?: string | null }

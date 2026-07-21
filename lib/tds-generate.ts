@@ -64,7 +64,8 @@ function projectRecordText(project: TdsProjectRecord): string {
 export async function generateTdsFields(
   productTitle: string,
   snapshotRawData: any | null,
-  project: TdsProjectRecord
+  project: TdsProjectRecord,
+  projectId?: string
 ): Promise<Record<string, TdsFieldAnswer>> {
   const schema = TDS_FIELD_SCHEMA;
   const snapshotText = JSON.stringify(snapshotRawData || {});
@@ -72,7 +73,7 @@ export async function generateTdsFields(
 
   const systemInstruction = buildSystemInstruction(productTitle, schema);
   const userContent = buildUserContent(snapshotText, recordText);
-  const aiRaw = await callAiForFields(systemInstruction, userContent, "TDS");
+  const aiRaw = await callAiForFields(systemInstruction, userContent, "TDS", { projectId });
 
   const result: Record<string, TdsFieldAnswer> = {};
   for (const f of schema) {

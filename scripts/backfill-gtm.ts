@@ -1,18 +1,26 @@
 // scripts/backfill-gtm.ts
 // One-time sweep: drives the auto-generation pipeline to completion for
-// every existing project that doesn't have a GTM document yet, so every
-// project ends up with a generated GTM without requiring anyone to open it.
+// every existing project that never went through it, so every project ends
+// up with a generated TDS + GTM without requiring anyone to open it.
 //
-// Run once with: npx tsx scripts/backfill-gtm.ts
+// Run with: npx tsx scripts/backfill-gtm.ts              # dry run — counts only, zero AI/Rainforest calls
+//           npx tsx scripts/backfill-gtm.ts --confirm    # makes the real calls
 //
-// Safe to re-run: any project that already has a GTM document is skipped
-// immediately (checked fresh each run, not cached), including projects a
-// previous run already finished or that a user has since generated manually.
+// Selection is "no project_generation_state row at all" — NOT "no GTM
+// document." A live production check found several legacy projects that
+// already have a GTM doc via an older, separate manual-generate route that
+// predates this auto-pipeline, but have NO TDS doc at all (TDS has no other
+// generation path than this pipeline) and no state row — those are exactly
+// the projects this backfill exists for, and a GTM-doc-based filter would
+// silently skip every one of them.
+//
+// Safe to re-run: any project whose state row is already "complete" is
+// skipped (checked fresh each run, not cached).
 //
 // Real cost warning: every project this touches fires a real TDS + GTM AI
 // generation (and, for projects with a product URL/ASIN, a Rainforest/
-// scrape call too). Review the project count this prints before letting it
-// proceed against a large table.
+// scrape call too). Review the candidate count this prints before passing
+// --confirm.
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
@@ -79,13 +87,6 @@ async function main() {
     return;
   }
 
-  const { data: gtmDocs, error: gtmError } = await supabase
-    .from("documents")
-    .select("project_id")
-    .eq("doc_type", "gtm");
-  if (gtmError) throw gtmError;
-  const projectsWithGtm = new Set((gtmDocs || []).map((d: any) => d.project_id));
-
   const { data: tdsDocs, error: tdsError } = await supabase
     .from("documents")
     .select("project_id")
@@ -93,8 +94,26 @@ async function main() {
   if (tdsError) throw tdsError;
   const projectsWithTds = new Set((tdsDocs || []).map((d: any) => d.project_id));
 
-  const toProcess = projects.filter((p: any) => !projectsWithGtm.has(p.id));
-  console.log(`${projects.length} total projects, ${toProcess.length} missing a GTM document. Starting backfill…`);
+  const { data: stateRows, error: stateError } = await supabase
+    .from("project_generation_state")
+    .select("project_id");
+  if (stateError) throw stateError;
+  const projectsWithState = new Set((stateRows || []).map((s: any) => s.project_id));
+
+  const toProcess = projects.filter((p: any) => !projectsWithState.has(p.id));
+  console.log(`${projects.length} total projects, ${toProcess.length} never went through the auto-pipeline (no generation_state row). Candidates for backfill.`);
+
+  const confirmed = process.argv.includes("--confirm") || process.env.BACKFILL_CONFIRM === "1";
+  if (!confirmed) {
+    console.log("\nDry run only — no AI/Rainforest calls made. Re-run with --confirm (or BACKFILL_CONFIRM=1) to proceed.");
+    return;
+  }
+  if (toProcess.length === 0) {
+    console.log("Nothing to do.");
+    return;
+  }
+
+  console.log("\n--confirm passed — proceeding with live calls...\n");
 
   let completed = 0;
   let failed = 0;
@@ -143,7 +162,7 @@ async function main() {
     }
   }
 
-  console.log(`\nDone. ${completed} completed, ${failed} failed, ${skipped} left in progress, ${projects.length - toProcess.length} already had GTM.`);
+  console.log(`\nDone. ${completed} completed, ${failed} failed, ${skipped} left in progress, ${projects.length - toProcess.length} already had a generation_state row.`);
 }
 
 main().catch(err => {

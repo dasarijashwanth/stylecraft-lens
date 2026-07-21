@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { 
-  LayoutDashboard, 
-  Target, 
-  FolderOpen, 
-  Sparkles, 
-  FileText, 
-  Settings, 
-  HelpCircle, 
+import {
+  LayoutDashboard,
+  Target,
+  FolderOpen,
+  Sparkles,
+  FileText,
+  Settings,
+  HelpCircle,
   LogOut,
   Menu,
-  X
+  X,
+  ShieldAlert
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -39,6 +40,10 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const subItems = [
     { label: "Settings", href: "/dashboard/settings", icon: Settings },
     { label: "Help", href: "/dashboard/help", icon: HelpCircle },
+    // First role-gated nav entry in the app — workspace owners/admins only.
+    ...(user?.role === "OWNER" || user?.role === "ADMIN"
+      ? [{ label: "Generation Health", href: "/dashboard/admin/generation", icon: ShieldAlert }]
+      : []),
   ];
 
   const planTones: Record<string, BadgeTone> = {

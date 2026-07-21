@@ -50,6 +50,9 @@ function toProjectShape(row: any) {
     updatedAt: row.updated_at,
     analyses: row.analyses ?? [],
     reports: row.reports ?? [],
+    generationState: row.project_generation_state
+      ? { phase: row.project_generation_state.phase, status: row.project_generation_state.status, errorMessage: row.project_generation_state.error_message }
+      : null,
   };
 }
 
@@ -129,7 +132,7 @@ export async function getUserProjects(orgId: string) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("projects")
-      .select("*, analyses(*), reports(*)")
+      .select("*, analyses(*), reports(*), project_generation_state(phase, status, error_message)")
       .eq("org_id", orgId)
       .order("last_used_at", { ascending: false });
 
@@ -158,7 +161,9 @@ export async function getUserProjects(orgId: string) {
           .filter(c => c.orgId === orgId)
           .slice(0, 3)
           .map(c => ({ competitorId: c.id, competitor: c }));
-        return { ...p, analyses, reports, competitors };
+        const genState = memoryDb.projectGenerationState.find(s => s.projectId === p.id);
+        const generationState = genState ? { phase: genState.phase, status: genState.status, errorMessage: genState.errorMessage } : null;
+        return { ...p, analyses, reports, competitors, generationState };
       })
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }

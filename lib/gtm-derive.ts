@@ -1,6 +1,6 @@
 // Deterministic, code-only field derivation for the GTM Product Knowledge
 // sheet — runs regardless of whether an AI provider is available/working.
-// The AI (app/api/documents/generate/route.ts) still attempts all 74 fields
+// The AI (app/api/documents/generate/route.ts) still attempts all 77 fields
 // and takes priority when it returns something real (after grounding
 // verification); this is what backs the sheet when the AI is down/quota-
 // exhausted, and what the AI's own answers get checked against as a floor.
@@ -11,7 +11,7 @@
 // Source hierarchy (highest authority first): the project record itself
 // (name, description, category, motorTech, keyDiff, pricePoint,
 // companyContext — entered directly by the team) > project documents
-// (Competitive Analysis, TDS, Sales Kit) > real web search (all 74 fields
+// (Competitive Analysis, TDS, Sales Kit) > real web search (all 77 fields
 // are eligible — see lib/gtm-generate.ts's callAi/applyWebSearchFallback)
 // > N/A.
 //

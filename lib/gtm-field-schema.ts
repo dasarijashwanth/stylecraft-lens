@@ -1,4 +1,4 @@
-// The 74-field "Product Knowledge" spec sheet for the Go-To-Market tab.
+// The 77-field "Product Knowledge" spec sheet for the Go-To-Market tab.
 // Single source of truth for both the generation pipeline (app/api/documents/generate,
 // lib/gtm-derive.ts, lib/gtm-grounding.ts) and the UI grid (ProductKnowledgeSection in
 // app/(app)/dashboard/projects/[id]/page.tsx) — every consumer must iterate this list,

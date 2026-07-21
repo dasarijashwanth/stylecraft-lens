@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getGenerationState, retryFailedGeneration } from "@/lib/db/generation-state";
+import { retryFailedGeneration, reclaimStaleRunningState } from "@/lib/db/generation-state";
 
 // The one primitive the phase-continue pattern was missing: today a failed
 // pipeline has no way to actually retry (the client only reset its own local
@@ -8,7 +8,11 @@ import { getGenerationState, retryFailedGeneration } from "@/lib/db/generation-s
 // stopped, safely (that route already re-reads the current phase every time).
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    const state = await getGenerationState(params.id);
+    // Reclaim a stuck "running" state (a hard platform kill mid-step, never
+    // a catchable exception) before the failed-state check below — this way
+    // clicking Retry on a card stuck at "running" forever both reclaims AND
+    // retries in one click, instead of 400ing with no path forward.
+    const state = await reclaimStaleRunningState(params.id);
     if (!state) return NextResponse.json({ error: "No generation pipeline found for this project" }, { status: 404 });
     if (state.status !== "failed") {
       return NextResponse.json({ error: "Pipeline is not in a failed state" }, { status: 400 });

@@ -3,7 +3,7 @@
 // record > project documents (TDS/Sales Kit/Competitive Analysis) > real
 // web search (OpenAI's native web_search tool, same trust model already
 // proven in lib/analysisEngine.ts/lib/product-news.ts) > N/A. Every one of
-// the 74 fields is eligible for the web tier now — previously only 7 were
+// the 77 fields is eligible for the web tier now — previously only 7 were
 // (the rest were contractually forced to N/A the moment the project's own
 // documents didn't already contain the spec), which was the main reason
 // most fields never completed.
@@ -25,7 +25,7 @@ import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documen
 // real time still left before the platform limit, rather than racing it.
 const PIPELINE_TIME_BUDGET_MS = 30_000;
 
-// A single call covering all 74 fields with web search enabled was
+// A single call covering all 77 fields with web search enabled was
 // confirmed live to time out even at 38s (OpenAI's own request timeout) —
 // once genuine web search is involved across that many fields, one call
 // can't reliably finish inside any budget that still leaves room for the
@@ -119,11 +119,12 @@ ${sourceTexts.salesKit}
 </SALES_KIT>`;
 }
 
-function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number; maxToolCalls?: number }) {
+function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number; maxToolCalls?: number; projectId?: string }) {
   return callAiForFields(systemInstruction, userContent, "GTM", {
     webSearch: true,
     maxToolCalls: opts?.maxToolCalls ?? 3,
     timeoutMs: opts?.timeoutMs ?? SECTION_CALL_TIMEOUT_MS,
+    projectId: opts?.projectId,
   });
 }
 
@@ -145,12 +146,12 @@ function callAi(systemInstruction: string, userContent: string, opts?: { timeout
 // any one of them needs more time than it's given.
 const FIELDS_PER_CHUNK = 4;
 
-async function callAiPerSection(productName: string, schema: GtmField[], userContent: string): Promise<Record<string, { answer: string; source: string }> | null> {
+async function callAiPerSection(productName: string, schema: GtmField[], userContent: string, projectId: string): Promise<Record<string, { answer: string; source: string }> | null> {
   const chunks: GtmField[][] = [];
   for (let i = 0; i < schema.length; i += FIELDS_PER_CHUNK) chunks.push(schema.slice(i, i + FIELDS_PER_CHUNK));
 
   const results = await Promise.all(
-    chunks.map(fields => callAi(buildSystemInstruction(productName, fields), userContent, { maxToolCalls: 3 }))
+    chunks.map(fields => callAi(buildSystemInstruction(productName, fields), userContent, { maxToolCalls: 3, projectId }))
   );
 
   const merged: Record<string, { answer: string; source: string }> = {};
@@ -174,7 +175,7 @@ function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: strin
   return { field: { answer: "N/A", source: "none" }, fromAi: false };
 }
 
-// Full 74-field generation: AI (if available) -> deterministic derivation
+// Full 77-field generation: AI (if available) -> deterministic derivation
 // floor -> grounding verification -> cross-source consistency check ->
 // anti-boilerplate rewrite pass for written fields.
 //
@@ -190,7 +191,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const sourceTexts = buildSourceTexts(sources);
   const userContent = buildUserContent(sourceTexts);
 
-  const aiRaw = await callAiPerSection(productName, schema, userContent);
+  const aiRaw = await callAiPerSection(productName, schema, userContent, projectId);
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   const merged: Record<string, GtmFieldAnswer> = {};
@@ -240,10 +241,10 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const systemInstruction = buildSystemInstruction(productName, [schemaField]);
   const userContent = buildUserContent(sourceTexts);
 
-  // A single field needs far less search than the full 74-field sweep —
+  // A single field needs far less search than the full 77-field sweep —
   // this route's own maxDuration is 45s, and the web-fallback/quality-guard
   // passes below still need their share of it.
-  const aiRaw = await callAi(systemInstruction, userContent, { timeoutMs: 30_000 });
+  const aiRaw = await callAi(systemInstruction, userContent, { timeoutMs: 30_000, projectId });
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
   const { field: mergedField, fromAi } = mergeField(schemaField, aiRaw, derived);
 
@@ -262,7 +263,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
 }
 
 // Second-chance web search for whatever's STILL unanswered after the main
-// call (which now already tries web search itself, across all 74 fields —
+// call (which now already tries web search itself, across all 77 fields —
 // this covers anything that call's own tool-call budget didn't reach).
 // Every field is eligible now, not just a small whitelist — the whitelist
 // was the main reason most fields never completed; the remaining 67 were

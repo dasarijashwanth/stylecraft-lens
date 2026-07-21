@@ -22,8 +22,16 @@ export interface LogCallFields {
   extractedTextLength?: number;
   elapsedMs: number;
   errorMessage?: string;
+  // generation-pipeline / openai scopes (project TDS/GTM generation hardening)
+  projectId?: string;
+  phase?: string;
+  label?: string;
+  errorClass?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  totalTokens?: number;
 }
 
-export function logCall(scope: "rainforest" | "review-tier", fields: LogCallFields): void {
+export function logCall(scope: "rainforest" | "review-tier" | "generation-pipeline" | "openai", fields: LogCallFields): void {
   console.warn(`[${scope}] ${JSON.stringify(fields)}`);
 }
