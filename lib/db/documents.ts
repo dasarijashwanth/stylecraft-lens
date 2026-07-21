@@ -397,10 +397,15 @@ export async function revertDocumentField(documentId: string, fieldId: string, u
       .maybeSingle();
     previousAnswer = data?.answer ?? null;
   } else {
-    const history = memoryDb.documentFieldHistory
-      .filter(h => h.documentFieldId === current.id)
-      .sort((a, b) => b.changedAt.getTime() - a.changedAt.getTime());
-    previousAnswer = history[0]?.answer ?? null;
+    // Insertion order, not changedAt, is the reliable "most recent" signal
+    // here — two edits to the same field landing in the same millisecond
+    // (confirmed happening in scripts/verify-gtm-ai-answer.ts's rapid
+    // back-to-back calls) made a changedAt-based sort occasionally pick the
+    // wrong (older) entry as "most recent". documentFieldHistory is always
+    // pushed in real chronological call order, so its own array order is
+    // already correct — no sort, no tie-breaking needed.
+    const history = memoryDb.documentFieldHistory.filter(h => h.documentFieldId === current.id);
+    previousAnswer = history[history.length - 1]?.answer ?? null;
   }
 
   if (previousAnswer === null) throw new Error("No prior value to revert to");
