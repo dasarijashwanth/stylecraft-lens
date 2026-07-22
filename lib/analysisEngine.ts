@@ -851,7 +851,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         "Phase 1",
         hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
         hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        () => generateMockPhase1(context, identityCard, targetPriceRaw)
+        () => generateMockPhase1(context, identityCard, targetPriceRaw),
+        startTime
       );
 
       result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
@@ -892,7 +893,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         "Phase 2",
         hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
         hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result)
+        () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
+        startTime
       );
 
       result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
@@ -921,7 +923,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         "Phase 3",
         hasGeminiKey ? () => executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
         hasOpenAIKey ? () => executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
-        () => generateMockPhase3(context, identityCard, phase1Result, phase2Result)
+        () => generateMockPhase3(context, identityCard, phase1Result, phase2Result),
+        startTime
       );
       webSearchCount += result.web_searches_performed || 0;
 
@@ -1037,10 +1040,25 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 // AI PROVIDER FALLBACK: try OpenAI first, then Gemini, then mock data.
 // ----------------------------------------------------
 
+// A 429/RESOURCE_EXHAUSTED response means the Gemini project's quota is
+// exhausted at the account level (confirmed live in production: both the
+// grounded AND the ungrounded retry fail identically once this happens) —
+// retrying ungrounded in this case is never going to succeed, it only
+// burns several more seconds of the route's 60s Vercel ceiling for
+// nothing. Checked against both a numeric HTTP status the SDK may attach
+// and the raw error message text (the Gemini SDK sometimes only surfaces
+// the provider's JSON error body as a string, not a typed status field).
+export function isGeminiQuotaExhausted(err: any): boolean {
+  if (err?.status === 429 || err?.code === 429) return true;
+  const message = String(err?.message ?? err ?? "");
+  return message.includes("RESOURCE_EXHAUSTED") || message.includes('"code":429');
+}
+
 // Google Search grounding has its own quota separate from plain generation —
 // it can be exhausted while plain calls still work fine. Retry ungrounded
 // (no live search, but still real AI reasoning) before giving up on Gemini
-// entirely and falling through to OpenAI/mock.
+// entirely and falling through to OpenAI/mock — UNLESS the failure is a
+// quota exhaustion, which the ungrounded retry can't route around.
 async function generateWithGeminiFallback(
   systemPrompt: string,
   userPrompt: string,
@@ -1063,6 +1081,10 @@ async function generateWithGeminiFallback(
     }
     return response.text;
   } catch (err: any) {
+    if (isGeminiQuotaExhausted(err)) {
+      console.warn("Gemini call failed with quota exhaustion — skipping the ungrounded retry, it would fail the same way:", err?.message || err);
+      throw err;
+    }
     console.warn("Gemini call with Google Search grounding failed, retrying ungrounded:", err?.message || err);
     // The prompt tells the model it has web search — without the tool
     // actually attached, it tries to call it anyway and produces a
@@ -1083,11 +1105,28 @@ async function generateWithGeminiFallback(
   }
 }
 
-async function withAiFallback<T>(
+// Vercel Hobby's fixed 60s function timeout (see maxDuration in
+// app/api/analyses/[id]/continue/route.ts) is a hard platform kill, not a
+// catchable JS error — if the whole AI-fallback chain (OpenAI's own
+// up-to-45s attempt, then a Gemini attempt, then its ungrounded retry) is
+// still running when the clock runs out, the route dies mid-request and
+// the client sees a raw platform error page instead of JSON, which
+// surfaces as the "Connection dropped — retrying" loop in
+// ProgressPanel.tsx — and every retry repeats the exact same doomed
+// sequence, so it never actually recovers. Once OpenAI has already failed,
+// only attempt the Gemini fallback if there's realistically enough of the
+// budget left for it to finish (and still leave room for Rainforest
+// enrichment/DB writes afterward) — otherwise skip straight to the
+// honest, always-fast mock/Rainforest-backed fallback.
+export const ROUTE_TIME_BUDGET_MS = 50_000;
+export const MIN_VIABLE_GEMINI_ATTEMPT_MS = 10_000;
+
+export async function withAiFallback<T>(
   label: string,
   geminiCall: (() => Promise<T>) | null,
   openAiCall: (() => Promise<T>) | null,
-  mockCall: () => T | Promise<T>
+  mockCall: () => T | Promise<T>,
+  routeStartTime: number
 ): Promise<T> {
   // OpenAI is primary — its own native web-search tool handles the
   // live-data step, so no Gemini call is needed first. Gemini remains the
@@ -1100,11 +1139,16 @@ async function withAiFallback<T>(
     }
   }
   if (geminiCall) {
-    try {
-      console.warn(`Falling back to Gemini for ${label}...`);
-      return await geminiCall();
-    } catch (err: any) {
-      console.warn(`Gemini ${label} fallback also failed, falling back to mock:`, err?.message || err);
+    const remainingMs = ROUTE_TIME_BUDGET_MS - (Date.now() - routeStartTime);
+    if (remainingMs < MIN_VIABLE_GEMINI_ATTEMPT_MS) {
+      console.warn(`Skipping Gemini fallback for ${label} — only ${Math.round(remainingMs / 1000)}s left in the route's time budget, falling back to mock instead.`);
+    } else {
+      try {
+        console.warn(`Falling back to Gemini for ${label}...`);
+        return await geminiCall();
+      } catch (err: any) {
+        console.warn(`Gemini ${label} fallback also failed, falling back to mock:`, err?.message || err);
+      }
     }
   }
   return await mockCall();
