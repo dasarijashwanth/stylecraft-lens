@@ -11,6 +11,7 @@
 // "grounded" when absent. This is the one shared hallucination check for
 // both documents rather than two copies of the same substring logic.
 import { GtmField, GtmFieldAnswer } from "./gtm-field-schema";
+import { coerceAiAnswer } from "./ai-json-call";
 
 export interface SourceTexts {
   projectRecord: string;
@@ -93,10 +94,15 @@ export function checkConsistency(
     if (f.kind !== "grounded") continue;
     const ai = aiFields[f.id];
     const derived = derivedFields[f.id];
-    if (!ai?.answer || !derived?.answer) continue;
-
-    const aiAnswer = ai.answer.trim();
-    const derivedAnswer = derived.answer.trim();
+    // aiFields is the RAW, untrusted AI JSON response (unlike the already-
+    // coerced `merged`/`grounded` objects elsewhere in the pipeline) — its
+    // declared `answer: string` type is not guaranteed at runtime (the
+    // model can return a bare number/object despite the schema), so this
+    // must coerce defensively the same way mergeField does, or a non-
+    // string answer crashes here with "answer.trim is not a function"
+    // (confirmed happening in production).
+    const aiAnswer = coerceAiAnswer(ai?.answer);
+    const derivedAnswer = coerceAiAnswer(derived?.answer);
     if (!aiAnswer || !derivedAnswer) continue;
     if (aiAnswer.toUpperCase() === "N/A" || derivedAnswer.toUpperCase() === "N/A") continue;
 
