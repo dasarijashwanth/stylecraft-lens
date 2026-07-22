@@ -5,6 +5,7 @@ import { getProjectReports } from "@/lib/db/reports";
 import { getDocumentById, updateDocumentField, getTdsFieldsForProject } from "@/lib/db/documents";
 import { getLatestOutput } from "@/lib/project-outputs";
 import { generateSingleField, GtmSources } from "@/lib/gtm-generate";
+import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 
 export const maxDuration = 45;
 
@@ -13,6 +14,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const session = await getAuthSession();
     const document = await getDocumentById(params.id);
     if (!document) return NextResponse.json({ error: "Document not found" }, { status: 404 });
+
+    // "internal"-kind fields (approved pricing, dieline, etc.) are genuine
+    // human decisions — nothing to regenerate from AI/web search. Reject
+    // before doing any other work (the UI also hides the Regenerate button
+    // for these — this is the server-side guard, not just a UI nicety).
+    const schemaField = GTM_FIELD_SCHEMA.find(f => f.id === params.fieldId);
+    if (schemaField?.kind === "internal") {
+      return NextResponse.json({ error: "This field is set by your team, not AI-generated — edit it directly instead." }, { status: 400 });
+    }
 
     const project = await getProject(document.project_id, session.orgId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });

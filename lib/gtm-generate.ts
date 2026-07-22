@@ -1,17 +1,25 @@
 // Core GTM field-generation pipeline — shared by the full-document generate
-// route and the single-field regenerate route. Source priority: project
-// record > project documents (TDS/Sales Kit/Competitive Analysis) > real
-// web search (OpenAI's native web_search tool, same trust model already
-// proven in lib/analysisEngine.ts/lib/product-news.ts) > N/A. Every one of
-// the 77 fields is eligible for the web tier now — previously only 7 were
-// (the rest were contractually forced to N/A the moment the project's own
-// documents didn't already contain the spec), which was the main reason
-// most fields never completed.
+// route and the single-field regenerate route. Field-resolution ladder:
+// project record > project documents (TDS/Sales Kit/Competitive Analysis)
+// > real web search (OpenAI's native web_search tool, same trust model
+// already proven in lib/analysisEngine.ts/lib/product-news.ts) > computed
+// derivation (good_better_best/hair_type) > category-level "typical for
+// this kind of product" default > an honest "Not determinable — {reason}"
+// terminal state (never a bare N/A/TBD). Every non-"internal" field is
+// eligible for the web tier — previously only 7 were (the rest were
+// contractually forced to N/A the moment the project's own documents
+// didn't already contain the spec), which was the main reason most fields
+// never completed. "internal"-kind fields (genuine human decisions —
+// packaging specs, approved pricing) skip the AI/web/derived/category
+// tiers entirely and terminate at "Awaiting internal input" instead.
 import { callAiForFields, coerceAiAnswer } from "./ai-json-call";
-import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
-import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
 import { deriveFieldsFromSources, ProjectRecord } from "./gtm-derive";
+import { applyTier6Inference } from "./gtm-tier6-inference";
+import { getCategoryDefault, CATEGORY_DEFAULT_LABEL_PREFIX } from "./category-defaults";
+import { applyWebSearchFallback } from "./web-search-fallback";
+import { finalizeFieldAnswers } from "./field-finalize";
+import { isRealAnswer } from "./field-answer-state";
 import { verifyGrounding, checkConsistency, SourceTexts } from "./gtm-grounding";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { meetsElaborationBar } from "./gtm-elaboration";
@@ -67,6 +75,17 @@ export function buildSourceTexts(sources: GtmSources): SourceTexts {
 
 function sourceTextBlocks(sourceTexts: SourceTexts): string[] {
   return [sourceTexts.projectRecord, sourceTexts.competitiveAnalysis, sourceTexts.tds, sourceTexts.salesKit];
+}
+
+// Text blob for lib/gtm-tier6-inference.ts's keyword-based hair_type
+// inference — every source that could plausibly mention hair type in
+// prose, not the structured spec fields already covered by gtm-derive.ts.
+function buildHairTypeSourceText(sources: GtmSources): string {
+  return [
+    sources.tds?.product_description,
+    (sources.salesKit?.key_features || []).map((f: any) => f.headline).filter(Boolean).join(" "),
+    sources.project.category,
+  ].filter(Boolean).join(" ");
 }
 
 function buildSystemInstruction(productName: string, schema: GtmField[]) {
@@ -175,6 +194,19 @@ function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: strin
   return { field: { answer: "N/A", source: "none" }, fromAi: false };
 }
 
+// Tier 7 — mutates `fields` in place. Skips "internal"-kind fields (a
+// category-typical guess about a packaging/pricing DECISION makes no
+// sense) and anything that already has a real answer from an earlier tier.
+function applyCategoryDefaults(fields: Record<string, GtmFieldAnswer>, schema: GtmField[], category: string | null | undefined) {
+  for (const f of schema) {
+    if (f.kind === "internal" || isRealAnswer(fields[f.id]?.answer)) continue;
+    const value = getCategoryDefault(category, f.id);
+    if (value) {
+      fields[f.id] = { answer: `${CATEGORY_DEFAULT_LABEL_PREFIX}${value}`, source: "category_default" };
+    }
+  }
+}
+
 // Full 77-field generation: AI (if available) -> deterministic derivation
 // floor -> grounding verification -> cross-source consistency check ->
 // anti-boilerplate rewrite pass for written fields.
@@ -191,7 +223,13 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const sourceTexts = buildSourceTexts(sources);
   const userContent = buildUserContent(sourceTexts);
 
-  const aiRaw = await callAiPerSection(productName, schema, userContent, projectId);
+  // "internal"-kind fields (dieline, approved pricing, etc.) are never
+  // asked of the AI — nothing about a packaging/pricing DECISION is
+  // answerable by reading sources or web search. They still go through
+  // mergeField below via the FULL schema, so the deterministic `derived`
+  // floor (tiers 1-4) can still populate them from real TDS/project data.
+  const aiEligibleSchema = schema.filter(f => f.kind !== "internal");
+  const aiRaw = await callAiPerSection(productName, aiEligibleSchema, userContent, projectId);
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   const merged: Record<string, GtmFieldAnswer> = {};
@@ -222,13 +260,31 @@ export async function generateAllFields(productName: string, sources: GtmSources
     }
   }
 
-  // Web fallback fills genuinely-unanswered whitelisted fields before the
+  // Tier 5 — web fallback fills genuinely-unanswered fields before the
   // quality guard runs, so a web-sourced answer still gets checked for
-  // depth/genericness like any other written-field answer.
-  await applyWebSearchFallback(grounded, schema, productName, pipelineStart);
+  // depth/genericness like any other written-field answer. Internal fields
+  // are excluded from the eligible schema, same reasoning as the AI call.
+  await applyWebSearchFallback(grounded, aiEligibleSchema, productName, pipelineStart, PIPELINE_TIME_BUDGET_MS);
+
+  // Tier 6 (computed derivation, e.g. good_better_best/hair_type) runs
+  // strictly after the web-search tier — these are pure/free to compute
+  // but must never preempt a real web search result the way an eager
+  // pre-AI derivation would (see lib/gtm-tier6-inference.ts).
+  applyTier6Inference(grounded, schema, {
+    pricingAnalysis: sources.activeReport?.pricing_analysis || null,
+    hairTypeSourceText: buildHairTypeSourceText(sources),
+  });
+
+  // Tier 7 — category-level "typical for this kind of product" default,
+  // the last and lowest-confidence fill before an honest "not determinable".
+  applyCategoryDefaults(grounded, schema, sources.project.category);
+
   await guardWrittenFieldsQuality(grounded, schema, sources, productName, projectId, pipelineStart);
 
-  return grounded;
+  // Terminal step — converts anything still unresolved into
+  // "Not determinable — {reason}" ("Awaiting internal input" for
+  // internal-kind fields) instead of a bare N/A/TBD.
+  return finalizeFieldAnswers(grounded, schema, "not found in product data, TDS/Sales Kit/Competitive Analysis, or web search");
 }
 
 // Regenerates exactly one field through the same pipeline.
@@ -236,6 +292,22 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const productName = sources.project.productName;
   const schemaField = GTM_FIELD_SCHEMA.find(f => f.id === fieldId);
   if (!schemaField) throw new Error(`Unknown field id: ${fieldId}`);
+
+  const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
+
+  // "internal"-kind fields are genuine human decisions — the API route
+  // itself also rejects a direct regenerate request for one of these (see
+  // app/api/documents/gtm/[id]/fields/[fieldId]/regenerate/route.ts); this
+  // is defense in depth. Only tier 1-4 (the deterministic `derived` floor)
+  // applies — never AI/web/computed-derivation/category tiers.
+  if (schemaField.kind === "internal") {
+    const finalized = finalizeFieldAnswers(
+      { [fieldId]: derived[fieldId] || { answer: "N/A", source: "none" } },
+      [schemaField],
+      "no product-data source available for this internal field"
+    );
+    return finalized[fieldId];
+  }
 
   const sourceTexts = buildSourceTexts(sources);
   const systemInstruction = buildSystemInstruction(productName, [schemaField]);
@@ -245,114 +317,29 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // this route's own maxDuration is 45s, and the web-fallback/quality-guard
   // passes below still need their share of it.
   const aiRaw = await callAi(systemInstruction, userContent, { timeoutMs: 30_000, projectId });
-  const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
   const { field: mergedField, fromAi } = mergeField(schemaField, aiRaw, derived);
 
   const grounded = fromAi && mergedField.source !== "web"
     ? verifyGrounding({ [fieldId]: mergedField }, [schemaField], sourceTextBlocks(sourceTexts))[fieldId]
     : mergedField;
 
+  // Web fallback + tier-6 inference + category default apply regardless of
+  // field kind — a single regenerated "grounded" field deserves the same
+  // second-chance tiers the full 77-field sweep already gives it above.
+  const guarded = { [fieldId]: grounded };
+  await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS);
+  applyTier6Inference(guarded, [schemaField], {
+    pricingAnalysis: sources.activeReport?.pricing_analysis || null,
+    hairTypeSourceText: buildHairTypeSourceText(sources),
+  });
+  applyCategoryDefaults(guarded, [schemaField], sources.project.category);
+
   if (schemaField.kind === "written") {
-    const guarded = { [fieldId]: grounded };
-    await applyWebSearchFallback(guarded, [schemaField], productName, Date.now());
     await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now());
-    return guarded[fieldId];
   }
 
-  return grounded;
-}
-
-// Second-chance web search for whatever's STILL unanswered after the main
-// call (which now already tries web search itself, across all 77 fields —
-// this covers anything that call's own tool-call budget didn't reach).
-// Every field is eligible now, not just a small whitelist — the whitelist
-// was the main reason most fields never completed; the remaining 67 were
-// contractually forced to N/A whenever the project's own documents didn't
-// already have the spec, even though a real web search plainly could have
-// found it. One call covers every eligible N/A field at once, never one
-// call per field, and is skipped once the pipeline is close to Vercel's
-// 60s cap — same time-budget discipline as the boilerplate-retry pass
-// below.
-async function applyWebSearchFallback(
-  fields: Record<string, GtmFieldAnswer>,
-  schema: GtmField[],
-  productName: string,
-  pipelineStart: number
-) {
-  const eligible = schema.filter(f => !fields[f.id] || fields[f.id].source === "none" || fields[f.id].answer.toUpperCase() === "N/A");
-  if (eligible.length === 0 || (!hasOpenAIKey && !hasGeminiKey)) return;
-  if (Date.now() - pipelineStart > PIPELINE_TIME_BUDGET_MS) return;
-
-  const fieldList = eligible.map(f => `- ${f.id}: ${f.question}`).join("\n");
-  const systemInstruction = `Search the web for verifiable public information about the product "${productName}" to answer the fields below. Use ONLY information you find via search — never guess or use general knowledge about similar products. If nothing reliable is found for a field, return "N/A".
-
-Do not narrate your search process — search silently, then respond with ONLY the final JSON object. No preamble, no commentary.
-
-Return ONLY valid JSON, no markdown, keyed by field id: { "<field_id>": { "answer": "..." } }
-
-FIELDS:
-${fieldList}`;
-
-  // OpenAI is primary — its own native web_search tool handles the lookup.
-  // Gemini's googleSearch is the fallback if OpenAI is unavailable/fails.
-  if (hasOpenAIKey) {
-    try {
-      const response: any = await openai.responses.create(
-        {
-          model: OPENAI_MODEL,
-          reasoning: { effort: "low" },
-          // max_tool_calls bounds search chaining; without it a single call
-          // can run away (see lib/analysisEngine.ts's runOpenAiWebSearch for
-          // the same lesson learned from the prior, now-removed Anthropic
-          // integration).
-          tools: [{ type: "web_search" as any }],
-          max_tool_calls: 4,
-          instructions: systemInstruction,
-          input: `Product: ${productName}`,
-        } as any,
-        // Short — this only runs at all if PIPELINE_TIME_BUDGET_MS above
-        // left room, and the quality-guard retry pass still needs its
-        // share of whatever's left in the route's 60s ceiling.
-        { timeout: 10_000 }
-      );
-      const queries: string[] = (response.output || [])
-        .filter((o: any) => o.type === "web_search_call")
-        .flatMap((o: any) => o.action?.queries || (o.action?.query ? [o.action.query] : []));
-      const message = (response.output || []).find((o: any) => o.type === "message");
-      const text: string = message?.content?.find((c: any) => c.type === "output_text")?.text || response.output_text || "";
-      const parsed = JSON.parse(cleanJsonString(text || "{}"));
-
-      for (const f of eligible) {
-        const answer = coerceAiAnswer(parsed?.[f.id]?.answer);
-        if (answer && answer.toUpperCase() !== "N/A") {
-          fields[f.id] = { answer, source: "web", sourceDetail: { webSearchQueries: queries }, flagged: false };
-        }
-      }
-      return;
-    } catch (err) {
-      console.warn("OpenAI GTM web-search fallback failed, trying Gemini:", err);
-    }
-  }
-
-  if (!hasGeminiKey) return;
-  try {
-    const response = await genAI.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: `Product: ${productName}`,
-      config: { systemInstruction, tools: [{ googleSearch: {} }], maxOutputTokens: 2048 },
-    });
-    const queries: string[] = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
-    const parsed = JSON.parse(cleanJsonString(response.text || "{}"));
-
-    for (const f of eligible) {
-      const answer = coerceAiAnswer(parsed?.[f.id]?.answer);
-      if (answer && answer.toUpperCase() !== "N/A") {
-        fields[f.id] = { answer, source: "web", sourceDetail: { webSearchQueries: queries }, flagged: false };
-      }
-    }
-  } catch (err) {
-    console.warn("GTM web-search fallback failed:", err);
-  }
+  const finalized = finalizeFieldAnswers(guarded, [schemaField], "not found in product sources or web search");
+  return finalized[fieldId];
 }
 
 // Mutates `fields` in place. Three independent reasons flag a written

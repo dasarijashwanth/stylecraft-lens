@@ -35,6 +35,7 @@ import { ArtworkTab } from "@/components/project/ArtworkTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-field-schema";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
+import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillReport } from "@/lib/field-answer-state";
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
@@ -932,13 +933,12 @@ const TDS_SOURCE_LABELS: Record<string, string> = {
   product_snapshot: "Snapshot",
   project_record: "Project",
   manual_edit: "Manual",
+  web: "Web — verify",
+  gtm_cross_fill: "From GTM",
   none: "Not Listed",
 };
 
-function isTdsFieldComplete(answer: string | null | undefined) {
-  const trimmed = (answer || "").trim();
-  return trimmed !== "" && trimmed.toUpperCase() !== "N/A" && trimmed !== "Not listed on product page";
-}
+const isTdsFieldComplete = isRealAnswer;
 
 function tdsFlagReason(detail: any): string {
   if (!detail) return "Flagged";
@@ -958,6 +958,7 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [snapshotMeta, setSnapshotMeta] = useState<{ capturedAt: string | null; sourceUrl: string | null; asin: string | null }>({ capturedAt: null, sourceUrl: null, asin: null });
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
+  const [fillReport, setFillReport] = useState<FillReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [capturing, setCapturing] = useState(false);
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
@@ -979,6 +980,7 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
           const map: Record<string, FieldRow> = {};
           for (const f of data.fields) map[f.field_id] = f;
           setFields(map);
+          setFillReport(data.document.fillReport ?? null);
         }
       } catch (e) {}
       setLoading(false);
@@ -1007,6 +1009,7 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
       const map: Record<string, FieldRow> = {};
       for (const f of data.fields) map[f.field_id] = f;
       setFields(map);
+      setFillReport(null); // stale until the next GET refetch — avoids showing a mismatched pre-capture breakdown
       toast.success("Live product snapshot captured");
     } catch (err: any) {
       toast.error(err.message || "Failed to capture snapshot");
@@ -1070,6 +1073,11 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
               {completedCount}/{TDS_FIELD_SCHEMA.length} fields completed
             </span>
           )}
+          {hasDocument && formatFillReport(fillReport) && (
+            <span className="text-[9px] text-text-muted" title="Fill breakdown by source tier">
+              {formatFillReport(fillReport)}
+            </span>
+          )}
           {snapshotMeta.capturedAt && (
             <span className="text-[10px] text-text-muted italic">
               Live snapshot captured {new Date(snapshotMeta.capturedAt).toLocaleString()}{domain ? ` from ${domain}` : ""}
@@ -1105,19 +1113,32 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
                   const complete = isTdsFieldComplete(entry?.answer);
                   const status = fieldStatus[f.id] || "idle";
                   const flagged = !!entry?.flagged;
+                  const awaitingInternal = isAwaitingInternalInput(entry?.answer);
+                  const notDeterminable = isNotDeterminable(entry?.answer);
                   // Same distinction as the GTM grid below: "never captured yet"
                   // (still needs attention) vs "captured but confirmed not
-                  // listed" (a settled, non-urgent answer) — previously both
-                  // rendered as an identical amber chip.
-                  const isPending = !complete && (entry?.answer ?? "").trim() === "";
-                  const isSettledNA = !complete && !isPending;
+                  // listed" (a settled, non-urgent answer) vs "Awaiting internal
+                  // input" (a genuine team decision) vs "Not determinable"
+                  // (every fill tier verifiably ran) — previously all rendered
+                  // as an identical amber chip.
+                  const isPending = !complete && !awaitingInternal && !notDeterminable && (entry?.answer ?? "").trim() === "";
+                  const isSettledNA = !complete && !awaitingInternal && !notDeterminable && !isPending;
                   const chipClass = flagged
                     ? "bg-danger/10 border-danger/30 text-danger"
+                    : awaitingInternal
+                    ? "bg-warning/10 border-warning/25 text-warning"
+                    : notDeterminable
+                    ? "bg-surface-3 border-border text-text-muted"
                     : isPending
                     ? "bg-warning/10 border-warning/25 text-warning"
                     : isSettledNA
                     ? "bg-surface-3 border-border text-text-muted"
                     : "bg-surface-3 border-border text-text-muted";
+                  const chipLabel = awaitingInternal
+                    ? "Awaiting Internal Input"
+                    : notDeterminable
+                    ? "Not Determinable"
+                    : TDS_SOURCE_LABELS[entry?.source || "none"];
                   return (
                     <div key={f.id} className="flex flex-col gap-1">
                       <div className="flex items-center justify-between gap-2">
@@ -1128,8 +1149,11 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
                           )}
                         </label>
                         <div className="flex items-center gap-1 shrink-0">
-                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}>
-                            {TDS_SOURCE_LABELS[entry?.source || "none"]}
+                          <span
+                            className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}
+                            title={awaitingInternal ? `Set by ${f.owner || "your team"} — edit the field directly` : undefined}
+                          >
+                            {chipLabel}
                           </span>
                           <button
                             type="button"
@@ -1173,10 +1197,7 @@ const SOURCE_LABELS = GTM_SOURCE_LABELS;
 
 const OWNER_OPTIONS = ["Product Marketing", "Marketing", "Sales", "Legal", "Ops"];
 
-function isFieldComplete(answer: string | null | undefined) {
-  const trimmed = (answer || "").trim();
-  return trimmed !== "" && trimmed.toUpperCase() !== "N/A";
-}
+const isFieldComplete = isRealAnswer;
 
 type FieldRow = {
   field_id: string;
@@ -1197,9 +1218,43 @@ function flagReason(detail: any): string {
   return "Flagged for review";
 }
 
+// Groups the fill report's per-source counts into the coarser buckets the
+// spec calls for ("58 from product data, 9 web, 4 derived, 3 awaiting
+// internal input") — a reader doesn't need to know "tds" vs "sales_kit" vs
+// "active_report" are all "product data" to get the gist at a glance.
+const SOURCE_GROUP_LABELS: Record<string, string> = {
+  project_record: "product data",
+  sales_kit: "product data",
+  tds: "product data",
+  active_report: "product data",
+  multiple: "product data",
+  amazon: "product data",
+  product_snapshot: "product data",
+  official_site: "product data",
+  manual_edit: "manual edits",
+  web: "web",
+  derived: "derived",
+  category_default: "category typical",
+  gtm_cross_fill: "from GTM",
+};
+
+function formatFillReport(report: FillReport | null): string | null {
+  if (!report) return null;
+  const grouped: Record<string, number> = {};
+  for (const [source, count] of Object.entries(report.bySource)) {
+    const label = SOURCE_GROUP_LABELS[source] || source;
+    grouped[label] = (grouped[label] || 0) + count;
+  }
+  const parts = Object.entries(grouped).map(([label, count]) => `${count} ${label}`);
+  if (report.awaitingInternalInput > 0) parts.push(`${report.awaitingInternalInput} awaiting internal input`);
+  if (report.notDeterminable > 0) parts.push(`${report.notDeterminable} not determinable`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: { projectId: string; pipelineStatus?: string; pipelinePhase?: string }) {
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
+  const [fillReport, setFillReport] = useState<FillReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
   const [fillingAll, setFillingAll] = useState(false);
@@ -1217,6 +1272,7 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
           const map: Record<string, FieldRow> = {};
           for (const f of data.fields) map[f.field_id] = f;
           setFields(map);
+          setFillReport(data.document.fillReport ?? null);
         }
       } catch (e) {}
       setLoading(false);
@@ -1401,6 +1457,11 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
               {completedCount}/{GTM_FIELD_SCHEMA.length} fields completed
             </span>
           )}
+          {hasDocument && formatFillReport(fillReport) && (
+            <span className="text-[9px] text-text-muted" title="Fill breakdown by source tier">
+              {formatFillReport(fillReport)}
+            </span>
+          )}
           {!hasDocument && isGtmPhaseRunning && (
             <span className="flex items-center gap-1.5 text-[10px] font-bold text-accent px-1.5 py-0.5 rounded bg-accent-bg border border-accent-border">
               <Loader2 className="w-3 h-3 animate-spin" /> Generating…
@@ -1463,15 +1524,28 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                   const complete = isFieldComplete(entry?.answer);
                   const status = fieldStatus[f.id] || "idle";
                   const flagged = !!entry?.flagged;
+                  const isInternal = f.kind === "internal";
+                  const awaitingInternal = isAwaitingInternalInput(entry?.answer);
+                  const notDeterminable = isNotDeterminable(entry?.answer);
                   // Distinguish "never generated yet" (no answer at all — still
                   // needs attention) from "AI/derivation explicitly decided N/A"
                   // (a real, settled answer) — both used to render as an
                   // identical amber "N/A" chip, indistinguishable at a glance
-                  // across a 77-row grid.
-                  const isPending = !complete && (entry?.answer ?? "").trim() === "";
-                  const isSettledNA = !complete && !isPending;
+                  // across a 77-row grid. "Awaiting internal input" (a genuine
+                  // team decision, see lib/gtm-field-schema.ts's
+                  // INTERNAL_FIELD_IDS) and "Not determinable" (every fill tier
+                  // verifiably ran and still came up empty) are further split
+                  // out from those two — they're both settled/complete-ish
+                  // states in isFieldComplete's eyes today would be false, but
+                  // they mean very different things to a reader.
+                  const isPending = !complete && !awaitingInternal && !notDeterminable && (entry?.answer ?? "").trim() === "";
+                  const isSettledNA = !complete && !awaitingInternal && !notDeterminable && !isPending;
                   const chipClass = flagged
                     ? "bg-danger/10 border-danger/30 text-danger"
+                    : awaitingInternal
+                    ? "bg-warning/10 border-warning/25 text-warning"
+                    : notDeterminable
+                    ? "bg-surface-3 border-border text-text-muted"
                     : isPending
                     ? "bg-warning/10 border-warning/25 text-warning"
                     : isSettledNA
@@ -1479,6 +1553,11 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                     : entry?.source === "web"
                     ? "bg-accent-bg border-accent-border text-accent-text"
                     : "bg-surface-3 border-border text-text-muted";
+                  const chipLabel = awaitingInternal
+                    ? "Awaiting Internal Input"
+                    : notDeterminable
+                    ? "Not Determinable"
+                    : SOURCE_LABELS[entry?.source || "none"];
                   return (
                     <div key={f.id} className="flex flex-col gap-1">
                       <div className="flex items-center justify-between gap-2">
@@ -1489,18 +1568,23 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                           )}
                         </label>
                         <div className="flex items-center gap-1 shrink-0">
-                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}>
-                            {SOURCE_LABELS[entry?.source || "none"]}
-                          </span>
-                          <button
-                            type="button"
-                            title="Regenerate this field"
-                            onClick={() => handleRegenerate(f.id)}
-                            disabled={status === "regenerating"}
-                            className="p-0.5 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+                          <span
+                            className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}
+                            title={awaitingInternal ? `Set by ${f.owner || "your team"} — edit the field directly` : undefined}
                           >
-                            <RefreshCw className={`w-3 h-3 ${status === "regenerating" ? "animate-spin" : ""}`} />
-                          </button>
+                            {chipLabel}
+                          </span>
+                          {!isInternal && (
+                            <button
+                              type="button"
+                              title="Regenerate this field"
+                              onClick={() => handleRegenerate(f.id)}
+                              disabled={status === "regenerating"}
+                              className="p-0.5 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${status === "regenerating" ? "animate-spin" : ""}`} />
+                            </button>
+                          )}
                           <button
                             type="button"
                             title="Revert to previous value"
@@ -1654,7 +1738,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
       try {
         const res = await fetch(`/api/documents/gtm?projectId=${project.id}`);
         const data = await res.json();
-        setHasGtm(!!data.document && (data.fields || []).some((f: any) => f.answer && f.answer.toUpperCase() !== "N/A"));
+        setHasGtm(!!data.document && (data.fields || []).some((f: any) => isRealAnswer(f.answer)));
         setDriveUrls(prev => ({ ...prev, gtm: data.document?.drive_url ?? null }));
       } catch (e) {}
     })();
@@ -1662,7 +1746,7 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
       try {
         const res = await fetch(`/api/documents/tds?projectId=${project.id}`);
         const data = await res.json();
-        setHasTds(!!data.document && (data.fields || []).some((f: any) => f.answer && f.answer.toUpperCase() !== "N/A" && f.answer !== "Not listed on product page"));
+        setHasTds(!!data.document && (data.fields || []).some((f: any) => isRealAnswer(f.answer)));
         setDriveUrls(prev => ({ ...prev, tds: data.document?.drive_url ?? null }));
       } catch (e) {}
     })();

@@ -1,6 +1,7 @@
 import { Document, Page, Text, View } from "@react-pdf/renderer";
 import { styles, CoverHeader, PageFooter, SectionHeader, FourColHeader, FourColRow } from "./shared";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS } from "../gtm-field-schema";
+import { isRealAnswer } from "../field-answer-state";
 
 export function GtmPdf({
   productName,
@@ -18,7 +19,7 @@ export function GtmPdf({
       <Page size="A4" style={styles.page}>
         <CoverHeader productName={productName} docType="Go-To-Market — Product Knowledge" projectName={projectName} />
         <Text style={{ fontSize: 8, color: "#666666", marginBottom: 4 }}>
-          {Object.values(fields).filter((f: any) => f.answer && f.answer.toUpperCase() !== "N/A").length}/
+          {Object.values(fields).filter((f: any) => isRealAnswer(f.answer)).length}/
           {GTM_FIELD_SCHEMA.length} fields completed
         </Text>
 

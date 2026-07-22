@@ -15,6 +15,7 @@ import { generateAllFields, GtmSources } from "./gtm-generate";
 import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, getTdsFieldsForProject } from "./db/documents";
 import { TDS_FIELD_SCHEMA } from "./tds-field-schema";
 import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
+import { reconcileTdsFromGtm } from "./tds-gtm-reconcile";
 import { getLatestOutput } from "./project-outputs";
 import { getProjectReports } from "./db/reports";
 import { logCall } from "./obs";
@@ -130,6 +131,16 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
 
       await updateGenerationState(projectId, { phase: "gtm", status: "complete" });
       logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "tds->gtm", outcome: "ok", elapsedMs: Date.now() - stepStart });
+
+      // Cross-fill any TDS field GTM just answered for real while TDS was
+      // still unresolved — never fails the (already-successful) GTM phase.
+      try {
+        const copied = await reconcileTdsFromGtm(projectId, userId, fields);
+        if (copied > 0) logCall("generation-pipeline", { op: "reconcile", projectId, phase: "tds-gtm-reconcile", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      } catch (err: any) {
+        logCall("generation-pipeline", { op: "reconcile", projectId, phase: "tds-gtm-reconcile", outcome: "error", errorMessage: err.message || "reconcile failed", elapsedMs: Date.now() - stepStart });
+      }
+
       return { state: { ...state, phase: "gtm", status: "complete" }, phaseCompleted: "gtm" };
     }
 

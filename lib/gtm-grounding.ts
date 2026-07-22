@@ -21,7 +21,7 @@ export interface SourceTexts {
 
 export interface GroundableField {
   id: string;
-  kind?: "grounded" | "written";
+  kind?: "grounded" | "written" | "internal";
 }
 
 export interface GroundableAnswer {

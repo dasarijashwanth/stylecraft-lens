@@ -6,6 +6,7 @@ import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsField
 import { getLatestOutput } from "@/lib/project-outputs";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 import { generateAllFields, GtmSources } from "@/lib/gtm-generate";
+import { isRealAnswer } from "@/lib/field-answer-state";
 
 export const maxDuration = 60;
 
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
     await saveDocumentFields(document.id, GTM_FIELD_SCHEMA, fields, session.userId);
 
     const savedFields = await getDocumentFields(document.id);
-    const completedCount = savedFields.filter(f => f.answer && f.answer.toUpperCase() !== "N/A").length;
+    const completedCount = savedFields.filter(f => isRealAnswer(f.answer)).length;
 
     return NextResponse.json({
       document: { ...document, completedCount, totalFields: GTM_FIELD_SCHEMA.length },

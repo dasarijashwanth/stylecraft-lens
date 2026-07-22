@@ -84,6 +84,8 @@ export interface RainforestProduct {
   important_information: string | null;
   first_available: string | null;
   videos_count: number | null;
+  country_of_origin: string | null;
+  material: string | null;
 
   images: string[];
   categories: string[];
@@ -293,6 +295,10 @@ async function fetchAmazonProduct(cleanAsin: string): Promise<RainforestProduct 
     const attributes: RainforestSpec[] = Array.isArray(p.attributes)
       ? p.attributes.filter((a: any) => a?.name || a?.value).map((a: any) => ({ name: String(a.name || "").trim(), value: String(a.value || "").trim() }))
       : [];
+    // Rainforest splits the same kind of fact across `specifications` and
+    // `attributes` inconsistently by listing — findSpec below always
+    // searches both combined, never just one.
+    const specAndAttr = [...specifications, ...attributes];
 
     const product: RainforestProduct = {
       asin: p.asin || cleanAsin,
@@ -319,18 +325,20 @@ async function fetchAmazonProduct(cleanAsin: string): Promise<RainforestProduct 
 
       description: sanitizeText(p.description),
       brand: p.brand ?? null,
-      manufacturer: p.manufacturer ?? findSpec(specifications, ["manufacturer"]) ?? null,
+      manufacturer: p.manufacturer ?? findSpec(specAndAttr, ["manufacturer"]) ?? null,
       // Rainforest's schema is inconsistent on model number across listings —
-      // check the dedicated fields, then specifications, defaulting to null.
-      model_number: p.model_number ?? p.model ?? findSpec(specifications, ["model number", "item model number", "model no", "model"]) ?? null,
+      // check the dedicated fields, then specifications/attributes, defaulting to null.
+      model_number: p.model_number ?? p.model ?? findSpec(specAndAttr, ["model number", "item model number", "model no", "model"]) ?? null,
       link: p.link ?? null,
-      dimensions: p.dimensions ?? findSpec(specifications, ["product dimensions", "package dimensions", "item dimensions", "dimensions"]) ?? null,
-      weight: p.weight ?? findSpec(specifications, ["item weight", "product weight", "package weight", "shipping weight", "weight"]) ?? null,
+      dimensions: p.dimensions ?? findSpec(specAndAttr, ["product dimensions", "package dimensions", "item dimensions", "dimensions"]) ?? null,
+      weight: p.weight ?? findSpec(specAndAttr, ["item weight", "product weight", "package weight", "shipping weight", "weight"]) ?? null,
       important_information: Array.isArray(p.important_information?.sections)
         ? (p.important_information.sections.map((s: any) => s?.body).filter(Boolean).join("\n\n") || null)
         : (typeof p.important_information === "string" ? p.important_information : null),
       first_available: p.first_available?.raw ?? (typeof p.first_available === "string" ? p.first_available : null),
       videos_count: typeof p.videos_count === "number" ? p.videos_count : (Array.isArray(p.videos) ? p.videos.length : null),
+      country_of_origin: findSpec(specAndAttr, ["country of origin", "country/region of origin", "made in"]) ?? null,
+      material: findSpec(specAndAttr, ["material", "material type", "outer material", "fabric type"]) ?? null,
 
       images: Array.isArray(p.images)
         ? p.images.map((i: any) => i?.link).filter((l: any) => typeof l === "string")

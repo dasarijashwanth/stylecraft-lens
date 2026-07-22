@@ -1,14 +1,28 @@
-// Generates the Technical Data Sheet from a real product snapshot only —
-// snapshot > project record > "Not listed on product page". Unlike GTM,
-// TDS has no written/narrative tier and no regenerate route: this module
-// backs exactly two callers — the initial capture during project
-// creation, and the explicit "re-capture snapshot" action (see
-// lib/snapshot-capture.ts and app/api/projects/[id]/snapshot/route.ts).
+// Generates the Technical Data Sheet from a real product snapshot first,
+// then the project record, then a real web search, then an honest
+// "Not determinable"/"Awaiting internal input" terminal state — never a
+// bare placeholder. Unlike GTM, TDS has no written/narrative tier and no
+// regenerate route: this module backs exactly two callers — the initial
+// capture during project creation, and the explicit "re-capture snapshot"
+// action (see lib/snapshot-capture.ts and
+// app/api/projects/[id]/snapshot/route.ts).
 import { callAiForFields, coerceAiAnswer } from "./ai-json-call";
 import { TDS_FIELD_SCHEMA, TdsField, TdsFieldAnswer } from "./tds-field-schema";
 import { verifyGrounding } from "./gtm-grounding";
+import { deriveTdsFieldsFromAmazon } from "./tds-derive";
+import { applyWebSearchFallback } from "./web-search-fallback";
+import { finalizeFieldAnswers } from "./field-finalize";
+import { TDS_NOT_LISTED } from "./field-answer-state";
 
-export const TDS_NOT_LISTED = "Not listed on product page";
+// Re-exported for backward compatibility — canonical definition moved to
+// lib/field-answer-state.ts so it can be shared without a circular import.
+export { TDS_NOT_LISTED };
+
+// Vercel Hobby's function timeout is a fixed 60s — same discipline as
+// lib/gtm-generate.ts's PIPELINE_TIME_BUDGET_MS. TDS's main call + floor-fill
+// are fast (no web search involved in either), so this mostly governs how
+// much room the new web-search fallback tier below is allowed to use.
+const TDS_PIPELINE_TIME_BUDGET_MS = 35_000;
 
 export interface TdsProjectRecord {
   productName: string;
@@ -67,11 +81,17 @@ export async function generateTdsFields(
   project: TdsProjectRecord,
   projectId?: string
 ): Promise<Record<string, TdsFieldAnswer>> {
+  const pipelineStart = Date.now();
   const schema = TDS_FIELD_SCHEMA;
   const snapshotText = JSON.stringify(snapshotRawData || {});
   const recordText = projectRecordText(project);
 
-  const systemInstruction = buildSystemInstruction(productTitle, schema);
+  // "internal"-kind fields (approved_pricing, dieline, etc. — see
+  // lib/gtm-field-schema.ts's INTERNAL_FIELD_IDS, inherited onto
+  // TDS_FIELD_SCHEMA) are genuine human decisions never present in a
+  // scraped page or Amazon listing — never asked of the AI at all.
+  const aiEligibleSchema = schema.filter(f => f.kind !== "internal");
+  const systemInstruction = buildSystemInstruction(productTitle, aiEligibleSchema);
   const userContent = buildUserContent(snapshotText, recordText);
   const aiRaw = await callAiForFields(systemInstruction, userContent, "TDS", { projectId });
 
@@ -101,29 +121,24 @@ export async function generateTdsFields(
   // Deterministic floor from the widened Rainforest product payload
   // (lib/rainforest.ts) — a real, credit-costing Rainforest fetch already
   // ran to capture this snapshot; make sure its manufacturer/model/
-  // description/dimensions/weight/box-contents data is never silently
-  // wasted just because the AI didn't surface it. Only fills fields the AI
-  // left at "none" — never overwrites something it already found.
-  const az = snapshotRawData?.amazon;
-  if (az) {
-    const fillFromAmazon = (id: string, value: string | null | undefined) => {
-      if (value && result[id]?.source === "none") {
-        result[id] = { answer: value, source: "amazon", sourceDetail: { url: az.amazon_url, retrieved_at: az.last_updated } };
-      }
-    };
-    fillFromAmazon("manufacturer", az.manufacturer);
-    fillFromAmazon("model_number", az.model_number);
-    fillFromAmazon("product_description", az.description);
-    fillFromAmazon("product_lwh", az.dimensions);
-    fillFromAmazon("product_weight", az.weight);
-    if (Array.isArray(az.whats_in_the_box) && az.whats_in_the_box.length) {
-      fillFromAmazon("whats_in_box_list", az.whats_in_the_box.join("; "));
-    }
-    const voltageSpec = Array.isArray(az.specifications)
-      ? az.specifications.find((s: any) => /voltage/i.test(s?.name || ""))?.value
-      : null;
-    fillFromAmazon("charging_voltage", voltageSpec);
-  }
+  // description/dimensions/weight/box-contents/country-of-origin/material/
+  // safety-notes data is never silently wasted just because the AI didn't
+  // surface it. Only fills fields the AI left at "none" — never overwrites
+  // something it already found (see lib/tds-derive.ts).
+  deriveTdsFieldsFromAmazon(result, snapshotRawData?.amazon);
 
-  return verifyGrounding(result, schema, [snapshotText, recordText], TDS_NOT_LISTED);
+  const grounded = verifyGrounding(result, schema, [snapshotText, recordText], TDS_NOT_LISTED);
+
+  // Tier 5 — real web search for whatever's still unanswered after the
+  // snapshot+project-record floor above (TDS's own AI call above has no
+  // web search capability at all). The shared fallback's eligibility check
+  // (lib/field-answer-state.ts's isRealAnswer) already treats
+  // TDS_NOT_LISTED as "no value" — no separate TDS-specific check needed.
+  await applyWebSearchFallback(grounded, aiEligibleSchema, productTitle, pipelineStart, TDS_PIPELINE_TIME_BUDGET_MS);
+
+  // Terminal step — converts anything still unresolved into an honest
+  // "Not determinable — {reason}" ("Awaiting internal input" for
+  // internal-kind fields) instead of TDS_NOT_LISTED surviving to the UI/CSV
+  // as an unexplained placeholder.
+  return finalizeFieldAnswers(grounded, schema, "not found on the product page, Amazon listing, or project record");
 }

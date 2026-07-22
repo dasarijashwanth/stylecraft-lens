@@ -123,10 +123,13 @@ async function main() {
     if (!az || !az.asin) continue; // no Amazon data captured for this project at all
 
     // Already has the widened fields (either captured after this change, or
-    // already backfilled) — skip. `description` is a representative marker
-    // field; a listing genuinely lacking a description is rare and, even if
-    // skipped, costs nothing (it would just re-confirm null on a re-run).
-    if (az.description !== undefined) continue;
+    // already backfilled) — skip. `description` marks the first widening
+    // wave, `country_of_origin` marks the second (attributes[]-search +
+    // country_of_origin/material) — a snapshot must have both to be
+    // considered fully widened. A listing genuinely lacking these values is
+    // rare and, even if skipped, costs nothing (it would just re-confirm
+    // null on a re-run).
+    if (az.description !== undefined && az.country_of_origin !== undefined) continue;
 
     const asin = String(az.asin).toUpperCase();
     if (seenAsins.has(asin)) continue;

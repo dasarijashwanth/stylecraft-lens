@@ -20,6 +20,13 @@
 // identical to the GTM ids used below (lib/tds-field-schema.ts), so this
 // is a direct same-key lookup, not a translation between two vocabularies.
 import { GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
+import { pick, firstOf } from "./field-pick";
+
+// Re-exported for backward compatibility — pick/firstOf moved to
+// lib/field-pick.ts to break a circular import (this module needs to import
+// computeTiers/parsePriceToNumber FROM lib/pricing-analysis.ts, which itself
+// already imported firstOf from here).
+export { pick, firstOf };
 
 export interface ProjectRecord {
   productName: string;
@@ -29,25 +36,6 @@ export interface ProjectRecord {
   keyDiff?: string | null;
   pricePoint?: string | null;
   companyContext?: string | null;
-}
-
-// Generalized over the source-tag type so callers outside GTM (e.g.
-// lib/pricing-analysis.ts's TargetPriceSource) can reuse the identical
-// "first non-empty, N/A-aware" priority-pick discipline instead of
-// reimplementing it.
-export function pick<S extends string>(answer: string | undefined | null, source: S): { answer: string; source: S } | null {
-  const trimmed = (answer ?? "").toString().trim();
-  if (!trimmed || trimmed.toUpperCase() === "N/A" || trimmed === "Not listed on product page") return null;
-  return { answer: trimmed, source };
-}
-
-// First non-empty of a list of (value, source) candidates, in priority order.
-export function firstOf<S extends string>(...candidates: [string | undefined | null, S][]): { answer: string; source: S } | null {
-  for (const [value, source] of candidates) {
-    const p = pick(value, source);
-    if (p) return p;
-  }
-  return null;
 }
 
 export function deriveFieldsFromSources(

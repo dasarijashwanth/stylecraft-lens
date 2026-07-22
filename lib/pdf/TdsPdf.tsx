@@ -1,6 +1,7 @@
 import { Document, Page, Text, View } from "@react-pdf/renderer";
 import { styles, CoverHeader, PageFooter, SectionHeader, FourColHeader, FourColRow, formatDate } from "./shared";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "../tds-field-schema";
+import { isRealAnswer } from "../field-answer-state";
 
 // Field-schema-driven, same shape as GtmPdf — TDS moved off its old
 // hardcoded nested-spec layout onto the same documents/document_fields
@@ -18,7 +19,7 @@ export function TdsPdf({
   sourceDomain?: string | null;
   fields: Record<string, { answer: string; source: string; owner?: string | null; notes?: string | null }>;
 }) {
-  const completed = Object.values(fields).filter((f: any) => f.answer && f.answer.toUpperCase() !== "N/A" && f.answer !== "Not listed on product page").length;
+  const completed = Object.values(fields).filter((f: any) => isRealAnswer(f.answer)).length;
 
   return (
     <Document>

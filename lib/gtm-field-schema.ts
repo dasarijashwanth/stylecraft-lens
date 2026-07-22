@@ -4,7 +4,7 @@
 // app/(app)/dashboard/projects/[id]/page.tsx) — every consumer must iterate this list,
 // never hardcode the field count or IDs elsewhere.
 
-export type GtmFieldKind = "grounded" | "written";
+export type GtmFieldKind = "grounded" | "written" | "internal";
 
 export interface GtmField {
   id: string;
@@ -14,7 +14,14 @@ export interface GtmField {
   // source or become N/A (see lib/gtm-grounding.ts). written = narrative
   // copy that should be specific to this product, checked for
   // boilerplate/duplication against other products (see lib/text-similarity.ts).
+  // internal = a genuine human/team decision (packaging engineering, final
+  // approved price) that no source document, web search, or derivation can
+  // ever answer — AI/web/derived/category tiers are skipped entirely for
+  // these; unresolved ones surface as "Awaiting internal input", never N/A.
   kind: GtmFieldKind;
+  // Default team owner for internal-kind fields only — shown next to the
+  // "Awaiting internal input" chip so it's clear who to ask.
+  owner?: string;
 }
 
 // Narrative fields — the rest of the schema defaults to "grounded".
@@ -30,8 +37,29 @@ const WRITTEN_FIELD_IDS = new Set([
   "expert_tip",
 ]);
 
+// Genuine internal-decision fields — never answerable by AI, web search, or
+// derivation, only by a real team decision. See GtmFieldKind above.
+export const INTERNAL_FIELD_IDS = new Set([
+  "dieline",
+  "box_type",
+  "measurement_by",
+  "pallet_tier_total",
+  "pallets_high",
+  "approved_pricing",
+]);
+
+const INTERNAL_FIELD_OWNERS: Record<string, string> = {
+  dieline: "Ops",
+  box_type: "Ops",
+  measurement_by: "Ops",
+  pallet_tier_total: "Ops",
+  pallets_high: "Ops",
+  approved_pricing: "Sales",
+};
+
 function field(id: string, section: string, question: string): GtmField {
-  return { id, section, question, kind: WRITTEN_FIELD_IDS.has(id) ? "written" : "grounded" };
+  const kind: GtmFieldKind = WRITTEN_FIELD_IDS.has(id) ? "written" : INTERNAL_FIELD_IDS.has(id) ? "internal" : "grounded";
+  return { id, section, question, kind, ...(kind === "internal" ? { owner: INTERNAL_FIELD_OWNERS[id] } : {}) };
 }
 
 export const GTM_FIELD_SCHEMA: GtmField[] = [
@@ -143,7 +171,7 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
 
 export const GTM_SECTIONS = Array.from(new Set(GTM_FIELD_SCHEMA.map(f => f.section)));
 
-export type GtmFieldSource = "project_record" | "sales_kit" | "tds" | "active_report" | "web" | "multiple" | "none";
+export type GtmFieldSource = "project_record" | "sales_kit" | "tds" | "active_report" | "web" | "multiple" | "none" | "derived" | "category_default" | "manual_edit";
 
 // Human-readable provenance labels — shared by the field-grid UI
 // (ProductKnowledgeSection) and the CSV export route so both present the
@@ -156,6 +184,9 @@ export const GTM_SOURCE_LABELS: Record<string, string> = {
   web: "Web — verify",
   multiple: "Multiple",
   none: "N/A",
+  derived: "Derived",
+  category_default: "Category Typical",
+  manual_edit: "Manual",
 };
 
 export interface GtmFieldAnswer {

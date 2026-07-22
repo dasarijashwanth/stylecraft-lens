@@ -14,16 +14,22 @@
 // below — GTM's deterministic derivation (lib/gtm-derive.ts) reads TDS's
 // document_fields by these same ids, so there is exactly one vocabulary
 // for "what a spec field is called," not two that need translating.
-import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GtmFieldKind } from "./gtm-field-schema";
 
 export interface TdsField {
   id: string;
   section: string;
   question: string;
+  // Inherited from the matching GTM field where one exists (all "internal"
+  // ids are REUSED_GTM_FIELD_IDS below, so every internal TDS field has a
+  // GTM counterpart to inherit from) — TDS-only fields default to
+  // "grounded" since none of them are internal-decision fields.
+  kind: GtmFieldKind;
+  owner?: string;
 }
 
 function field(id: string, section: string, question: string): TdsField {
-  return { id, section, question };
+  return { id, section, question, kind: "grounded" };
 }
 
 // Ids pulled from GTM_FIELD_SCHEMA — technical spec facts only, never the
@@ -68,14 +74,14 @@ export const TDS_FIELD_SCHEMA: TdsField[] = [
   ...REUSED_GTM_FIELD_IDS.map(id => {
     const f = gtmById.get(id);
     if (!f) throw new Error(`TDS_FIELD_SCHEMA: "${id}" no longer exists in GTM_FIELD_SCHEMA`);
-    return { id: f.id, section: f.section, question: f.question };
+    return { id: f.id, section: f.section, question: f.question, kind: f.kind, owner: f.owner };
   }),
   ...TDS_ONLY_FIELDS,
 ];
 
 export const TDS_SECTIONS = Array.from(new Set(TDS_FIELD_SCHEMA.map(f => f.section)));
 
-export type TdsFieldSource = "product_snapshot" | "amazon" | "official_site" | "project_record" | "manual_edit" | "none";
+export type TdsFieldSource = "product_snapshot" | "amazon" | "official_site" | "project_record" | "manual_edit" | "web" | "gtm_cross_fill" | "none";
 
 export interface TdsFieldAnswer {
   answer: string;

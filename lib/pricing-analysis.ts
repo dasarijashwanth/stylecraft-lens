@@ -8,7 +8,7 @@
 //
 // Plain TS, no server-only imports — must be importable from "use client"
 // components as well as server-side route/db code.
-import { firstOf } from "./gtm-derive";
+import { firstOf } from "./field-pick";
 import type { SectionProvenanceData } from "./section-provenance";
 
 export type PricingTier = "Good" | "Better" | "Best";

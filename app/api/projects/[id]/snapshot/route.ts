@@ -5,6 +5,8 @@ import { captureProductSnapshot } from "@/lib/snapshot-capture";
 import { generateTdsFields } from "@/lib/tds-generate";
 import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, getDocumentFields } from "@/lib/db/documents";
 import { TDS_FIELD_SCHEMA } from "@/lib/tds-field-schema";
+import { reconcileTdsFromGtm } from "@/lib/tds-gtm-reconcile";
+import { isRealAnswer } from "@/lib/field-answer-state";
 
 export const maxDuration = 60;
 
@@ -52,8 +54,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     await saveDocumentFields(document.id, TDS_FIELD_SCHEMA, fields, session.userId);
     await setDocumentSnapshot(document.id, snapshot.id);
 
+    // Recapture resets TDS fields to whatever the new snapshot supports —
+    // restore any field GTM already has a real answer for, so this doesn't
+    // regress a fact TDS previously only had via cross-fill. Never fails
+    // the recapture itself.
+    try {
+      await reconcileTdsFromGtm(params.id, session.userId);
+    } catch (err) {
+      console.warn("TDS<-GTM reconcile failed after snapshot recapture:", err);
+    }
+
     const savedFields = await getDocumentFields(document.id);
-    const completedCount = savedFields.filter(f => f.answer && f.answer.toUpperCase() !== "N/A" && f.answer !== "Not listed on product page").length;
+    const completedCount = savedFields.filter(f => isRealAnswer(f.answer)).length;
 
     return NextResponse.json({
       document: {

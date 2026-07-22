@@ -5,6 +5,7 @@
 // supabase_schema.sql for documents/document_fields/document_field_history.
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockDocumentField } from "@/lib/memoryDb";
+import { isRealAnswer } from "@/lib/field-answer-state";
 
 // Structural, not GTM-specific — lib/tds-field-schema.ts's TdsFieldAnswer
 // satisfies this shape too, so one storage layer serves both documents.
@@ -53,8 +54,12 @@ export interface DocumentFieldRow {
 export function flattenDocumentFields(fields: DocumentFieldRow[]): Record<string, string> {
   const flat: Record<string, string> = {};
   for (const f of fields) {
-    if (f.answer && f.answer.toUpperCase() !== "N/A" && f.answer !== "Not listed on product page") {
-      flat[f.field_id] = f.answer;
+    // isRealAnswer also excludes the newer "Not determinable — ..." /
+    // "Awaiting internal input" honest-failure strings (lib/field-finalize.ts)
+    // — without this, a TDS field's honest failure would leak into GTM's
+    // prompt as if it were a real fact.
+    if (isRealAnswer(f.answer)) {
+      flat[f.field_id] = f.answer as string;
     }
   }
   return flat;
@@ -202,7 +207,7 @@ async function writeHistory(documentFieldId: string, previousAnswer: string | nu
 // that the frontend then failed to JSON.parse.
 export async function saveDocumentFields(
   documentId: string,
-  fieldsBySchema: { id: string; section: string; question: string }[],
+  fieldsBySchema: { id: string; section: string; question: string; owner?: string }[],
   answers: Record<string, FieldAnswerLike>,
   updatedBy: string | null
 ) {
@@ -218,8 +223,12 @@ export async function saveDocumentFields(
     if (!next) continue;
     const prior = existingById.get(f.id);
     // Regenerating/re-saving must never clobber a user-assigned Owner or
-    // Notes — those are independent of the generated answer.
-    const owner = prior?.owner ?? "Product Marketing";
+    // Notes — those are independent of the generated answer. First save
+    // defaults to the schema field's own owner when it declares one
+    // (internal-kind fields, e.g. "Ops"/"Sales" — see
+    // lib/gtm-field-schema.ts's INTERNAL_FIELD_OWNERS), else the general
+    // marketing-team default.
+    const owner = prior?.owner ?? f.owner ?? "Product Marketing";
     const notes = prior?.notes ?? null;
 
     if (prior && prior.answer !== next.answer) {
@@ -302,11 +311,14 @@ export async function updateDocumentField(
   // `opts` is only ever passed by the AI regenerate route — a plain manual
   // edit (opts omitted entirely) must never move ai_answer, so it keeps
   // reflecting whatever the pipeline last generated regardless of how many
-  // times a human edits `answer` afterward.
+  // times a human edits `answer` afterward. A manual edit's `source` is
+  // tagged "manual_edit" (never left as whatever tier answered it before),
+  // so the UI/CSV can show the field was hand-overridden rather than still
+  // crediting the AI/web/derivation source that no longer reflects reality.
   const update = {
     answer: newAnswer,
     ai_answer: opts !== undefined ? newAnswer : prior.ai_answer,
-    source: opts?.source ?? prior.source,
+    source: opts !== undefined ? (opts.source ?? prior.source) : "manual_edit",
     source_detail: opts?.sourceDetail ?? prior.source_detail,
     flagged: opts?.flagged ?? false,
     updated_by: updatedBy,
