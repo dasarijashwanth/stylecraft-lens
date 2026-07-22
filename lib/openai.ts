@@ -86,7 +86,12 @@ export function classifyOpenAiError(err: any): OpenAiErrorClass {
   return "unknown";
 }
 
-async function createResponseWithRetry(params: any, timeoutMs: number): Promise<any> {
+// Ceiling for a "timeout" error's retry attempt — deliberately much shorter
+// than a typical primary timeoutMs (see below for why). Exported for
+// offline testing (scripts/verify-openai-retry-timeout.ts).
+export const TIMEOUT_RETRY_TIMEOUT_MS = 10_000;
+
+export async function createResponseWithRetry(params: any, timeoutMs: number): Promise<any> {
   try {
     return await openai.responses.create(params, { timeout: timeoutMs });
   } catch (err) {
@@ -100,7 +105,25 @@ async function createResponseWithRetry(params: any, timeoutMs: number): Promise<
       await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_RETRY_DELAY_MS));
       return await openai.responses.create(params, { timeout: timeoutMs });
     }
-    if (errorClass === "overload" || errorClass === "timeout" || errorClass === "connection") {
+    if (errorClass === "timeout") {
+      // Unlike rate_limit/overload/connection — which all fail FAST, so
+      // retrying with the same timeoutMs only adds a few seconds — a
+      // "timeout" error means the FIRST attempt already consumed the FULL
+      // timeoutMs with no response at all. Retrying with that same budget
+      // again risks ~doubling total latency for this one call. Confirmed
+      // live: several GTM field-generation chunks (each capped at 28s) took
+      // 49-58s total after a same-duration retry — right at Vercel's 60s
+      // function ceiling before the rest of the pipeline (grounding,
+      // Rainforest enrichment, DB writes) even runs, surfacing to users as
+      // "Generation stalled" once the platform kills the request mid-step.
+      // A much shorter retry budget still catches a near-miss without
+      // risking that compounding.
+      const retryTimeoutMs = Math.min(timeoutMs, TIMEOUT_RETRY_TIMEOUT_MS);
+      console.warn(`OpenAI timeout error, waiting ${TRANSIENT_RETRY_DELAY_MS}ms before one short (${retryTimeoutMs}ms) retry...`);
+      await new Promise(resolve => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
+      return await openai.responses.create(params, { timeout: retryTimeoutMs });
+    }
+    if (errorClass === "overload" || errorClass === "connection") {
       console.warn(`OpenAI ${errorClass} error, waiting ${TRANSIENT_RETRY_DELAY_MS}ms before one retry...`);
       await new Promise(resolve => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
       return await openai.responses.create(params, { timeout: timeoutMs });
