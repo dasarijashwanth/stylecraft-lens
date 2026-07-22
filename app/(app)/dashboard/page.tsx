@@ -15,15 +15,16 @@ import {
   Download,
   Activity
 } from "lucide-react";
-import { 
-  ResponsiveContainer, 
-  BarChart, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  Bar, 
-  Cell 
+import {
+  ResponsiveContainer,
+  BarChart,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Bar,
+  Cell
 } from "recharts";
+import { AnimatePresence, motion } from "framer-motion";
 import KPICard from "@/components/dashboard/KPICard";
 import { toast } from "sonner";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -190,6 +191,9 @@ export default function DashboardOverview() {
           isPositive={competitorsCount > 20}
           sparklineData={sparklines.competitors}
           accentColor="#6366F1"
+          icon={Target}
+          href="/dashboard/competitors"
+          entranceDelayMs={0}
         />
         <KPICard
           label="Active Analyses"
@@ -198,6 +202,9 @@ export default function DashboardOverview() {
           isPositive={activeAnalysesCount > 0}
           sparklineData={sparklines.analyses}
           accentColor="#A5B4FC"
+          icon={Sparkles}
+          href="/dashboard/analyze"
+          entranceDelayMs={40}
         />
         <KPICard
           label="Reports Generated"
@@ -206,6 +213,9 @@ export default function DashboardOverview() {
           isPositive={true}
           sparklineData={sparklines.reports}
           accentColor="#22C55E"
+          icon={FileText}
+          href="/dashboard/reports"
+          entranceDelayMs={80}
         />
         <KPICard
           label="AI Strategic Insights"
@@ -214,6 +224,8 @@ export default function DashboardOverview() {
           isPositive={true}
           sparklineData={sparklines.insights}
           accentColor="#F59E0B"
+          icon={TrendingUp}
+          entranceDelayMs={120}
         />
       </div>
 
@@ -222,17 +234,17 @@ export default function DashboardOverview() {
         
         {/* Left Column (7/12) */}
         <div className="lg:col-span-7 space-y-6 flex flex-col">
-          
+
           {/* Recent Analyses Panel */}
-          <div className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col flex-1">
+          <div className="stagger-entrance bg-surface-2 border border-border rounded-xl p-5 flex flex-col flex-1" style={{ animationDelay: "160ms" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-bold text-text-primary">Recent Analyses</h2>
-              <Link href="/dashboard/analyze" className="text-xs text-accent hover:underline flex items-center gap-1 font-semibold">
+              <Link href="/dashboard/analyze" className="group text-xs text-accent hover:underline flex items-center gap-1 font-semibold">
                 <span>New Analysis</span>
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-3.5 h-3.5 transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-[3px]" />
               </Link>
             </div>
-            
+
             <div className="overflow-x-auto -mx-5 px-5">
               <table className="w-full text-xs text-left border-collapse">
                 <thead>
@@ -246,7 +258,7 @@ export default function DashboardOverview() {
                 </thead>
                 <tbody className="divide-y divide-border/40">
                   {analyses.slice(0, 5).map((an) => (
-                    <tr key={an.id} className="hover:bg-surface-3/30 transition-colors">
+                    <tr key={an.id} className="row-hover">
                       <td className="py-3 font-semibold text-text-primary">
                         <div className="max-w-[200px] truncate" title={an.project?.name || "Product Analysis"}>
                           {an.project?.name || "Product Analysis"}
@@ -256,7 +268,8 @@ export default function DashboardOverview() {
                         <Badge
                           tone={an.status === "COMPLETE" ? "success" : an.status === "RUNNING" ? "accent" : an.status === "FAILED" ? "danger" : "neutral"}
                           uppercase
-                          className={an.status === "RUNNING" ? "animate-pulse" : undefined}
+                          dot={an.status === "RUNNING"}
+                          pulseDot={an.status === "RUNNING"}
                         >
                           {an.status}
                         </Badge>
@@ -268,7 +281,7 @@ export default function DashboardOverview() {
                       <td className="py-3 text-right">
                         <button
                           onClick={() => router.push(`/dashboard/analyze?id=${an.id}`)}
-                          className="px-2 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] transition-colors font-semibold"
+                          className="btn-lift cursor-target px-2 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] transition-colors font-semibold"
                         >
                           View
                         </button>
@@ -294,7 +307,7 @@ export default function DashboardOverview() {
           </div>
 
           {/* Top Competitors by Threat Score Chart */}
-          <div className="bg-surface-2 border border-border rounded-xl p-5">
+          <div className="stagger-entrance bg-surface-2 border border-border rounded-xl p-5" style={{ animationDelay: "200ms" }}>
             <h2 className="text-sm font-bold text-text-primary mb-4">Top Competitors by Threat Score</h2>
             <div className="h-[250px] w-full text-xs">
               {top8Competitors.length > 0 ? (
@@ -337,14 +350,14 @@ export default function DashboardOverview() {
 
         {/* Right Column (5/12) */}
         <div className="lg:col-span-5 space-y-6 flex flex-col">
-          
+
           {/* Quick Actions Panel */}
-          <div className="bg-surface-2 border border-border rounded-xl p-5">
+          <div className="stagger-entrance bg-surface-2 border border-border rounded-xl p-5" style={{ animationDelay: "160ms" }}>
             <h2 className="text-sm font-bold text-text-primary mb-4">Quick Actions</h2>
             <div className="grid grid-cols-1 gap-2.5">
               <button
                 onClick={() => handleQuickAction("add")}
-                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
+                className="group btn-lift cursor-target flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
               >
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-emerald-950/60 border border-emerald-900/60 text-emerald-400">
@@ -355,12 +368,12 @@ export default function DashboardOverview() {
                     <p className="text-[10px] text-text-muted">Track a new brand or product</p>
                   </div>
                 </div>
-                <ArrowRight className="w-4 h-4 text-text-muted" />
+                <ArrowRight className="w-4 h-4 text-text-muted transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-[3px]" />
               </button>
-              
+
               <button
                 onClick={() => handleQuickAction("analyze")}
-                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
+                className="group btn-lift cursor-target flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
               >
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-indigo-950/60 border border-indigo-900/60 text-indigo-400">
@@ -371,12 +384,12 @@ export default function DashboardOverview() {
                     <p className="text-[10px] text-text-muted">Scan the market using Gemini</p>
                   </div>
                 </div>
-                <ArrowRight className="w-4 h-4 text-text-muted" />
+                <ArrowRight className="w-4 h-4 text-text-muted transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-[3px]" />
               </button>
-              
+
               <button
                 onClick={() => handleQuickAction("report")}
-                className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
+                className="group btn-lift cursor-target flex items-center justify-between p-3.5 rounded-xl border border-border bg-surface-3/50 hover:bg-surface-3 transition-colors text-left w-full"
               >
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-amber-950/60 border border-amber-900/60 text-amber-400">
@@ -387,29 +400,39 @@ export default function DashboardOverview() {
                     <p className="text-[10px] text-text-muted">Open and export generated reports</p>
                   </div>
                 </div>
-                <ArrowRight className="w-4 h-4 text-text-muted" />
+                <ArrowRight className="w-4 h-4 text-text-muted transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-[3px]" />
               </button>
             </div>
           </div>
 
           {/* Activity Feed Panel */}
-          <div className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col flex-1">
+          <div className="stagger-entrance bg-surface-2 border border-border rounded-xl p-5 flex flex-col flex-1" style={{ animationDelay: "200ms" }}>
             <h2 className="text-sm font-bold text-text-primary mb-4">Activity Feed</h2>
-            <div className="space-y-4 flex-1 overflow-y-auto max-h-[300px] pr-1">
-              {activityFeed.map((act) => {
-                const Icon = act.icon;
-                return (
-                  <div key={act.id} className="flex gap-3 text-xs leading-normal">
-                    <div className={`p-2 rounded-lg shrink-0 w-8 h-8 flex items-center justify-center ${act.color}`}>
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <div className="space-y-0.5 min-w-0">
-                      <p className="text-text-primary font-medium">{act.text}</p>
-                      <p className="text-[10px] text-text-muted">{act.time}</p>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="space-y-1 flex-1 overflow-y-auto max-h-[300px] pr-1">
+              <AnimatePresence initial={false}>
+                {activityFeed.map((act) => {
+                  const Icon = act.icon;
+                  return (
+                    <motion.div
+                      key={act.id}
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                      className="highlight-fade flex gap-3 text-xs leading-normal -mx-2 px-2 py-1.5 rounded-lg"
+                    >
+                      <div className={`p-2 rounded-lg shrink-0 w-8 h-8 flex items-center justify-center ${act.color}`}>
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <p className="text-text-primary font-medium">{act.text}</p>
+                        <p className="text-[10px] text-text-muted">{act.time}</p>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
               {activityFeed.length === 0 && (
                 <EmptyState compact icon={Activity} title="No recent activity" />
               )}
@@ -420,7 +443,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* Full Width: Emerging Threats Table */}
-      <div className="bg-surface-2 border border-border rounded-xl p-5">
+      <div className="stagger-entrance bg-surface-2 border border-border rounded-xl p-5" style={{ animationDelay: "240ms" }}>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-bold text-text-primary">Emerging Market Threats</h2>
@@ -428,12 +451,12 @@ export default function DashboardOverview() {
               Score &gt; 50
             </span>
           </div>
-          <Link href="/dashboard/competitors" className="text-xs text-text-muted hover:text-text-primary flex items-center gap-1 transition-colors">
+          <Link href="/dashboard/competitors" className="group text-xs text-text-muted hover:text-text-primary flex items-center gap-1 transition-colors">
             <span>View All Competitors</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <ArrowRight className="w-3.5 h-3.5 transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-[3px]" />
           </Link>
         </div>
-        
+
         <div className="overflow-x-auto -mx-5 px-5">
           <table className="w-full text-xs text-left border-collapse">
             <thead>
@@ -447,7 +470,7 @@ export default function DashboardOverview() {
             </thead>
             <tbody className="divide-y divide-border/40">
               {emergingThreats.slice(0, 4).map((c) => (
-                <tr key={c.id} className="hover:bg-surface-3/30 transition-colors">
+                <tr key={c.id} className="row-hover">
                   <td className="py-3 font-semibold text-text-primary">
                     <div>{c.name}</div>
                     {c.website && <span className="text-[10px] text-text-muted font-normal block">{c.website}</span>}
@@ -464,8 +487,8 @@ export default function DashboardOverview() {
                   <td className="py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-16 h-1.5 bg-surface-3 border border-border rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-accent"
+                        <div
+                          className="h-full bg-accent transition-[width] duration-[250ms] ease-[var(--ease-out)]"
                           style={{ width: `${c.threatScore || 30}%` }}
                         />
                       </div>
@@ -487,7 +510,7 @@ export default function DashboardOverview() {
                   <td className="py-3 text-right">
                     <button
                       onClick={() => router.push(c.is_fixed ? `/dashboard/competitors` : `/dashboard/competitors/${c.id}`)}
-                      className="px-2.5 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] font-semibold transition-colors"
+                      className="btn-lift cursor-target px-2.5 py-1 rounded border border-border hover:bg-surface-3 hover:text-text-primary text-[10px] font-semibold transition-colors"
                     >
                       View details
                     </button>

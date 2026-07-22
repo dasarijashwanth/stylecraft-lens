@@ -266,6 +266,9 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
     `${Math.floor(s / 60)}m ${s % 60}s`;
 
   const completedCount = phases.filter((p) => p.status === "complete").length;
+  // "Running" for shimmer/pulse purposes — actively processing, not paused
+  // waiting on the user and not yet finished.
+  const isRunning = !failedMessage && !pendingQuestion && completedCount < PHASE_LABELS.length;
 
   return (
     <motion.div layout className="analysis-progress-panel bg-surface-2 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
@@ -285,18 +288,23 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
           </div>
         ) : (
           <div className="status-running flex items-center gap-1.5 text-[11px] text-accent font-semibold">
+            {isRunning && <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-accent" />}
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
             <span>Analyzing…</span>
           </div>
         )}
       </div>
 
-      {/* Overall progress bar — derived from completed phase count */}
+      {/* Overall progress bar — derived from completed phase count.
+          A shimmer sweeps across the filled portion only while actively
+          running (never while paused for input or after completion). */}
       <div className="h-1 bg-surface-3">
         <div
-          className="h-full bg-accent transition-all duration-500"
+          className="relative h-full bg-accent overflow-hidden transition-[width] duration-[250ms] ease-[var(--ease-out)]"
           style={{ width: `${(completedCount / PHASE_LABELS.length) * 100}%` }}
-        />
+        >
+          {isRunning && <div className="shimmer-sweep" />}
+        </div>
       </div>
 
       {/* Product Identity Card — shown as soon as Stage 1 completes, so a

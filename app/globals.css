@@ -209,6 +209,303 @@ h3 {
   border: 1px solid var(--border);
 }
 
+/* ============================================================
+   MOTION SYSTEM — shared tokens + reusable classes for the
+   dashboard Overview tab, Projects grid, and realtime progress UI
+   (Bell/KPICard/ProjectCard/ProgressPanel). Rules:
+   - Only transform/opacity are animated for hovers (GPU-composited,
+     no layout thrash). Shadow "deepening" on hover is a pseudo-
+     element opacity fade, never a direct box-shadow transition.
+   - Hover-ins use --dur-fast; hover-outs use --dur-hover-out
+     (slightly slower) so elements settle rather than snap back.
+   - Hover-only effects are gated behind (hover: hover) so touch
+     devices never get a stuck hover state.
+   - prefers-reduced-motion disables every animation/transition
+     introduced here (scoped to these classes, not a blanket `*`
+     rule, so it doesn't also freeze pre-existing spinners/menus).
+   ============================================================ */
+:root {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 150ms;
+  --dur-hover-out: 200ms;
+  --dur-med: 250ms;
+  --dur-slow: 400ms;
+}
+
+/* ---- Stat cards (KPICard) ---- */
+.stat-card {
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-hover-out) var(--ease-out);
+}
+.stat-card-value {
+  transition: transform var(--dur-hover-out) var(--ease-out), color var(--dur-hover-out) var(--ease-out);
+}
+/* Brief accent->normal flash when a stat's underlying value changes —
+   a one-shot keyframe (replayed via a `key` remount in KPICard.tsx) rather
+   than a transition, so it never fights the hover color-shift above over
+   the same `color` property. */
+@keyframes value-flash {
+  0%   { color: var(--accent-text); }
+  100% { color: var(--text-primary); }
+}
+.stat-card-value-flash {
+  animation: value-flash 600ms var(--ease-out) both;
+}
+.stat-card-icon {
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+.stat-card-underline {
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+@media (hover: hover) {
+  .stat-card:hover {
+    transform: translateY(-3px);
+    transition-duration: var(--dur-fast);
+  }
+  .stat-card:hover::after {
+    opacity: 1;
+    transition-duration: var(--dur-fast);
+  }
+  .stat-card:hover .stat-card-value {
+    transform: scale(1.03);
+    color: var(--accent-text);
+    transition-duration: var(--dur-fast);
+  }
+  .stat-card:hover .stat-card-icon {
+    transform: rotate(-4deg) scale(1.08);
+    transition-duration: var(--dur-fast);
+  }
+  .stat-card:hover .stat-card-underline {
+    transform: scaleX(1);
+    transition-duration: var(--dur-fast);
+  }
+}
+.stat-card:active {
+  transform: translateY(-1px) scale(0.99);
+  transition-duration: var(--dur-fast);
+}
+
+/* ---- Project cards ---- */
+.project-card {
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+.project-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 20px 48px -14px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-hover-out) var(--ease-out);
+}
+.project-card-stat {
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+.project-card-view {
+  opacity: 0;
+  transition: opacity var(--dur-hover-out) var(--ease-out);
+}
+/* Keyboard-focus reveal — the fade-in is a hover nicety, not a way to hide
+   the affordance from keyboard users who tab to it without hovering. */
+.project-card-view:focus-visible {
+  opacity: 1;
+}
+.project-card-view svg {
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+.project-card-glow {
+  transition: opacity var(--dur-hover-out) var(--ease-out);
+}
+@media (hover: hover) {
+  .project-card:hover {
+    transform: translateY(-4px);
+    transition-duration: var(--dur-fast);
+  }
+  .project-card:hover::after {
+    opacity: 1;
+    transition-duration: var(--dur-fast);
+  }
+  .project-card:hover .project-card-stat {
+    transform: translateY(-2px);
+    transition-duration: var(--dur-fast);
+  }
+  .project-card:hover .project-card-stat:nth-child(1) { transition-delay: 0ms; }
+  .project-card:hover .project-card-stat:nth-child(2) { transition-delay: 30ms; }
+  .project-card:hover .project-card-stat:nth-child(3) { transition-delay: 60ms; }
+  .project-card:hover .project-card-view {
+    opacity: 1;
+    transition-duration: var(--dur-fast);
+  }
+  .project-card:hover .project-card-view svg {
+    transform: translateX(3px);
+    transition-duration: var(--dur-fast);
+  }
+  .project-card:hover .project-card-glow {
+    opacity: 1;
+    transition-duration: var(--dur-fast);
+  }
+}
+.project-card:active {
+  transform: translateY(-1px) scale(0.99);
+  transition-duration: var(--dur-fast);
+}
+
+/* ---- Table / list row hover: background tint + sliding left accent
+   border. Rows never lift — only cards float. ---- */
+.row-hover {
+  position: relative;
+  transition: background-color var(--dur-hover-out) var(--ease-out);
+}
+.row-hover::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--dur-hover-out) var(--ease-out);
+}
+@media (hover: hover) {
+  .row-hover:hover {
+    background-color: var(--surface-3);
+    transition-duration: var(--dur-fast);
+  }
+  .row-hover:hover::before {
+    transform: scaleY(1);
+    transition-duration: var(--dur-fast);
+  }
+}
+
+/* ---- Buttons ---- */
+.btn-lift {
+  transition: transform var(--dur-hover-out) var(--ease-out), filter var(--dur-hover-out) var(--ease-out);
+}
+@media (hover: hover) {
+  .btn-lift:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+    transition-duration: var(--dur-fast);
+  }
+}
+.btn-lift:active {
+  transform: translateY(0);
+  transition-duration: var(--dur-fast);
+}
+
+/* ---- Icon-only tooltip (100ms delay, fade + translateY(4px) -> 0) ---- */
+.icon-tooltip-bubble {
+  position: absolute;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  transition-delay: 0ms;
+}
+@media (hover: hover) {
+  .icon-tooltip-group:hover .icon-tooltip-bubble {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 100ms;
+  }
+}
+
+/* ---- Page/tab entrance — plays once per mount (the node this class is
+   on doesn't remount on a data refresh, so it never replays). ---- */
+@keyframes entrance-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stagger-entrance {
+  animation: entrance-in var(--dur-slow) var(--ease-out) both;
+}
+
+/* ---- Realtime: shimmer sweep (progress bars, skeleton loaders) ---- */
+@keyframes shimmer-sweep {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(150%); }
+}
+.shimmer-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  animation: shimmer-sweep 1.8s infinite linear;
+}
+
+/* ---- Realtime: pulsing status dot (opacity only, gentler than the
+   existing scale+opacity pulse-soft above) ---- */
+@keyframes pulse-dot-soft {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+.pulse-dot {
+  animation: pulse-dot-soft 1.5s infinite ease-in-out;
+}
+
+/* ---- Realtime: notification bell ---- */
+@keyframes bell-badge-pop {
+  0%   { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+.bell-badge-pop {
+  animation: bell-badge-pop var(--dur-med) var(--ease-spring) both;
+}
+@keyframes bell-ring {
+  0%, 100% { transform: rotate(0deg); }
+  20%      { transform: rotate(12deg); }
+  40%      { transform: rotate(-10deg); }
+  60%      { transform: rotate(6deg); }
+  80%      { transform: rotate(-4deg); }
+}
+.bell-ring {
+  animation: bell-ring 500ms ease-in-out 1;
+}
+
+/* ---- Realtime: new-item highlight fade (activity feed) ---- */
+@keyframes highlight-fade {
+  0%   { background-color: var(--accent-bg); }
+  100% { background-color: transparent; }
+}
+.highlight-fade {
+  animation: highlight-fade 2s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-card, .stat-card::after, .stat-card-value, .stat-card-value-flash, .stat-card-icon, .stat-card-underline,
+  .project-card, .project-card::after, .project-card-stat, .project-card-view, .project-card-view svg, .project-card-glow,
+  .row-hover, .row-hover::before,
+  .btn-lift,
+  .icon-tooltip-bubble,
+  .stagger-entrance,
+  .shimmer-sweep,
+  .pulse-dot,
+  .bell-badge-pop,
+  .bell-ring,
+  .highlight-fade {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+  .stagger-entrance,
+  .icon-tooltip-group:hover .icon-tooltip-bubble {
+    opacity: 1 !important;
+  }
+}
+
 /* Micro-animations */
 @keyframes pulse-soft {
   0%, 100% {

@@ -35,6 +35,10 @@ const DOT_CLASSES: Record<BadgeTone, string> = {
 interface BadgeProps {
   tone?: BadgeTone;
   dot?: boolean;
+  // Pulses only the dot itself (opacity 0.4<->1, see .pulse-dot in
+  // globals.css) rather than the whole badge/text — used for "in progress"
+  // rows so the live indicator reads as a status light, not blinking text.
+  pulseDot?: boolean;
   uppercase?: boolean;
   className?: string;
   title?: string;
@@ -45,7 +49,7 @@ interface BadgeProps {
 // tone maps only to existing CSS-var-backed tokens (tailwind.config.ts),
 // never a raw palette color, so a chip can never silently drift from the
 // app's design system the way ad hoc `bg-zinc-800`/`bg-indigo-950` spans did.
-export function Badge({ tone = "neutral", dot = false, uppercase = false, className, title, children }: BadgeProps) {
+export function Badge({ tone = "neutral", dot = false, pulseDot = false, uppercase = false, className, title, children }: BadgeProps) {
   return (
     <span
       title={title}
@@ -56,7 +60,7 @@ export function Badge({ tone = "neutral", dot = false, uppercase = false, classN
         className
       )}
     >
-      {dot && <span className={cn("w-1 h-1 rounded-full shrink-0", DOT_CLASSES[tone])} />}
+      {dot && <span className={cn("w-1 h-1 rounded-full shrink-0", DOT_CLASSES[tone], pulseDot && "pulse-dot")} />}
       {children}
     </span>
   );

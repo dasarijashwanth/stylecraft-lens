@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { 
-  Bell, 
-  Search, 
-  Menu, 
-  ChevronRight, 
+import {
+  Bell,
+  Search,
+  Menu,
+  ChevronRight,
   Command,
   Target,
   FolderOpen,
@@ -15,6 +15,7 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useFiresOnIncrease } from "@/lib/motion";
 import { Breadcrumb } from "./Breadcrumb";
 
 interface TopbarProps {
@@ -31,12 +32,24 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
     { id: 2, text: "Wahl Professional details updated", time: "2 hours ago", read: true },
   ]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [ringing, setRinging] = useState(false);
+  const ringTimeout = useRef<ReturnType<typeof setTimeout>>();
 
   // Show back button when more than 2 levels deep
   const depth = pathname.split("/").filter(Boolean).length;
   const showBack = depth > 2;
 
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  // One small ring, only when the unread count genuinely goes UP (never on
+  // first mount, and never repeatedly — the badge itself already stays
+  // visible via its own pop-in for the "there's something new" signal).
+  useFiresOnIncrease(unreadCount, () => {
+    setRinging(true);
+    if (ringTimeout.current) clearTimeout(ringTimeout.current);
+    ringTimeout.current = setTimeout(() => setRinging(false), 500);
+  });
+  useEffect(() => () => { if (ringTimeout.current) clearTimeout(ringTimeout.current); }, []);
 
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between h-[var(--topbar-height)] px-4 md:px-6 border-b border-border bg-bg/85 backdrop-blur-md">
@@ -45,7 +58,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         <button
           onClick={onMenuClick}
           aria-label="Open menu"
-          className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary lg:hidden"
+          className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors lg:hidden"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -87,7 +100,7 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         <button
           onClick={onSearchClick}
           aria-label="Search"
-          className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary md:hidden"
+          className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors md:hidden"
         >
           <Search className="w-5 h-5" />
         </button>
@@ -99,9 +112,9 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
             aria-label="Notifications"
             className="cursor-target p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary relative transition-colors"
           >
-            <Bell className="w-5 h-5" />
+            <Bell className={`w-5 h-5 ${ringing ? "bell-ring" : ""}`} />
             {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-danger animate-pulse-soft" />
+              <span className="bell-badge-pop absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-danger animate-pulse-soft" />
             )}
           </button>
 

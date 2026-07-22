@@ -133,17 +133,20 @@ export default function ProjectsPage() {
 
       {/* Projects Grid */}
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
-            <div key={i} className="h-[210px] bg-surface-2 border border-border rounded-xl" />
+            <div key={i} className="relative h-[210px] bg-surface-2 border border-border rounded-xl overflow-hidden">
+              <div className="shimmer-sweep" />
+            </div>
           ))}
         </div>
       ) : filteredProjects.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredProjects.map((p) => (
-            <div 
+          {filteredProjects.map((p, index) => (
+            <div
               key={p.id}
-              className="bg-surface-2 border border-border rounded-xl p-5 flex flex-col justify-between shadow hover:border-border-strong transition-all duration-200"
+              className="project-card stagger-entrance relative bg-surface-2 border border-border rounded-xl p-5 flex flex-col justify-between shadow hover:border-border-strong transition-colors duration-200"
+              style={{ animationDelay: `${Math.min(index, 5) * 40}ms` }}
             >
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
@@ -155,7 +158,7 @@ export default function ProjectsPage() {
                   </span>
                 </div>
 
-                <h3 
+                <h3
                   onClick={() => router.push(`/dashboard/projects/${p.id}`)}
                   className="text-sm font-bold text-text-primary hover:text-accent cursor-pointer transition-colors"
                 >
@@ -168,21 +171,25 @@ export default function ProjectsPage() {
                 </p>
 
                 {p.generationState?.status === "failed" && (
-                  <div className="flex items-center justify-between gap-2 mt-3 p-2 rounded-lg bg-danger-bg border border-danger/20">
-                    <div className="flex items-center gap-1.5 min-w-0 text-danger">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      <span className="text-[10px] font-semibold truncate" title={p.generationState.errorMessage || undefined}>
-                        {p.generationState.errorMessage || "Generation failed"}
-                      </span>
+                  <div className="relative mt-3">
+                    {/* Soft glow behind the failure indicator — fades in with the rest of the card's hover state */}
+                    <div className="project-card-glow absolute inset-0 rounded-lg bg-danger/20 blur-md opacity-0" />
+                    <div className="relative flex items-center justify-between gap-2 p-2 rounded-lg bg-danger-bg border border-danger/20">
+                      <div className="flex items-center gap-1.5 min-w-0 text-danger">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span className="text-[10px] font-semibold truncate" title={p.generationState.errorMessage || undefined}>
+                          {p.generationState.errorMessage || "Generation failed"}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleRetryGeneration(p.id); }}
+                        disabled={retryingId === p.id}
+                        className="btn-lift flex items-center gap-1 px-1.5 py-0.5 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger text-[9px] font-bold rounded-md transition-colors shrink-0 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${retryingId === p.id ? "animate-spin" : ""}`} />
+                        <span>Retry</span>
+                      </button>
                     </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleRetryGeneration(p.id); }}
-                      disabled={retryingId === p.id}
-                      className="flex items-center gap-1 px-1.5 py-0.5 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger text-[9px] font-bold rounded-md transition-colors shrink-0 disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-2.5 h-2.5 ${retryingId === p.id ? "animate-spin" : ""}`} />
-                      <span>Retry</span>
-                    </button>
                   </div>
                 )}
               </div>
@@ -190,17 +197,26 @@ export default function ProjectsPage() {
               {/* Stats & footer */}
               <div className="pt-4 border-t border-border/60 mt-4 flex items-center justify-between">
                 <div className="flex items-center gap-4 text-text-secondary">
-                  <div className="flex items-center gap-1" title="Analyses">
+                  <div className="project-card-stat icon-tooltip-group relative flex items-center gap-1">
                     <Sparkles className="w-3.5 h-3.5 text-text-muted" />
                     <span className="text-[11px] font-bold font-mono">{(p.analyses || []).length}</span>
+                    <span className="icon-tooltip-bubble -top-7 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-surface-1 border border-border-strong text-[9px] text-text-secondary whitespace-nowrap">
+                      Analyses
+                    </span>
                   </div>
-                  <div className="flex items-center gap-1" title="Linked Competitors">
+                  <div className="project-card-stat icon-tooltip-group relative flex items-center gap-1">
                     <Target className="w-3.5 h-3.5 text-text-muted" />
                     <span className="text-[11px] font-bold font-mono">{(p.competitors || []).length}</span>
+                    <span className="icon-tooltip-bubble -top-7 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-surface-1 border border-border-strong text-[9px] text-text-secondary whitespace-nowrap">
+                      Linked competitors
+                    </span>
                   </div>
-                  <div className="flex items-center gap-1" title="Reports">
+                  <div className="project-card-stat icon-tooltip-group relative flex items-center gap-1">
                     <FileText className="w-3.5 h-3.5 text-text-muted" />
                     <span className="text-[11px] font-bold font-mono">{(p.reports || []).length}</span>
+                    <span className="icon-tooltip-bubble -top-7 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-surface-1 border border-border-strong text-[9px] text-text-secondary whitespace-nowrap">
+                      Reports
+                    </span>
                   </div>
                 </div>
 
@@ -209,11 +225,12 @@ export default function ProjectsPage() {
                     <Clock className="w-2.5 h-2.5" />
                     {formatRelativeTime(p.updatedAt)}
                   </span>
-                  
+
                   <button
                     onClick={() => router.push(`/dashboard/projects/${p.id}`)}
-                    className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-text-primary transition-all"
+                    className="project-card-view cursor-target flex items-center gap-0.5 p-1 rounded hover:bg-surface-3 text-text-muted hover:text-text-primary transition-colors"
                   >
+                    <span className="text-[10px] font-semibold">View</span>
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
