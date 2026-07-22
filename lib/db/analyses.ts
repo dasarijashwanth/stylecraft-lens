@@ -217,7 +217,7 @@ export async function completeAnalysis(analysisId: string, durationMs: number) {
 // couldn't be confirmed), status stays "running", and pending_question's
 // mere presence is what stops runAnalysisStep from advancing until
 // mergeAnalysisContext (via POST /api/analyses/:id/answer) clears it.
-export async function setPendingQuestion(analysisId: string, question: { question: string; foundSoFar?: string }) {
+export async function setPendingQuestion(analysisId: string, question: { question: string; foundSoFar?: string; field?: string; placeholder?: string }) {
   if (isSupabaseConfigured) {
     const { error } = await supabaseAdmin
       .from("analyses")

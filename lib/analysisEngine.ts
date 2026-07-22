@@ -17,6 +17,8 @@ import { finalizeCitations } from "./citations";
 import { insertProvenance } from "./db/section-provenance";
 import { resolveCacheKey } from "./product-cache-key";
 import { buildPricingProvenanceTier } from "./section-provenance";
+import { computePriceBand, deriveTierKeyword, isWithinBand, buildOutOfBandLabel, parsePriceToNumber, type CompetitorTier } from "./price-band";
+import { getDocumentByProject, getDocumentFields } from "./db/documents";
 
 export interface AnalysisContext {
   id: string;
@@ -377,14 +379,18 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
 // text doesn't match the identified category (lib/category-synonyms.ts) —
 // a clipper can never survive into a hair-dryer analysis, even if the AI
 // itself proposed one.
-function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard) {
-  const fallbackCompetitors = getCategoryFallbackCompetitors(identity, defaultTier);
-
+// STAGE A — category/self-name/ASIN-placeholder filtering only. No price
+// awareness, no truncation to a fixed count: runs on whatever the AI/live
+// search actually returned (up to 8 per the bumped prompt count), producing
+// a clean candidate pool for applyPriceBandGate (below) to price-filter,
+// widen, and truncate AFTER Rainforest enrichment resolves real live prices.
+export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard): any[] {
   const incomingList = Array.isArray(competitors) ? competitors : [];
   const cleaned: any[] = [];
-  const limit = 5; // 5 established + 5 emerging = 10 total, per spec
-
-  const count = Math.max(incomingList.length, limit);
+  // Well above the 8 the prompt now requests — just a runaway-response cap,
+  // bounding how many candidates enrichCompetitorsWithRainforest ever has
+  // to look up.
+  const POOL_CAP = 12;
 
   // A real competitor's name never contains the analyzed product's own
   // name — that's the exact fabrication pattern confirmed live from OpenAI
@@ -399,99 +405,160 @@ function cleanCompetitors(competitors: any[], defaultTier: "legacy" | "emerging"
     return name.toLowerCase().includes(ownProductNameLower);
   }
 
-  for (let i = 0; i < count; i++) {
-    const fallback = fallbackCompetitors[i % fallbackCompetitors.length];
-    const rawIncoming = incomingList[i];
-    // Category-match validation guardrail: a competitor for a beard
-    // trimmer must actually be a trimmer — drop (treat as absent, backfill
-    // from same-category fallback data) anything that doesn't match.
-    // Also drop anything named after our own product (see comment above).
-    const incoming = rawIncoming
-      && competitorMatchesCategory(`${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`, identity.category, identity.subcategory)
-      && !isNamedAfterOwnProduct(rawIncoming.name || "")
-      ? rawIncoming
-      : undefined;
+  for (const rawIncoming of incomingList) {
+    if (cleaned.length >= POOL_CAP) break;
+    if (!rawIncoming || !rawIncoming.name) continue;
+    if (!competitorMatchesCategory(`${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`, identity.category, identity.subcategory)) continue;
+    if (isNamedAfterOwnProduct(rawIncoming.name || "")) continue;
 
-    if (incoming) {
-      let asin = incoming.asin || "";
-      let price = incoming.price || "";
-      let rating = incoming.rating || "";
-      let amazonUrl = incoming.amazon_url || "";
+    let asin = rawIncoming.asin || "";
+    let amazonUrl = rawIncoming.amazon_url || "";
 
-      // Matches the LITERAL "BXXXXXXXXX" placeholder pattern from the
-      // prompt's own schema example (3+ consecutive X's), not just any
-      // ASIN containing the letter X — real ASINs commonly contain X
-      // (e.g. "B0DMXJPM4T", confirmed live via Rainforest), and a plain
-      // substring check was discarding perfectly valid, freshly-verified
-      // real ASINs and replacing them with stale fallback data.
-      const isAsinPlaceholder = !asin || /X{3,}/i.test(asin) || asin.includes("000000") || !/^[A-Z0-9]{10}$/i.test(asin);
-      const isUrlPlaceholder = !amazonUrl || /X{3,}/i.test(amazonUrl) || amazonUrl.includes("000000");
+    // Matches the LITERAL "BXXXXXXXXX" placeholder pattern from the
+    // prompt's own schema example (3+ consecutive X's), not just any
+    // ASIN containing the letter X — real ASINs commonly contain X
+    // (e.g. "B0DMXJPM4T", confirmed live via Rainforest).
+    const isAsinPlaceholder = !asin || /X{3,}/i.test(asin) || asin.includes("000000") || !/^[A-Z0-9]{10}$/i.test(asin);
+    const isUrlPlaceholder = !amazonUrl || /X{3,}/i.test(amazonUrl) || amazonUrl.includes("000000");
 
-      // Only curated fallback data (real brands for known categories) is
-      // trustworthy enough to borrow into a real AI-returned name — when
-      // there's no curated fallback for this category, leave the
-      // placeholder asin/url as null/empty; enrichCompetitorsWithRainforest
-      // will try to resolve a real ASIN via live search next, and if that
-      // fails too, the competitor card shows the honest "Unverified" badge
-      // rather than a fabricated ASIN.
-      if ((isAsinPlaceholder || isUrlPlaceholder) && fallback) {
-        asin = fallback.asin;
-        price = fallback.price;
-        rating = fallback.rating;
-        amazonUrl = `https://www.amazon.com/dp/${asin}`;
-      } else if (!isAsinPlaceholder) {
-        amazonUrl = `https://www.amazon.com/dp/${asin}`;
-      } else {
-        asin = "";
-        amazonUrl = "";
-      }
+    if (isAsinPlaceholder) {
+      // No trustworthy identifier — leave blank rather than borrowing a
+      // fallback brand's ASIN (that's now applyPriceBandGate's job, and
+      // only for a genuinely unfilled slot, never to patch a real AI pick).
+      // enrichCompetitorsWithRainforest tries to resolve a real ASIN via
+      // live search next; if that fails too, the card shows the honest
+      // "Unverified" badge rather than a fabricated identifier.
+      asin = "";
+      amazonUrl = "";
+    } else if (isUrlPlaceholder) {
+      amazonUrl = `https://www.amazon.com/dp/${asin}`;
+    }
 
-      cleaned.push({
-        ...incoming,
-        asin,
-        amazon_url: amazonUrl,
-        price: price && price !== "—" ? price : (fallback?.price ?? "—"),
-        rating: rating && rating !== "—" ? rating : (fallback?.rating ?? "—"),
-        tier: defaultTier,
-        initials: incoming.initials || incoming.name.split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase() || fallback?.initials,
-        // Strengths/weaknesses/recent buyer sentiment are never AI-generated —
-        // populated on demand from real Amazon reviews via
-        // /api/amazon/reviews-analysis/[asin] (see CompetitorCard).
-        strengths: [],
-        weaknesses: [],
-        recent_news: [],
-      });
-    } else if (fallback) {
-      // Only reachable for categories with real curated fallback data
-      // (lib/analysisEngine.ts's known-category branches above) — the
-      // generic/uncurated branch now returns [] rather than fabricating
-      // companies, so `fallback` is undefined below for those categories
-      // and this slot is skipped entirely (see comment there for why).
-      cleaned.push({
-        name: fallback.name,
-        brand: fallback.brand,
-        tier: defaultTier,
-        asin: fallback.asin,
-        amazon_url: `https://www.amazon.com/dp/${fallback.asin}`,
-        price: fallback.price,
-        rating: fallback.rating,
-        review_count: fallback.reviewCount || (fallback as any).review_count,
-        monthly_sales: fallback.sales || (fallback as any).monthly_sales,
-        bsr_rank: fallback.bsr || (fallback as any).bsr_rank,
-        initials: fallback.initials,
+    cleaned.push({
+      ...rawIncoming,
+      // Preserves the AI's own claimed price string before enrichment can
+      // overwrite `price` — applyPriceBandGate falls back to this when no
+      // live Rainforest price resolves for a candidate.
+      ai_claimed_price: rawIncoming.price || null,
+      asin,
+      amazon_url: amazonUrl,
+      tier: defaultTier,
+      initials: rawIncoming.initials || (rawIncoming.name || "").split(" ").slice(0, 2).map((w: string) => w[0]).join("").toUpperCase(),
+      // Strengths/weaknesses/recent buyer sentiment are never AI-generated —
+      // populated on demand from real Amazon reviews via
+      // /api/amazon/reviews-analysis/[asin] (see CompetitorCard).
+      strengths: [],
+      weaknesses: [],
+      recent_news: [],
+    });
+  }
+
+  return cleaned;
+}
+
+// STAGE B — the price-band gate. Must run AFTER enrichCompetitorsWithRainforest
+// (so `price_raw` is a real live Rainforest number where resolvable, not
+// just whatever the AI claimed). Widens the band stepwise (±30% -> ±40% ->
+// ±50%) only if fewer than `limit` candidates are in-band, tags any
+// accepted out-of-band pick with the reason, and only then tops up any
+// still-unfilled slots from the curated fallback dataset — itself gated by
+// the exact same price check, never a silent price-unaware fill.
+export function applyPriceBandGate(candidates: any[], targetPriceRaw: number, tier: CompetitorTier, identity: IdentityCard, limit = 5): any[] {
+  const withPrice = candidates.map(c => ({
+    ...c,
+    _resolvedPrice: typeof c.price_raw === "number" ? c.price_raw : parsePriceToNumber(c.ai_claimed_price),
+  }));
+
+  const primaryBand = computePriceBand(targetPriceRaw, tier, 0);
+  const widestBand = computePriceBand(targetPriceRaw, tier, 2);
+
+  let accepted: any[] = [];
+  for (let widenStep = 0; widenStep <= 2; widenStep++) {
+    const band = computePriceBand(targetPriceRaw, tier, widenStep);
+    const inBand = withPrice.filter(c => c._resolvedPrice != null && isWithinBand(c._resolvedPrice, band));
+    if (inBand.length >= limit || widenStep === 2) {
+      accepted = inBand;
+      break;
+    }
+  }
+
+  // Reject-logging for observability — every candidate that never made it
+  // in, with the reason (no resolvable price at all vs. genuinely outside
+  // even the widest band).
+  for (const c of withPrice) {
+    if (accepted.includes(c)) continue;
+    if (c._resolvedPrice == null) {
+      console.warn(`[price-band] rejected "${c.name}" (${tier}) — no resolvable price (no live Rainforest match, no AI-claimed price)`);
+    } else {
+      console.warn(`[price-band] rejected "${c.name}" (${tier}) — $${c._resolvedPrice.toFixed(2)} is outside even the widest band ($${widestBand.min.toFixed(2)}-$${widestBand.max.toFixed(2)})`);
+    }
+  }
+
+  // Prefer in-band (primary-band) candidates first; among out-of-band
+  // (only-reachable-via-widening) candidates, prefer whichever is closest
+  // to the primary band's edge. Ties preserve the AI's own original
+  // preference order (stable sort, comparator returns 0).
+  const sorted = [...accepted].sort((a, b) => {
+    const aIn = isWithinBand(a._resolvedPrice, primaryBand);
+    const bIn = isWithinBand(b._resolvedPrice, primaryBand);
+    if (aIn !== bIn) return aIn ? -1 : 1;
+    if (aIn && bIn) return 0;
+    const aDist = Math.min(Math.abs(a._resolvedPrice - primaryBand.min), Math.abs(a._resolvedPrice - primaryBand.max));
+    const bDist = Math.min(Math.abs(b._resolvedPrice - primaryBand.min), Math.abs(b._resolvedPrice - primaryBand.max));
+    return aDist - bDist;
+  });
+
+  const final: any[] = sorted.slice(0, limit).map(c => {
+    const { _resolvedPrice, ai_claimed_price, ...rest } = c;
+    const outOfBand = !isWithinBand(_resolvedPrice, primaryBand);
+    return outOfBand
+      ? { ...rest, out_of_band: true, out_of_band_reason: buildOutOfBandLabel(_resolvedPrice, primaryBand) }
+      : rest;
+  });
+
+  // Still short after exhausting real candidates — top up from the curated
+  // fallback dataset, but only entries whose own static price also passes
+  // the widest band. Only reachable for categories with real curated
+  // fallback data; the generic/uncurated branch returns [] (see
+  // getCategoryFallbackCompetitors), so this is a no-op for those.
+  if (final.length < limit) {
+    const usedNames = new Set(final.map(c => (c.name || "").toLowerCase()));
+    const fallbackPool = getCategoryFallbackCompetitors(identity, tier);
+    for (const fb of fallbackPool) {
+      if (final.length >= limit) break;
+      if (usedNames.has((fb.name || "").toLowerCase())) continue;
+      const fbPrice = parsePriceToNumber(fb.price);
+      if (fbPrice == null || !isWithinBand(fbPrice, widestBand)) continue;
+
+      usedNames.add((fb.name || "").toLowerCase());
+      const outOfBand = !isWithinBand(fbPrice, primaryBand);
+      final.push({
+        name: fb.name,
+        brand: fb.brand,
+        tier,
+        asin: fb.asin,
+        amazon_url: `https://www.amazon.com/dp/${fb.asin}`,
+        price: fb.price,
+        price_raw: fbPrice,
+        rating: fb.rating,
+        review_count: fb.reviewCount || (fb as any).review_count,
+        monthly_sales: fb.sales || (fb as any).monthly_sales,
+        bsr_rank: fb.bsr || (fb as any).bsr_rank,
+        initials: fb.initials,
         key_features: [],
         strengths: [],
         weaknesses: [],
         recent_news: [],
         top_feature_summary: "",
+        ...(outOfBand ? { out_of_band: true, out_of_band_reason: buildOutOfBandLabel(fbPrice, primaryBand) } : {}),
       });
     }
-    // else: no real incoming competitor and no curated fallback for this
-    // slot — skip it. Returning fewer real competitors is correct;
-    // inventing a fake one to fill the slot is not.
   }
+  // else: still short and no curated fallback data covers this category —
+  // returning fewer real competitors is correct; inventing a fake one to
+  // fill the slot is not.
 
-  return cleaned;
+  return final;
 }
 
 // Runs `fn` over `items` with at most `limit` in flight at once — Rainforest
@@ -631,7 +698,7 @@ export interface AnalysisStepResult {
   // Set when Stage 0 (Product Identification) can't confidently determine
   // the category and the pipeline has paused — the client must collect an
   // answer and POST /api/analyses/:id/answer before calling continue again.
-  pendingQuestion?: { question: string; foundSoFar?: string };
+  pendingQuestion?: { question: string; foundSoFar?: string; field?: string; placeholder?: string };
 }
 
 function hasResult(result: any): boolean {
@@ -656,6 +723,38 @@ function hasResult(result: any): boolean {
 // fallback/market-data routers keyed off `industry` (which only ever has
 // two grooming-related values), so every analysis routed to clipper data
 // even when the AI behaved correctly.
+// Resolves the one target price competitor discovery anchors on, in
+// priority order: (1) the analysis form's own "Target Price" field, (2) the
+// linked project's GTM document's approved_pricing field (same waterfall
+// lib/db/reports.ts already uses at report-render time, kept consistent
+// here), (3) Phase 0's own live/web-search-derived observed price. Returns
+// null only when none of these resolve — runAnalysisStep's Phase 1 branch
+// pauses and asks the user rather than proceeding unpriced.
+export async function resolveDiscoveryTargetPrice(context: AnalysisContext, identity: IdentityCard): Promise<number | null> {
+  const fromContext = parsePriceToNumber(context.pricePoint);
+  if (fromContext != null) return fromContext;
+
+  if (context.projectId) {
+    try {
+      const gtmDoc = await getDocumentByProject(context.projectId, "gtm");
+      if (gtmDoc) {
+        const fields = await getDocumentFields(gtmDoc.id);
+        const approvedPricing = fields.find(f => f.field_id === "approved_pricing")?.answer ?? null;
+        const fromGtm = parsePriceToNumber(approvedPricing);
+        if (fromGtm != null) return fromGtm;
+      }
+    } catch {
+      // Best-effort only — a missing/broken GTM doc must never block discovery.
+    }
+  }
+
+  // priceObserved.value is already a number (see product-identification.ts) —
+  // no string parsing needed here, unlike the other two candidates above.
+  if (typeof identity.priceObserved?.value === "number") return identity.priceObserved.value;
+
+  return null;
+}
+
 export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepResult> {
   const startTime = Date.now();
   const record: any = await getAnalysis(analysisId);
@@ -732,16 +831,35 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // ----------------------------------------------------
       if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
 
+      // Competitors must cluster around the user's actual target price — a
+      // $25 product can never be a real competitor to a $260 product. If no
+      // price is resolvable from anywhere, pause and ask rather than
+      // guessing/proceeding unpriced (same pause mechanism as Phase 0's
+      // product-identity question, just anchored on phase 1 instead of 0).
+      const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identityCard);
+      if (targetPriceRaw == null) {
+        const question = {
+          question: `What price are you targeting for ${context.productName}? (e.g. $259.95)`,
+          field: "pricePoint",
+          placeholder: "e.g. $259.95",
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      }
+
       const result: any = await withAiFallback(
         "Phase 1",
-        hasGeminiKey ? () => executePhase1Gemini(context, identityCard, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, onSearchUsed) : null,
-        () => generateMockPhase1(context, identityCard)
+        hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+        hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+        () => generateMockPhase1(context, identityCard, targetPriceRaw)
       );
 
-      result.competitors = cleanCompetitors(result.competitors, "legacy", identityCard);
+      result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      }
+      result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "legacy", identityCard, 5);
+      if (hasRainforestKey) {
         await persistPricingProvenance(result.competitors, analysisId);
       }
       webSearchCount += result.web_searches_performed || 0;
@@ -756,16 +874,33 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // ----------------------------------------------------
       if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
 
+      // Already resolved once during Phase 1 (and, if it required a pause,
+      // the user's answer is now in context.pricePoint) — re-resolving here
+      // is just a cheap re-read, not a second pause opportunity.
+      const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identityCard);
+      if (targetPriceRaw == null) {
+        const question = {
+          question: `What price are you targeting for ${context.productName}? (e.g. $259.95)`,
+          field: "pricePoint",
+          placeholder: "e.g. $259.95",
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      }
+
       const result: any = await withAiFallback(
         "Phase 2",
-        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, onSearchUsed) : null,
-        () => generateMockPhase2(context, identityCard, phase1Result)
+        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+        () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result)
       );
 
-      result.competitors = cleanCompetitors(result.competitors, "emerging", identityCard);
+      result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      }
+      result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "emerging", identityCard, 5);
+      if (hasRainforestKey) {
         await persistPricingProvenance(result.competitors, analysisId);
       }
       webSearchCount += result.web_searches_performed || 0;
@@ -1029,25 +1164,30 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
 // known-brand hint is only included when the identified category matches
 // a family this app already has real brand knowledge for
 // (lib/known-brands-by-category.ts); otherwise the model searches freely.
-function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard) {
+function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number) {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
+  const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
+  const band = computePriceBand(targetPriceRaw, "legacy", 0);
+  const tierKeyword = deriveTierKeyword(targetPriceRaw);
+  const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
 
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
-Your task: Research up to 5 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
+Your task: Research up to 8 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
-For each brand, find their ONE best matching product in the SAME category as the identified product (prioritize matching key attributes first, then closest price to target price point). Return up to 5 products total.
+For each brand, find their ONE best matching product THAT FALLS WITHIN THE ACCEPTABLE PRICE RANGE below, in the SAME category as the identified product — among in-band candidates only, prioritize matching key attributes first. Return up to 8 products total.
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
 3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
 4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term (e.g. "${identity.keyAttributes[0] || identity.subcategory} ${identity.category}") before selecting competitors.
-5. NEVER invent a filler/placeholder company to reach 5 results (e.g. generic-sounding names like "Vanguard Corp", "Prime Tech", "Heritage Brand", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up 1-3 real competitors, return only those 1-3. Returning fewer real results is correct; inventing fake ones is not.
-6. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+5. PRICE IS A HARD CONSTRAINT, NOT A TIEBREAKER: the acceptable price range for every candidate is ${bandLabel} (the user's target price of ${targetDisplay} ± 30%). Reject any product whose real Amazon price falls outside this range, even if it is an excellent brand/attribute match — prefer a different, in-range product from the same or another major brand instead. Do not substitute an out-of-range product to fill a slot.
+6. NEVER invent a filler/placeholder company to reach the requested count (e.g. generic-sounding names like "Vanguard Corp", "Prime Tech", "Heritage Brand", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up a few real, in-range competitors, return only those. Returning fewer real results is correct; inventing fake ones is not.
+7. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -1075,12 +1215,13 @@ Return this EXACT JSON schema:
           "detail": "1–2 sentence explanation of what this means for the professional user"
         }
       ],
-      "top_feature_summary": "Single sentence — their #1 differentiating feature"
+      "top_feature_summary": "Single sentence — their #1 differentiating feature",
+      "inclusion_rationale": "One sentence: why this is a real established/major-brand competitor at this price tier, plus a source (e.g. 'Wahl — decades-long clipper incumbent, #1 BSR in Beauty & Personal Care, per Amazon listing')."
     }
   ]
 }`;
 
-  const userPrompt = `Research up to 5 established large brand competitors for this identified product:
+  const userPrompt = `Research up to 8 established large brand competitors for this identified product:
 
 Product Name: ${context.productName}
 Identified Category: ${identity.category}
@@ -1088,20 +1229,21 @@ Identified Subcategory: ${identity.subcategory}
 What it is: ${identity.whatItIs}
 Key Attributes: ${attributesLine}
 Target Market: ${context.targetMarket}
-Target Price Point: ${context.pricePoint || identity.priceObserved?.value || "—"}
+Target Price Point: ${targetDisplay} — ACCEPTABLE RANGE: ${bandLabel} (see CRITICAL RULES). Reject anything outside this range.
 Key Differentiator: ${context.keyDiff || "—"}
 Company Context: ${context.companyContext || "—"}
 
 Instructions:
 1. ${brandHint ? `Check these known brands first: ${brandHint.join(", ")} — then add any other established brand your search finds in this category.` : "Search broadly for established brands in this exact category."}
-2. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
-3. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
+2. Include the price tier in at least one of your searches, e.g. "best ${tierKeyword} ${identity.subcategory || identity.category} ${bandLabel}", to bias results toward the correct price segment.
+3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
+4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity);
+async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -1119,22 +1261,26 @@ function assertHasCompetitors(parsed: any): any {
   return parsed;
 }
 
-async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity);
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard) {
+function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number) {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
+  const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
+  const band = computePriceBand(targetPriceRaw, "emerging", 0);
+  const tierKeyword = deriveTierKeyword(targetPriceRaw);
+  const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
 
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
-Your task: Research 5 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
+Your task: Research up to 8 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
 
 CRITICAL RULES:
@@ -1142,8 +1288,9 @@ CRITICAL RULES:
 2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
 3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
 4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term before selecting competitors.
-5. NEVER invent a filler/placeholder company to reach 5 results (e.g. generic-sounding names like "NovaDyne", "Flux DTC", "Zenith Lab", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up 1-3 real competitors, return only those 1-3. Returning fewer real results is correct; inventing fake ones is not.
-6. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+5. PRICE IS A HARD CONSTRAINT: the acceptable price range for every candidate is ${bandLabel} (the user's target price of ${targetDisplay}). Value/indie challengers priced meaningfully below this range are still legitimately relevant competitors, which is why this range already extends lower than the established-brand search — but reject anything above the range, and never below 50% of the target price. Reject any product priced outside ${bandLabel}, even if it is an excellent category/attribute match.
+6. NEVER invent a filler/placeholder company to reach the requested count (e.g. generic-sounding names like "NovaDyne", "Flux DTC", "Zenith Lab", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up a few real, in-range competitors, return only those. Returning fewer real results is correct; inventing fake ones is not.
+7. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -1171,12 +1318,13 @@ Return this EXACT JSON schema:
           "detail": "1–2 sentence explanation of what this means for the user"
         }
       ],
-      "top_feature_summary": "Single sentence — their #1 differentiating feature"
+      "top_feature_summary": "Single sentence — their #1 differentiating feature",
+      "inclusion_rationale": "One sentence: why this is a real emerging/indie competitor at this price tier, plus a source (e.g. 'DTC brand launched 2023, growing BSR momentum, per Amazon listing')."
     }
   ]
 }`;
 
-  const userPrompt = `Research 5 indie/emerging competitor products for this identified product:
+  const userPrompt = `Research up to 8 indie/emerging competitor products for this identified product:
 
 Product Name: ${context.productName}
 Identified Category: ${identity.category}
@@ -1184,26 +1332,27 @@ Identified Subcategory: ${identity.subcategory}
 What it is: ${identity.whatItIs}
 Key Attributes: ${attributesLine}
 Target Market: ${context.targetMarket}
-Target Price Point: ${context.pricePoint || identity.priceObserved?.value || "—"}
+Target Price Point: ${targetDisplay} — ACCEPTABLE RANGE: ${bandLabel} (see CRITICAL RULES). Reject anything outside this range.
 Key Differentiator: ${context.keyDiff || "—"}
 
 Instructions:
-1. Search Amazon for emerging brand products matching the identified category and key attributes first, price secondary.
-2. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
-3. ${brandHint ? `Exclude the large brands: ${brandHint.join(", ")}.` : "Exclude any large established brand — focus on indie/newer names."}
-4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
+1. Search Amazon for emerging brand products matching the identified category and key attributes, within the acceptable price range — price is a hard filter here, not a secondary preference.
+2. Include the price tier in at least one of your searches, e.g. "best value ${identity.subcategory || identity.category} ${bandLabel}", to bias results toward the correct price segment.
+3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
+4. ${brandHint ? `Exclude the large brands: ${brandHint.join(", ")}.` : "Exclude any large established brand — focus on indie/newer names."}
+5. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity);
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
@@ -1249,20 +1398,27 @@ async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityC
 // Runs whenever Rainforest is configured, regardless of category — the
 // static getCategoryFallbackCompetitors data is now a last-resort only,
 // used solely when Rainforest itself is unavailable/fails outright.
-async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", excludeNames: string[] = []): Promise<any[]> {
+async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, excludeNames: string[] = []): Promise<any[]> {
   if (!hasRainforestKey) return [];
   const category = identity.subcategory || identity.category;
   if (!category) return [];
 
   const brandHint = getKnownBrandsHint(identity.category) || [];
   const searchTerms: string[] = [];
+  // Tried first when a target price is known — biases the search toward the
+  // correct price segment before falling through to generic phrasings.
+  if (targetPriceRaw != null) {
+    const band = computePriceBand(targetPriceRaw, tier, 0);
+    const tierKeyword = deriveTierKeyword(targetPriceRaw);
+    searchTerms.push(`best ${tierKeyword} ${category} $${band.min.toFixed(0)}-$${band.max.toFixed(0)}`);
+  }
   if (brandHint.length) {
     const slice = tier === "legacy" ? brandHint.slice(0, 5) : brandHint.slice(-5);
     for (const b of slice) searchTerms.push(`${b} ${category}`);
   }
   // Multiple phrasings widen the pool of distinct real products found —
   // a single search term (especially for a niche category with no known
-  // brand hint) often can't fill all 5 slots after de-duplication against
+  // brand hint) often can't fill the pool after de-duplication against
   // the other tier's results, leaving slots to fall back to generic
   // placeholder brands unnecessarily.
   if (tier === "legacy") {
@@ -1274,12 +1430,16 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
   const seenAsins = new Set<string>();
   const seenTitleFragments = new Set(excludeNames.map(n => n.toLowerCase().slice(0, 24)));
   const collected: any[] = [];
+  // A larger pool than the final limit (5) so applyPriceBandGate downstream
+  // has real candidates to filter/widen against instead of being handed
+  // exactly 5 already-unfiltered results.
+  const POOL_SIZE = 10;
 
   for (const term of searchTerms) {
-    if (collected.length >= 5) break;
+    if (collected.length >= POOL_SIZE) break;
     const results = await searchAmazonCategory(term, 8);
     for (const r of results) {
-      if (collected.length >= 5) break;
+      if (collected.length >= POOL_SIZE) break;
       if (seenAsins.has(r.asin)) continue;
       const titleLower = r.title.toLowerCase();
       if (Array.from(seenTitleFragments).some(f => f && titleLower.includes(f))) continue;
@@ -1295,6 +1455,7 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
         asin: r.asin,
         amazon_url: `https://www.amazon.com/dp/${r.asin}`,
         price: r.price,
+        price_raw: r.price_raw,
         rating: r.rating,
         review_count: r.reviewsTotal,
         monthly_sales: r.monthlyStr,
@@ -1314,8 +1475,8 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
 
 // ----------------------------------------------------
 // SMART MOCK GENERATORS FOR OFFLINE / NO-KEY USE
-async function generateMockPhase1(context: AnalysisContext, identity: IdentityCard) {
-  const live = await discoverCompetitorsLive(identity, "legacy");
+async function generateMockPhase1(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null) {
+  const live = await discoverCompetitorsLive(identity, "legacy", targetPriceRaw);
   if (live.length > 0) {
     return { web_searches_performed: live.length, competitors: live };
   }
@@ -1365,9 +1526,9 @@ async function generateMockPhase1(context: AnalysisContext, identity: IdentityCa
   };
 }
 
-async function generateMockPhase2(context: AnalysisContext, identity: IdentityCard, phase1?: any) {
+async function generateMockPhase2(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null, phase1?: any) {
   const excludeNames = (phase1?.competitors || []).map((c: any) => c.name as string);
-  const live = await discoverCompetitorsLive(identity, "emerging", excludeNames);
+  const live = await discoverCompetitorsLive(identity, "emerging", targetPriceRaw, excludeNames);
   if (live.length > 0) {
     return { web_searches_performed: live.length, competitors: live };
   }

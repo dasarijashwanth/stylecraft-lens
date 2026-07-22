@@ -33,6 +33,14 @@ interface Competitor {
   model_number?:      string | null;
   description?:       string | null;
   images?:            string[];
+  // Set by lib/analysisEngine.ts's applyPriceBandGate when this competitor
+  // only made it in after the price band was widened (fewer than 5 in-band
+  // candidates were found) — never set for a normal in-band match.
+  out_of_band?:        boolean;
+  out_of_band_reason?: string | null;
+  // One sentence justifying why this is a real legacy/emerging competitor
+  // at this price tier, per lib/analysisEngine.ts's Phase 1/2 prompts.
+  inclusion_rationale?: string;
 }
 
 interface CompetitorCardProps {
@@ -321,6 +329,9 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
               </span>
               <span className="text-[10px] text-text-muted">by {c.brand}</span>
             </div>
+            {c.inclusion_rationale && (
+              <p className="text-[10px] text-text-muted italic mt-1 max-w-xs leading-snug">{c.inclusion_rationale}</p>
+            )}
           </div>
         </div>
 
@@ -372,7 +383,19 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
               Unverified — see search link
             </span>
           )}
+          {c.out_of_band && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title={c.out_of_band_reason || undefined}>
+              Outside Price Band
+            </span>
+          )}
         </div>
+      )}
+
+      {/* Widened-band disclosure — visible, not hover-only, since this is
+          competitive-intel messaging the user should always see, not stumble
+          into (see lib/analysisEngine.ts's applyPriceBandGate). */}
+      {c.out_of_band && c.out_of_band_reason && (
+        <p className="text-[10px] text-warning leading-snug">{c.out_of_band_reason}</p>
       )}
 
       {isValidAsin && <div className="text-[10px] text-text-muted font-mono leading-none">ASIN: {c.asin}</div>}

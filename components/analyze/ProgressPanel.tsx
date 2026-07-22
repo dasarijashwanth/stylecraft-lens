@@ -23,6 +23,12 @@ const PHASE_LABELS = [
 interface PendingQuestion {
   question: string;
   foundSoFar?: string;
+  // Which context field the answer patches — "category" (Phase 0 product
+  // identification, the original/default use of this pause mechanism) or
+  // "pricePoint" (Phase 1's price-anchored discovery gate). Absent on old
+  // paused questions that predate this field — treated as "category".
+  field?: string;
+  placeholder?: string;
 }
 
 interface Props {
@@ -146,10 +152,14 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             throw new Error(analysis.error_message || "Analysis failed");
           }
 
-          // The pipeline can't tell what the product actually is —
-          // pause and let the user answer instead of guessing.
+          // The pipeline paused for a clarifying answer — either Phase 0
+          // (product identity unclear) or Phase 1 (no target price
+          // resolvable, see lib/analysisEngine.ts's resolveDiscoveryTargetPrice).
+          // analysis.phase is whichever phase is actually paused (it's never
+          // advanced past while a question is pending), so the "waiting"
+          // highlight lands on the right step instead of always phase 0.
           if (analysis.pending_question) {
-            setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "running", message: "Waiting for your answer…" } : p)));
+            setPhases((prev) => prev.map((p, i) => (i === analysis.phase ? { ...p, status: "running", message: "Waiting for your answer…" } : p)));
             await new Promise<void>((resolve) => { resumeRef.current = resolve; setPendingQuestion(analysis.pending_question); });
             if (cancelled) return;
             setPendingQuestion(null);
@@ -358,7 +368,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
                   value={answerText}
                   onChange={(e) => setAnswerText(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
-                  placeholder="e.g. beard trimmer"
+                  placeholder={pendingQuestion.placeholder || "e.g. beard trimmer"}
                   className="flex-1 px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
                   autoFocus
                 />
@@ -390,7 +400,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
                 <CheckCircle className="w-5 h-5 text-success" />
               ) : phase.status === "error" ? (
                 <AlertCircle className="w-5 h-5 text-danger" />
-              ) : pendingQuestion && i === 0 ? (
+              ) : pendingQuestion && i === (pendingQuestion.field === "pricePoint" ? 1 : 0) ? (
                 <HelpCircle className="w-5 h-5 text-warning" />
               ) : phase.status === "running" ? (
                 <Loader2 className="w-5 h-5 text-accent animate-spin" />

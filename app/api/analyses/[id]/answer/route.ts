@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis, mergeAnalysisContext } from "@/lib/db/analyses";
 
-// Answers a paused Product Identification question (see
-// lib/product-identification.ts's needsUserInput gate). Merges the
-// answer into context.category and clears pending_question — phase stays
-// where it is, so the next POST .../continue retries identification,
-// which now trusts the user-supplied category directly rather than
-// pausing again.
+// Answers a paused question — either Product Identification (see
+// lib/product-identification.ts's needsUserInput gate) or, now, a missing
+// target price (see lib/analysisEngine.ts's resolveDiscoveryTargetPrice
+// gate before Phase 1 competitor discovery). Merges the answer into the
+// matching context field and clears pending_question — phase stays where
+// it is, so the next POST .../continue simply re-attempts whatever paused,
+// which now trusts the user-supplied value directly rather than pausing
+// again. `pending_question.field` defaults to "category" for old paused
+// questions that predate this field (never explicitly set).
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
@@ -24,7 +27,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return NextResponse.json({ error: "FORBIDDEN", message: "Not your analysis" }, { status: 403 });
     }
 
-    await mergeAnalysisContext(params.id, { category: answer.trim() });
+    const field = existing.pending_question?.field === "pricePoint" ? "pricePoint" : "category";
+    await mergeAnalysisContext(params.id, { [field]: answer.trim() });
     const analysis = await getAnalysis(params.id);
     return NextResponse.json({ analysis });
   } catch (error: any) {

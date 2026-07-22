@@ -449,6 +449,10 @@ export interface CategorySearchResult {
   asin: string;
   title: string;
   price: string;
+  // Real Rainforest-reported numeric price — lets a caller price-band-gate
+  // these results without a redundant second `type=product` lookup per
+  // candidate (see lib/analysisEngine.ts's applyPriceBandGate).
+  price_raw: number | null;
   rating: string;
   reviewsTotal: string;
   monthlyStr: string | null;
@@ -481,6 +485,7 @@ export async function searchAmazonCategory(searchTerm: string, limit = 8): Promi
         asin: r.asin,
         title: r.title,
         price: priceEntry?.raw || (typeof priceEntry?.value === "number" ? `$${priceEntry.value}` : "—"),
+        price_raw: typeof priceEntry?.value === "number" ? priceEntry.value : null,
         rating: typeof r.rating === "number" ? String(r.rating) : "—",
         reviewsTotal: typeof r.ratings_total === "number" ? r.ratings_total.toLocaleString() : "—",
         monthlyStr: r.recent_sales || null,
