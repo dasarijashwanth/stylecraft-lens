@@ -53,3 +53,16 @@ export async function callAiForFields(
 ): Promise<Record<string, { answer: string; source: string }> | null> {
   return callAiForJson(systemInstruction, userContent, label, opts);
 }
+
+// A field's `answer` is typed string, but it's really untrusted JSON parsed
+// from the AI's own response — confirmed live that a malformed/partial
+// response (e.g. a chunk recovering from a timeout) can hand back a bare
+// number or nested object instead of a string, which has no .trim() method
+// and crashes the whole generation step. Every call site that reads an
+// AI-returned answer should go through this instead of `.answer?.trim()`
+// directly.
+export function coerceAiAnswer(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return undefined;
+  return String(value).trim();
+}

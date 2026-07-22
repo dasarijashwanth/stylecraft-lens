@@ -7,7 +7,7 @@
 // (the rest were contractually forced to N/A the moment the project's own
 // documents didn't already contain the spec), which was the main reason
 // most fields never completed.
-import { callAiForFields } from "./ai-json-call";
+import { callAiForFields, coerceAiAnswer } from "./ai-json-call";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
@@ -166,7 +166,7 @@ async function callAiPerSection(productName: string, schema: GtmField[], userCon
 
 function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: string; source: string }> | null, derived: Record<string, GtmFieldAnswer>): { field: GtmFieldAnswer; fromAi: boolean } {
   const got = aiRaw?.[schemaField.id];
-  const aiAnswer = got?.answer?.trim();
+  const aiAnswer = coerceAiAnswer(got?.answer);
   const aiUsable = !!aiAnswer && aiAnswer.toUpperCase() !== "N/A" && aiAnswer.toUpperCase() !== "TBD";
   if (aiUsable) {
     return { field: { answer: aiAnswer!, source: (got?.source as GtmFieldSource) || "multiple" }, fromAi: true };
@@ -323,7 +323,7 @@ ${fieldList}`;
       const parsed = JSON.parse(cleanJsonString(text || "{}"));
 
       for (const f of eligible) {
-        const answer = parsed?.[f.id]?.answer?.trim();
+        const answer = coerceAiAnswer(parsed?.[f.id]?.answer);
         if (answer && answer.toUpperCase() !== "N/A") {
           fields[f.id] = { answer, source: "web", sourceDetail: { webSearchQueries: queries }, flagged: false };
         }
@@ -345,7 +345,7 @@ ${fieldList}`;
     const parsed = JSON.parse(cleanJsonString(response.text || "{}"));
 
     for (const f of eligible) {
-      const answer = parsed?.[f.id]?.answer?.trim();
+      const answer = coerceAiAnswer(parsed?.[f.id]?.answer);
       if (answer && answer.toUpperCase() !== "N/A") {
         fields[f.id] = { answer, source: "web", sourceDetail: { webSearchQueries: queries }, flagged: false };
       }
@@ -442,7 +442,7 @@ async function guardWrittenFieldsQuality(
       // shorter timeout each keeps the whole Promise.all safely inside the
       // pipeline's remaining time budget (checked just above this block).
       const retryRaw = await callAi(retryInstruction, userContent, { timeoutMs: 20_000 });
-      const retryAnswer = retryRaw?.[f.id]?.answer?.trim();
+      const retryAnswer = coerceAiAnswer(retryRaw?.[f.id]?.answer);
 
       const exemplar = GENERIC_EXEMPLARS[f.id];
       const stillBoilerplate = other?.answer && retryAnswer ? textSimilarity(retryAnswer, other.answer) > BOILERPLATE_SIMILARITY_THRESHOLD : false;

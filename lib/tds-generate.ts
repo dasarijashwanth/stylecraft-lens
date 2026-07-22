@@ -4,7 +4,7 @@
 // backs exactly two callers — the initial capture during project
 // creation, and the explicit "re-capture snapshot" action (see
 // lib/snapshot-capture.ts and app/api/projects/[id]/snapshot/route.ts).
-import { callAiForFields } from "./ai-json-call";
+import { callAiForFields, coerceAiAnswer } from "./ai-json-call";
 import { TDS_FIELD_SCHEMA, TdsField, TdsFieldAnswer } from "./tds-field-schema";
 import { verifyGrounding } from "./gtm-grounding";
 
@@ -78,7 +78,7 @@ export async function generateTdsFields(
   const result: Record<string, TdsFieldAnswer> = {};
   for (const f of schema) {
     const got = aiRaw?.[f.id];
-    const answer = got?.answer?.trim();
+    const answer = coerceAiAnswer(got?.answer);
     const usable = !!answer && answer.toUpperCase() !== "N/A" && answer !== TDS_NOT_LISTED;
     result[f.id] = usable
       ? { answer: answer!, source: (got?.source === "project_record" ? "project_record" : "amazon") }
