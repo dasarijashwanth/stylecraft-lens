@@ -827,8 +827,20 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
     if (record.phase === 1) {
       // ----------------------------------------------------
-      // PHASE 1: ESTABLISHED-COMPETITOR DISCOVERY
+      // PHASE 1+2 (merged): ESTABLISHED + EMERGING COMPETITOR DISCOVERY
       // ----------------------------------------------------
+      // These used to run as two separate sequential /continue round-trips,
+      // but they have no real data dependency on each other — Phase 2's
+      // "already covered" brand exclusion comes from the static known-
+      // brands hint (see buildPhase2Prompt), never from Phase 1's actual
+      // output. Running both AI calls (and their Rainforest enrichment /
+      // price-band-gate passes) concurrently via Promise.all cuts a whole
+      // phase's worth of wall-clock time off every analysis — confirmed in
+      // production to often be the largest chunk of total run time, and
+      // the single biggest lever for "analyze feels slow." Still safely
+      // within Vercel's 60s cap: each provider call's own timeout ceiling
+      // (45s) is unchanged either way, but concurrent means the wall time
+      // is max(phase1, phase2), not phase1 + phase2.
       if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
 
       // Competitors must cluster around the user's actual target price — a
@@ -836,6 +848,9 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // price is resolvable from anywhere, pause and ask rather than
       // guessing/proceeding unpriced (same pause mechanism as Phase 0's
       // product-identity question, just anchored on phase 1 instead of 0).
+      // Resolved once and shared by both phases below (previously each
+      // phase re-resolved it independently, since they ran as separate
+      // requests).
       const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identityCard);
       if (targetPriceRaw == null) {
         const question = {
@@ -847,28 +862,67 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
       }
 
-      const result: any = await withAiFallback(
-        "Phase 1",
-        hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        () => generateMockPhase1(context, identityCard, targetPriceRaw),
-        startTime
-      );
+      const [phase1Fresh, phase2Fresh]: any[] = await Promise.all([
+        withAiFallback(
+          "Phase 1",
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          () => generateMockPhase1(context, identityCard, targetPriceRaw),
+          startTime
+        ),
+        withAiFallback(
+          "Phase 2",
+          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          // No phase-1 result to exclude-by-name here (it hasn't been
+          // computed yet — the two run concurrently) — only affects the
+          // rare double-fallback-to-mock case, where a duplicate name
+          // could in theory appear in both lists. Never a crash risk
+          // either way (generateMockPhase2's phase1 param is optional).
+          () => generateMockPhase2(context, identityCard, targetPriceRaw),
+          startTime
+        ),
+      ]);
 
-      result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
-      if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
-      }
-      result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "legacy", identityCard, 5);
-      if (hasRainforestKey) {
-        await persistPricingProvenance(result.competitors, analysisId);
-      }
-      webSearchCount += result.web_searches_performed || 0;
+      const [phase1Filtered, phase2Filtered] = [
+        filterCandidatesByCategoryAndIdentity(phase1Fresh.competitors, "legacy", identityCard),
+        filterCandidatesByCategoryAndIdentity(phase2Fresh.competitors, "emerging", identityCard),
+      ];
 
-      await updateAnalysisPhase(analysisId, 2, "phase1_result", result, webSearchCount);
-      return { analysisId, phase: 2, status: "running", stepResult: result, totalSearches: webSearchCount };
+      const [phase1Enriched, phase2Enriched] = await Promise.all([
+        hasRainforestKey ? enrichCompetitorsWithRainforest(phase1Filtered) : Promise.resolve(phase1Filtered),
+        hasRainforestKey ? enrichCompetitorsWithRainforest(phase2Filtered) : Promise.resolve(phase2Filtered),
+      ]);
+
+      phase1Fresh.competitors = applyPriceBandGate(phase1Enriched, targetPriceRaw, "legacy", identityCard, 5);
+      phase2Fresh.competitors = applyPriceBandGate(phase2Enriched, targetPriceRaw, "emerging", identityCard, 5);
+
+      if (hasRainforestKey) {
+        // Independent rows keyed by each competitor's own asin/name — safe
+        // to persist both sets concurrently, no shared-row race.
+        await Promise.all([
+          persistPricingProvenance(phase1Fresh.competitors, analysisId),
+          persistPricingProvenance(phase2Fresh.competitors, analysisId),
+        ]);
+      }
+
+      webSearchCount += (phase1Fresh.web_searches_performed || 0) + (phase2Fresh.web_searches_performed || 0);
+
+      await updateAnalysisPhase(analysisId, 2, "phase1_result", phase1Fresh, webSearchCount);
+      await updateAnalysisPhase(analysisId, 3, "phase2_result", phase2Fresh, webSearchCount);
+      return {
+        analysisId,
+        phase: 3,
+        status: "running",
+        stepResult: { phase1: phase1Fresh, phase2: phase2Fresh },
+        totalSearches: webSearchCount,
+      };
     }
 
+    // Kept for backward compatibility with any analysis already sitting at
+    // phase 2 from before Phase 1+2 were merged above — a brand-new
+    // analysis never lands here anymore (the merged block above advances
+    // straight from phase 1 to phase 3).
     if (record.phase === 2) {
       // ----------------------------------------------------
       // PHASE 2: EMERGING-COMPETITOR DISCOVERY
