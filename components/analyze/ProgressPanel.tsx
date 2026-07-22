@@ -169,13 +169,8 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
           }
 
           const runningIdx = analysis.phase; // 0, 1, 2, or 3 — the phase about to run
-          // Phase 1 (large brand) and Phase 2 (emerging) now run concurrently
-          // as a single merged request (see lib/analysisEngine.ts) — both
-          // rows show "running" together instead of implying they're still
-          // sequential.
-          const runningIndices = runningIdx === 1 ? [1, 2] : [runningIdx];
           setPhases((prev) =>
-            prev.map((p, i) => (runningIndices.includes(i) ? { ...p, status: "running", message: "Running…" } : p))
+            prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
           );
 
           const { analysis: updated, step } = await fetchJsonWithRetry(
@@ -183,7 +178,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             { method: "POST" },
             (attempt) =>
               setPhases((prev) =>
-                prev.map((p, i) => (runningIndices.includes(i) ? { ...p, message: `Connection dropped — retrying (${attempt})…` } : p))
+                prev.map((p, i) => (i === runningIdx ? { ...p, message: `Connection dropped — retrying (${attempt})…` } : p))
               )
           );
           if (cancelled) return;
@@ -204,34 +199,17 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             results.identity = step.stepResult;
             setIdentity(step.stepResult);
           }
-          // step.phase === 2 only happens for an analysis already mid-flight
-          // from before Phase 1+2 were merged into one request — a brand-new
-          // analysis goes straight from phase 1 to phase 3.
           if (step.phase === 2) results.phase1 = step.stepResult;
-          const mergedPhase1And2 = step.phase === 3 && step.stepResult && step.stepResult.phase1 && step.stepResult.phase2;
-          if (step.phase === 3) {
-            if (mergedPhase1And2) {
-              results.phase1 = step.stepResult.phase1;
-              results.phase2 = step.stepResult.phase2;
-            } else {
-              // Legacy shape: this analysis was already at phase 2 before the
-              // merge shipped, so this step is just the old phase-2-only result.
-              results.phase2 = step.stepResult;
-            }
-          }
+          if (step.phase === 3) results.phase2 = step.stepResult;
           if (step.phase === 5) {
             results.phase3 = step.stepResult;
             results.reportId = step.reportId;
           }
 
-          if (mergedPhase1And2) {
-            setPhases((prev) => prev.map((p, i) => (i === 1 || i === 2 ? { ...p, status: "complete", message: "Complete" } : p)));
-          } else {
-            const completedIdx = step.phase === 5 ? 3 : step.phase - 1;
-            setPhases((prev) =>
-              prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
-            );
-          }
+          const completedIdx = step.phase === 5 ? 3 : step.phase - 1;
+          setPhases((prev) =>
+            prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
+          );
 
           analysis = updated;
         }
