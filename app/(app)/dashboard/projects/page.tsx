@@ -14,7 +14,8 @@ import {
   Clock,
   Briefcase,
   AlertTriangle,
-  RefreshCw
+  RefreshCw,
+  Presentation
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -216,6 +217,28 @@ export default function ProjectsPage() {
                     <span className="text-[11px] font-bold font-mono">{(p.reports || []).length}</span>
                     <span className="icon-tooltip-bubble -top-7 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-surface-1 border border-border-strong text-[9px] text-text-secondary whitespace-nowrap">
                       Reports
+                    </span>
+                  </div>
+                  <div className="project-card-stat icon-tooltip-group relative flex items-center gap-1">
+                    <Presentation
+                      className={`w-3.5 h-3.5 ${
+                        p.generationState?.phase === "deck"
+                          ? "text-success"
+                          : p.generationState?.phase === "gtm" && p.generationState?.status === "running"
+                          ? "text-accent animate-pulse"
+                          : p.generationState?.status === "failed"
+                          ? "text-danger"
+                          : "text-text-muted"
+                      }`}
+                    />
+                    <span className="icon-tooltip-bubble -top-7 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-surface-1 border border-border-strong text-[9px] text-text-secondary whitespace-nowrap">
+                      {p.generationState?.phase === "deck"
+                        ? "Deck ready"
+                        : p.generationState?.phase === "gtm" && p.generationState?.status === "running"
+                        ? "Generating deck…"
+                        : p.generationState?.status === "failed"
+                        ? "Generation failed"
+                        : "Deck queued"}
                     </span>
                   </div>
                 </div>

@@ -5,6 +5,10 @@ import { memoryDb } from "@/lib/memoryDb";
 import { getAuthSession } from "@/lib/auth";
 import { renderDocumentPdf, DocType, DocumentNotFoundError } from "@/lib/pdf/render";
 import { getDocumentByProject, setDocumentDriveInfo } from "@/lib/db/documents";
+import { getProject } from "@/lib/db/projects";
+import { getLatestProjectDeck, getProjectDeckFileBuffer, setDeckDriveInfo } from "@/lib/db/project-decks";
+
+const PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
 export const maxDuration = 30;
 
@@ -81,7 +85,31 @@ async function persistDriveInfo(target: DriveTarget, driveUrl: string, driveFile
 export async function POST(req: NextRequest) {
   try {
     const session = await getAuthSession();
-    const { docType, id, replace } = await req.json() as { docType: DocType; id: string; replace?: boolean };
+    const { docType, id, replace } = await req.json() as { docType: DocType | "deck"; id: string; replace?: boolean };
+
+    // Deck bytes are never rendered on demand — only via the pipeline's deck
+    // phase or an explicit Regenerate action — so this just fetches the
+    // latest already-generated file, unlike every other docType here.
+    if (docType === "deck") {
+      const deck = await getLatestProjectDeck(id);
+      if (!deck || deck.status !== "complete") {
+        return NextResponse.json({ error: "No completed deck found for this project" }, { status: 404 });
+      }
+      const project = await getProject(id, session.orgId);
+      const buffer = await getProjectDeckFileBuffer(deck);
+
+      const { fileId, webViewLink } = await uploadToDrive({
+        content: buffer,
+        fileName: deck.file_name || "ProjectDeck.pptx",
+        mimeType: PPTX_MIME_TYPE,
+        projectName: project?.name || project?.productName || "Stylecraft Project",
+        outputType: "Project Deck",
+        existingFileId: replace ? deck.drive_file_id ?? null : null,
+      });
+
+      await setDeckDriveInfo(deck.id, webViewLink, fileId);
+      return NextResponse.json({ fileId, webViewLink, replaced: !!(replace && deck.drive_file_id) });
+    }
 
     const { buffer, productName, projectName, fileName } = await renderDocumentPdf(docType, id, session);
     const target = await resolveDriveTarget(docType, id, session.userId);

@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ArtworkTab } from "@/components/project/ArtworkTab";
+import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-field-schema";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
@@ -40,7 +41,8 @@ import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerati
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 
-type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork";
+type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork" | "project-deck";
+type ReportTab = Exclude<Tab, "artwork" | "project-deck">;
 
 export default function ProjectDetailPage() {
   const router = useRouter();
@@ -244,96 +246,105 @@ export default function ProjectDetailPage() {
               and Save-to-Drive buttons work off the project alone. */}
           <ProjectOutputsBar project={project} report={selectedReport} />
 
-          {reports.length === 0 ? (
-            /* Empty State */
-            <div className="flex flex-col items-center justify-center p-12 bg-surface-2 border border-border border-dashed rounded-xl text-center space-y-4">
-              <div className="w-12 h-12 rounded-full bg-surface-3 border border-border flex items-center justify-center text-lg">📊</div>
-              <div className="space-y-1">
-                <h3 className="text-sm font-bold text-text-primary">No report linked</h3>
-                <p className="text-xs text-text-muted max-w-sm">Run a competitive analysis to compile a report, or link an existing report in your database.</p>
-              </div>
+          {/* Report selector and download bar — only meaningful once a
+              report is linked; the tab bar itself (below) is NOT gated on
+              this, since Artwork and Project Deck don't depend on a report
+              at all — a project with zero linked reports must still be able
+              to reach them. */}
+          {reports.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-surface-2 border border-border rounded-xl">
               <div className="flex items-center gap-3">
-                <button
-                  onClick={() => router.push(`/dashboard/analyze?projectId=${id}`)}
-                  className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow"
+                <span className="text-[10px] text-text-muted uppercase font-mono tracking-wider">Active Report:</span>
+                <select
+                  value={selectedReport?.id}
+                  onChange={e => setSelectedReport(reports.find(r => r.id === e.target.value))}
+                  className="px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-xs outline-none focus:border-accent font-semibold"
                 >
-                  Run analysis
-                </button>
+                  {reports.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.title} — {formatRelativeTime(r.created_at)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => setLinkingReport(true)}
-                  className="px-4 py-2 border border-border bg-surface-3/50 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-lg transition-colors"
+                  className="px-3 py-1.5 border border-border bg-surface-3/40 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-lg transition-colors"
                 >
                   Link report
                 </button>
-              </div>
-            </div>
-          ) : (
-            /* Linked Reports detail area */
-            <div className="space-y-4">
-              {/* Report selector and download bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-surface-2 border border-border rounded-xl">
-                <div className="flex items-center gap-3">
-                  <span className="text-[10px] text-text-muted uppercase font-mono tracking-wider">Active Report:</span>
-                  <select
-                    value={selectedReport?.id}
-                    onChange={e => setSelectedReport(reports.find(r => r.id === e.target.value))}
-                    className="px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-xs outline-none focus:border-accent font-semibold"
-                  >
-                    {reports.map(r => (
-                      <option key={r.id} value={r.id}>
-                        {r.title} — {formatRelativeTime(r.created_at)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setLinkingReport(true)}
-                    className="px-3 py-1.5 border border-border bg-surface-3/40 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-lg transition-colors"
-                  >
-                    Link report
-                  </button>
-                  <button
-                    onClick={() => downloadReportPDF(selectedReport)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/20"
-                    title="Export whole report PDF"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export full PDF</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* 5-Tab Navigation */}
-              <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
-                {(["competitive-analysis", "pricing", "go-to-market", "content-form", "artwork"] as Tab[]).map(tab => (
-                  <button
-                    key={tab}
-                    className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors whitespace-nowrap ${
-                      activeTab === tab
-                        ? "border-accent text-accent"
-                        : "border-transparent text-text-secondary hover:text-text-primary"
-                    }`}
-                    onClick={() => setActiveTab(tab)}
-                  >
-                    {TAB_LABELS[tab]}
-                  </button>
-                ))}
-              </div>
-
-              {/* Tab Content Canvas */}
-              <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
-                {selectedReport && (
-                  <ReportTabContent
-                    report={selectedReport}
-                    activeTab={activeTab}
-                    onUpdate={fetchProjectDetails}
-                    projectId={id}
-                  />
-                )}
+                <button
+                  onClick={() => downloadReportPDF(selectedReport)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/20"
+                  title="Export whole report PDF"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export full PDF</span>
+                </button>
               </div>
             </div>
           )}
+
+          <div className="space-y-4">
+            {/* 6-Tab Navigation — always visible; Artwork/Project Deck don't
+                depend on a linked report */}
+            <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
+              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "artwork", "project-deck"] as Tab[]).map(tab => (
+                <button
+                  key={tab}
+                  className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors whitespace-nowrap ${
+                    activeTab === tab
+                      ? "border-accent text-accent"
+                      : "border-transparent text-text-secondary hover:text-text-primary"
+                  }`}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {TAB_LABELS[tab]}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab Content Canvas */}
+            <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
+              {activeTab === "artwork" ? (
+                <ArtworkTab projectId={id} />
+              ) : activeTab === "project-deck" ? (
+                <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
+              ) : selectedReport ? (
+                <ReportTabContent
+                  report={selectedReport}
+                  activeTab={activeTab}
+                  onUpdate={fetchProjectDetails}
+                  projectId={id}
+                />
+              ) : (
+                /* Empty state — scoped to just this canvas, not the whole
+                   page, so the tab bar and Artwork/Project Deck stay reachable. */
+                <div className="flex flex-col items-center justify-center p-8 text-center space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-surface-3 border border-border flex items-center justify-center text-base">📊</div>
+                  <div className="space-y-1">
+                    <h3 className="text-xs font-bold text-text-primary">No report linked</h3>
+                    <p className="text-[11px] text-text-muted max-w-sm">Run a competitive analysis to compile a report, or link an existing report in your database.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => router.push(`/dashboard/analyze?projectId=${id}`)}
+                      className="px-3.5 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow"
+                    >
+                      Run analysis
+                    </button>
+                    <button
+                      onClick={() => setLinkingReport(true)}
+                      className="px-3.5 py-1.5 border border-border bg-surface-3/50 hover:bg-surface-3 text-text-primary text-xs font-bold rounded-lg transition-colors"
+                    >
+                      Link report
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* TDS + GTM live independently of whether a report is linked —
               every project now gets this pipeline automatically on
@@ -394,9 +405,12 @@ const TAB_LABELS: Record<Tab, string> = {
   "go-to-market":         "Go To Market",
   "content-form":         "Content Form",
   "artwork":              "Artwork",
+  "project-deck":         "Project Deck",
 };
 
 // ─── Tab Content Container ──────────────────────────────────────────────────
+// Only ever called for the 4 report-driven tabs now — the parent renders
+// Artwork/Project Deck directly (neither depends on `report`).
 function ReportTabContent({
   report,
   activeTab,
@@ -404,7 +418,7 @@ function ReportTabContent({
   projectId,
 }: {
   report: any;
-  activeTab: Tab;
+  activeTab: ReportTab;
   onUpdate: () => void;
   projectId: string;
 }) {
@@ -417,7 +431,6 @@ function ReportTabContent({
     "pricing":              "pricing_analysis",
     "go-to-market":         "go_to_market",
     "content-form":         "content_form",
-    "artwork":              "artwork",
   }[activeTab];
 
   const tabData = report[dataKey] || {};
@@ -445,10 +458,6 @@ function ReportTabContent({
     } finally {
       setSaving(false);
     }
-  }
-
-  if (activeTab === "artwork") {
-    return <ArtworkTab projectId={projectId} />;
   }
 
   return (

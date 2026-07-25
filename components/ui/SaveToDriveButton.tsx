@@ -4,12 +4,12 @@ import { Fragment, useState, useEffect } from "react";
 import { HardDrive, CheckCircle, Loader2 } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-export type DriveDocType = "sales-kit" | "tds" | "gtm" | "active-report";
+export type DriveDocType = "sales-kit" | "tds" | "gtm" | "active-report" | "deck";
 
 interface Props {
   docType: DriveDocType;
-  // Project id for sales-kit/tds/gtm, report id for active-report — matches
-  // the addressing scheme used by /api/documents/[type]/[id]/export-pdf.
+  // Project id for sales-kit/tds/gtm/deck, report id for active-report —
+  // matches the addressing scheme used by /api/documents/[type]/[id]/export-pdf.
   id: string;
   initialDriveUrl?: string | null;
 }
