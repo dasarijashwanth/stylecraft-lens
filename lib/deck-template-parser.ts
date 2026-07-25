@@ -38,10 +38,12 @@ function emuToPx(emu: number): number {
 const TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 const LOOP_PATTERN = /\{\{#\s*([a-zA-Z0-9_]+)\s*\}\}([\s\S]*?)\{\{\/\s*\1\s*\}\}/g;
 
-// Presentation-order slide list: [{ slideIndex, partPath }], ordered by
-// <p:sldIdLst> + its .rels — NOT raw ppt/slides/slideN.xml filename order,
-// since PowerPoint reordering desyncs the two.
-function getPresentationOrderSlides(zip: PizZip): { slideIndex: number; partPath: string }[] {
+// Presentation-order slide list: [{ slideIndex, partPath, relId }], ordered
+// by <p:sldIdLst> + its .rels — NOT raw ppt/slides/slideN.xml filename
+// order, since PowerPoint reordering desyncs the two. Exported so
+// lib/deck-render.ts's fill-or-hide slide removal can key off the same
+// relationship IDs (removal must survive slide reordering too).
+export function getPresentationOrderSlides(zip: PizZip): { slideIndex: number; partPath: string; relId: string }[] {
   const presentationXml = zip.file("ppt/presentation.xml")?.asText();
   const relsXml = zip.file("ppt/_rels/presentation.xml.rels")?.asText();
   if (!presentationXml || !relsXml) return [];
@@ -67,14 +69,16 @@ function getPresentationOrderSlides(zip: PizZip): { slideIndex: number; partPath
       const target = relIdToTarget.get(relId);
       if (!target) return null;
       const partPath = target.startsWith("/") ? target.slice(1) : `ppt/${target}`;
-      return { slideIndex: i + 1, partPath };
+      return { slideIndex: i + 1, partPath, relId };
     })
-    .filter((x): x is { slideIndex: number; partPath: string } => x !== null);
+    .filter((x): x is { slideIndex: number; partPath: string; relId: string } => x !== null);
 }
 
 // The notes-slide paired with a given slide, found via that slide's own
-// _rels file (relationship type ".../notesSlide").
-function getNotesSlidePart(zip: PizZip, slidePartPath: string): string | null {
+// _rels file (relationship type ".../notesSlide"). Exported for
+// lib/deck-render.ts's fill-or-hide removal (a removed slide's paired
+// notes-slide part must be removed too).
+export function getNotesSlidePart(zip: PizZip, slidePartPath: string): string | null {
   const slideFileName = slidePartPath.split("/").pop();
   if (!slideFileName) return null;
   const dir = slidePartPath.slice(0, slidePartPath.length - slideFileName.length);

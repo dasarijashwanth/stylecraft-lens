@@ -14,7 +14,10 @@ type RegistryEntry = Pick<DeckTokenMapping, "kind" | "source">;
 
 export const DECK_TOKEN_REGISTRY: Record<string, RegistryEntry> = {
   product_title:         { kind: "text",  source: { type: "gtm_field", field_id: "product_title" } },
-  project_name:          { kind: "text",  source: { type: "project_field", field: "name" } },
+  // "productName" (the actual product, e.g. "Rival Clipper"), NOT the
+  // project's internal free-text reference "name" — see lib/db/projects.ts's
+  // ProjectInput comment. A sales deck should show the real product name.
+  project_name:          { kind: "text",  source: { type: "project_field", field: "productName" } },
   generated_date:        { kind: "date",  source: { type: "computed", name: "generated_date" } },
   product_image:         { kind: "image", source: { type: "snapshot_image", slot: "hero" } },
   positioning_statement: { kind: "text",  source: { type: "gtm_field", field_id: "positioning_statement" } },
