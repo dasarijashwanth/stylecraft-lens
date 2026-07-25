@@ -1439,10 +1439,11 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
   // ProjectGenerationProgress banner drives; deliberately not a second
   // independent poller/retry (see that banner for the Retry action).
   // The engine's `phase` column names the step just COMPLETED, not the one
-  // in flight — it only ever becomes the literal string "gtm" in the same
-  // write that also sets status:"complete", so "gtm"+"running"/"pending" can
-  // never actually be true while GTM generation is running. The real window
-  // GTM's generateAllFields is in flight is phase:"tds" + status:"running".
+  // in flight. The real window GTM's generateAllFields is in flight is
+  // phase:"tds" + status:"running" — phase:"gtm"+"running" is now a real,
+  // later state too (deck generation, the next phase, running), but by then
+  // hasDocument is already true (GTM's document was saved before that
+  // transition), so it never falls into this "not generated yet" branch.
   const isGtmPhaseRunning = pipelinePhase === "tds" && pipelineStatus === "running";
   const isQueued = !hasDocument && !isGtmPhaseRunning && (pipelineStatus === "pending" || pipelineStatus === "running");
   const pipelineFailed = !hasDocument && pipelineStatus === "failed";

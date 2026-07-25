@@ -5,7 +5,7 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
-export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm";
+export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "deck";
 export type GenerationStatus = "pending" | "running" | "complete" | "failed";
 
 export interface GenerationStateRow {

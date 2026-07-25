@@ -18,11 +18,13 @@ import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
 import { reconcileTdsFromGtm } from "./tds-gtm-reconcile";
 import { getLatestOutput } from "./project-outputs";
 import { getProjectReports } from "./db/reports";
+import { getActiveDeckTemplate } from "./db/deck-templates";
+import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
-  phaseCompleted: "snapshot" | "tds" | "gtm" | null;
+  phaseCompleted: "snapshot" | "tds" | "gtm" | "deck" | null;
 }
 
 export async function runProjectGenerationStep(projectId: string, orgId: string, userId: string): Promise<GenerationStepResult> {
@@ -129,7 +131,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       const document = await getOrCreateDocument(projectId, "gtm");
       await saveDocumentFields(document.id, GTM_FIELD_SCHEMA, fields, userId);
 
-      await updateGenerationState(projectId, { phase: "gtm", status: "complete" });
+      // gtm is no longer a terminal phase — the pipeline continues straight
+      // into deck generation below, so this is "running" not "complete".
+      await updateGenerationState(projectId, { phase: "gtm", status: "running" });
       logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "tds->gtm", outcome: "ok", elapsedMs: Date.now() - stepStart });
 
       // Cross-fill any TDS field GTM just answered for real while TDS was
@@ -141,10 +145,35 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         logCall("generation-pipeline", { op: "reconcile", projectId, phase: "tds-gtm-reconcile", outcome: "error", errorMessage: err.message || "reconcile failed", elapsedMs: Date.now() - stepStart });
       }
 
-      return { state: { ...state, phase: "gtm", status: "complete" }, phaseCompleted: "gtm" };
+      return { state: { ...state, phase: "gtm", status: "running" }, phaseCompleted: "gtm" };
     }
 
-    // phase === "gtm" but status wasn't already complete/failed — treat as done.
+    if (state.phase === "gtm") {
+      // Deck generation deliberately never fails the overall pipeline — TDS
+      // and GTM are the required artifacts and already succeeded; the deck
+      // is a bonus layer on top. A missing active template, or any real
+      // rendering error, is logged and the project simply ends up with no
+      // deck (or a project_decks row already marked "failed" with its own
+      // real error — generateProjectDeck sets that itself before rethrowing).
+      // The Project Deck tab (Phase 4) surfaces this with its own Retry
+      // action instead of blocking the rest of project setup.
+      try {
+        const activeTemplate = await getActiveDeckTemplate();
+        if (activeTemplate) {
+          await generateProjectDeck(projectId, orgId, userId);
+        } else {
+          logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "deck", outcome: "ok", errorMessage: "No active deck template configured", elapsedMs: Date.now() - stepStart });
+        }
+      } catch (err: any) {
+        logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "deck", outcome: "error", errorMessage: err.message || "Deck generation failed", elapsedMs: Date.now() - stepStart });
+      }
+
+      await updateGenerationState(projectId, { phase: "deck", status: "complete" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "gtm->deck", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      return { state: { ...state, phase: "deck", status: "complete" }, phaseCompleted: "deck" };
+    }
+
+    // phase === "deck" but status wasn't already complete/failed — treat as done.
     await updateGenerationState(projectId, { status: "complete" });
     return { state: { ...state, status: "complete" }, phaseCompleted: null };
   } catch (err: any) {

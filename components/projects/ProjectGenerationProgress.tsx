@@ -17,6 +17,7 @@ const PHASE_LABELS = [
   "Capturing live product data",
   "Generating Technical Data Sheet",
   "Generating Go-To-Market sheet",
+  "Generating Project Deck",
 ];
 
 interface PhaseState {
@@ -64,7 +65,7 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-const PHASE_INDEX: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3 };
+const PHASE_INDEX: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3, deck: 4 };
 
 export function ProjectGenerationProgress({ projectId, onDone }: Props) {
   const [phases, setPhases] = useState<PhaseState[]>(
