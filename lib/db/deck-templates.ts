@@ -100,6 +100,40 @@ export async function createDeckTemplate(input: {
   return mockToRow(row);
 }
 
+// Registers a template whose bytes are ALREADY in Storage — used by the
+// signed-upload-URL flow (app/api/admin/deck-templates/upload-url +
+// .../finalize), where the browser uploads directly to Storage to bypass
+// Vercel's serverless function request-body limit (~4.5MB), which a real
+// branded .pptx routinely exceeds. Supabase-only: that flow only exists
+// when Storage is actually configured (see the finalize route's own
+// isSupabaseConfigured check before calling this).
+export async function createDeckTemplateFromStoragePath(input: {
+  name: string;
+  filePath: string;
+  fileName: string;
+  fileSizeBytes: number;
+  slideCount: number;
+  placeholderMap: DeckPlaceholderMap;
+  uploadedBy?: string | null;
+}): Promise<DeckTemplateRow> {
+  const { data, error } = await supabaseAdmin
+    .from("deck_templates")
+    .insert({
+      name: input.name,
+      file_path: input.filePath,
+      file_name: input.fileName,
+      file_size_bytes: input.fileSizeBytes,
+      slide_count: input.slideCount,
+      placeholder_map: input.placeholderMap,
+      is_active: false,
+      uploaded_by: input.uploadedBy ?? null,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 export async function listDeckTemplates(): Promise<DeckTemplateRow[]> {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin

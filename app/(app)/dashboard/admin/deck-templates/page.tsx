@@ -38,19 +38,62 @@ export default function AdminDeckTemplatesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  function reportUploadResult(template: DeckTemplateRow | undefined) {
+    const unmapped = template?.placeholder_map?.unmapped_tokens?.length || 0;
+    toast.success(unmapped > 0 ? `Uploaded — ${unmapped} token(s) need mapping` : "Uploaded — all tokens mapped");
+  }
+
+  // Real branded .pptx files routinely run 10-20MB+ — well past Vercel's
+  // serverless function request-body limit (~4.5MB). A direct multipart
+  // POST for a file that large gets rejected at the platform edge before
+  // ever reaching our route handler, coming back as an HTML error page
+  // that res.json() can't parse ("Unexpected token '<'"). So: ask the
+  // server whether a direct Storage upload is possible (it is, whenever
+  // Supabase is configured) and route around the function entirely for
+  // the large part; only the small JSON finalize call actually parses and
+  // registers the template.
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    const name = file.name.replace(/\.pptx$/i, "");
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("name", file.name.replace(/\.pptx$/i, ""));
-      const res = await fetch("/api/admin/deck-templates", { method: "POST", body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-      const unmapped = data.template?.placeholder_map?.unmapped_tokens?.length || 0;
-      toast.success(unmapped > 0 ? `Uploaded — ${unmapped} token(s) need mapping` : "Uploaded — all tokens mapped");
+      const urlRes = await fetch("/api/admin/deck-templates/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: file.name }),
+      });
+      const urlData = await urlRes.json();
+      if (!urlRes.ok) throw new Error(urlData.error || "Failed to prepare upload");
+
+      if (urlData.mode === "signed") {
+        const { createSupabaseBrowserClient } = await import("@/lib/supabase-browser");
+        const supabase = createSupabaseBrowserClient();
+        const { error: uploadError } = await supabase.storage
+          .from("deck-templates")
+          .uploadToSignedUrl(urlData.path, urlData.token, file);
+        if (uploadError) throw new Error(uploadError.message || "Upload to storage failed");
+
+        const finalizeRes = await fetch("/api/admin/deck-templates/finalize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: urlData.path, name, fileName: file.name }),
+        });
+        const finalizeData = await finalizeRes.json();
+        if (!finalizeRes.ok) throw new Error(finalizeData.error || "Failed to finalize upload");
+        reportUploadResult(finalizeData.template);
+      } else {
+        // Local dev without Supabase configured — no real Storage bucket to
+        // sign a URL for, but also no Vercel body-size limit to work around.
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("name", name);
+        const res = await fetch("/api/admin/deck-templates", { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Upload failed");
+        reportUploadResult(data.template);
+      }
+
       await load();
     } catch (err: any) {
       toast.error(err.message || "Failed to upload template");
