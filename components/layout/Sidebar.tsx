@@ -13,7 +13,6 @@ import {
   LogOut,
   Menu,
   X,
-  ShieldAlert,
   Presentation
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -44,7 +43,6 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     // Role-gated nav entries — workspace owners/admins only.
     ...(user?.role === "OWNER" || user?.role === "ADMIN"
       ? [
-          { label: "Generation Health", href: "/dashboard/admin/generation", icon: ShieldAlert },
           { label: "Deck Templates", href: "/dashboard/admin/deck-templates", icon: Presentation },
         ]
       : []),
