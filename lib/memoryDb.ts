@@ -197,6 +197,41 @@ export interface MockProjectGenerationState {
   updatedAt: Date;
 }
 
+export interface MockDeckTemplate {
+  id: string;
+  name: string;
+  // Dev-without-Supabase fallback: the .pptx itself as base64, same
+  // fallback trick used elsewhere in this codebase (e.g. the artwork
+  // route) when a real Storage bucket isn't configured.
+  fileBase64: string;
+  fileName: string | null;
+  fileSizeBytes: number | null;
+  slideCount: number;
+  placeholderMap: any; // DeckPlaceholderMap, see lib/deck-types.ts
+  isActive: boolean;
+  uploadedBy: string | null;
+  uploadedAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockProjectDeck {
+  id: string;
+  projectId: string;
+  templateId: string | null;
+  status: string; // pending | generating | complete | failed
+  fileBase64: string | null;
+  fileName: string | null;
+  fileSizeBytes: number | null;
+  placeholderValues: any;
+  slidesRemoved: number[];
+  errorMessage: string | null;
+  gtmSnapshotAt: string | null;
+  generatedAt: Date | null;
+  driveUrl: string | null;
+  driveFileId: string | null;
+  createdAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -248,6 +283,10 @@ class MemoryDatabase {
   // dev-server restart without Supabase configured, which is expected.
   sectionProvenance: MockSectionProvenance[] = [];
   projectGenerationState: MockProjectGenerationState[] = [];
+  // Same non-persisted-across-restart precedent as productSnapshots above —
+  // fine at dev scale, Supabase is the real store in production.
+  deckTemplates: MockDeckTemplate[] = [];
+  projectDecks: MockProjectDeck[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {

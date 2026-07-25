@@ -13,7 +13,8 @@ import {
   LogOut,
   Menu,
   X,
-  ShieldAlert
+  ShieldAlert,
+  Presentation
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -40,9 +41,12 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const subItems = [
     { label: "Settings", href: "/dashboard/settings", icon: Settings },
     { label: "Help", href: "/dashboard/help", icon: HelpCircle },
-    // First role-gated nav entry in the app — workspace owners/admins only.
+    // Role-gated nav entries — workspace owners/admins only.
     ...(user?.role === "OWNER" || user?.role === "ADMIN"
-      ? [{ label: "Generation Health", href: "/dashboard/admin/generation", icon: ShieldAlert }]
+      ? [
+          { label: "Generation Health", href: "/dashboard/admin/generation", icon: ShieldAlert },
+          { label: "Deck Templates", href: "/dashboard/admin/deck-templates", icon: Presentation },
+        ]
       : []),
   ];
 

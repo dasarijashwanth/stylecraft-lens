@@ -31,6 +31,10 @@ yarn-error.log*
 # local dev-only memoryDb snapshot (see lib/memoryDb.ts)
 /.local-data
 
+# generated dev-time fixtures (e.g. scripts/build-starter-deck-template.ts's
+# output) — reproducible from their generator script, never committed
+/scratch
+
 # vercel
 .vercel
 

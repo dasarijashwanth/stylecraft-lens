@@ -405,3 +405,75 @@ CREATE POLICY "Allow all operations for section_provenance" ON section_provenanc
 -- the pipeline last said" regardless of how many times a human edits
 -- `answer` afterward.
 ALTER TABLE document_fields ADD COLUMN IF NOT EXISTS ai_answer TEXT;
+
+-- 11. DECK TEMPLATES
+-- Versioned master .pptx templates for the "Project Deck" feature. The
+-- binary file itself lives in Supabase Storage bucket "deck-templates"
+-- (same pattern as project_artwork's "artwork" bucket) — this row is
+-- metadata + a pointer + the parsed/edited token->data-field mapping.
+-- Only one row may have is_active = true at a time (enforced by the
+-- partial unique index below); new projects' decks always render off
+-- whichever template is currently active. Regenerating an existing
+-- project's deck may instead pin an explicit older template_id (see
+-- project_decks below), so an active-template change never silently
+-- alters a deck someone regenerates from history.
+CREATE TABLE IF NOT EXISTS deck_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    -- No public URL, same reasoning as project_decks below — served only
+    -- through the authenticated admin routes, never rendered via <img>/<a>.
+    file_path VARCHAR(500) NOT NULL,
+    file_name VARCHAR(255),
+    file_size_bytes INTEGER,
+    slide_count INTEGER NOT NULL DEFAULT 0,
+    -- Shape: { version, slide_count, tokens: DeckTokenMapping[], unmapped_tokens: string[] } — see lib/deck-types.ts.
+    placeholder_map JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT false,
+    uploaded_by VARCHAR(255),
+    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS deck_templates_one_active_idx ON deck_templates(is_active) WHERE is_active = true;
+ALTER TABLE deck_templates ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for deck_templates" ON deck_templates FOR ALL USING (true) WITH CHECK (true);
+
+-- 12. PROJECT DECKS
+-- Append-only, mirrors product_snapshots' "never overwrite, insert a new
+-- row" pattern rather than documents' "one row per (project, doc_type),
+-- upsert in place" pattern — a generated deck is a binary artifact with
+-- real version history (Part 1's "regenerating an old deck may use its
+-- original template version" requirement needs this to be a queryable
+-- fact, not something only inferable from deck_templates.is_active at
+-- read time). Binary output lives in Storage bucket "project-decks" —
+-- unlike project_artwork, decks are never given a public URL (a GTM deck
+-- contains pricing/competitive data), bytes are only ever served through
+-- the authenticated /api/projects/:id/deck/download route.
+CREATE TABLE IF NOT EXISTS project_decks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE NOT NULL,
+    template_id UUID REFERENCES deck_templates(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | generating | complete | failed
+    file_path VARCHAR(500),
+    file_name VARCHAR(255),
+    file_size_bytes INTEGER,
+    -- Snapshot of the resolved token->value map used for THIS render (text/
+    -- table values only — image tokens store the source URL, never raw
+    -- bytes) — audit trail + backs the tab's "fill report" without needing
+    -- to re-derive anything from the (possibly since-edited) GTM document.
+    placeholder_values JSONB DEFAULT '{}'::jsonb,
+    slides_removed INTEGER[] DEFAULT '{}'::integer[],
+    error_message TEXT,
+    -- Captured at generation time from the GTM document's true last-edited
+    -- moment (max of the document row's and its most-recent field row's
+    -- updated_at — see lib/db/decks.ts's getGtmLastEditedAt) so the tab can
+    -- later detect "GTM edited after this deck was generated" without
+    -- re-deriving it from possibly-changed data.
+    gtm_snapshot_at TIMESTAMP WITH TIME ZONE,
+    generated_at TIMESTAMP WITH TIME ZONE,
+    drive_url VARCHAR(500),
+    drive_file_id VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_decks_project_created_idx ON project_decks(project_id, created_at DESC);
+ALTER TABLE project_decks ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for project_decks" ON project_decks FOR ALL USING (true) WITH CHECK (true);
