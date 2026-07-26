@@ -38,6 +38,12 @@ interface Competitor {
   // candidates were found) — never set for a normal in-band match.
   out_of_band?:        boolean;
   out_of_band_reason?: string | null;
+  // Set by lib/legacy-brand-discovery.ts when this legacy competitor came
+  // from the curated brand registry (lib/db/legacy-brands.ts) — absent/false
+  // means it was AI-sourced because curated brands couldn't fill all 5
+  // in-band slots (lib/analysisEngine.ts's Phase 1 top-up fallback).
+  curated_brand?:      boolean;
+  brand_list_status?:  "not_curated" | null;
   // One sentence justifying why this is a real legacy/emerging competitor
   // at this price tier, per lib/analysisEngine.ts's Phase 1/2 prompts.
   inclusion_rationale?: string;
@@ -386,6 +392,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
           {c.out_of_band && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title={c.out_of_band_reason || undefined}>
               Outside Price Band
+            </span>
+          )}
+          {c.brand_list_status === "not_curated" && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="Curated brands couldn't fill all 5 legacy slots within the price band — this pick came from AI research instead.">
+              Not on curated legacy list
             </span>
           )}
         </div>

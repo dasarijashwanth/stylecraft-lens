@@ -188,6 +188,12 @@ export async function buildReportSections(analysis: {
       product_name: analysis.productName,
       large_brand_competitors: p1Comps,
       indie_emerging_competitors: p2Comps,
+      // Which curated legacy-brand registry category (if any) Phase 1
+      // actually searched — see lib/legacy-brand-registry.ts /
+      // lib/analysisEngine.ts's Phase 1 branch. Null when the identified
+      // product didn't match any of the 4 registry categories (today's
+      // unmodified AI-judgment flow ran instead).
+      legacy_registry_snapshot: analysis.phase1?.legacy_registry_snapshot ?? null,
       market_snapshot: snapshot,
       key_trends: trends,
       market_gaps: gaps,

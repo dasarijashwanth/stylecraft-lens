@@ -31,6 +31,7 @@ function renderProvenanceAppendixHTML(report: any): string {
 
   const SECTION_LABELS: Record<string, string> = {
     key_features: "Key Features", reviews: "Reviews", news: "News Updates", pricing: "Pricing",
+    legacy_brand_registry: "Legacy Brand Sourcing",
   };
 
   return `
@@ -482,12 +483,18 @@ function generatePrintHTML(report: any, activeTab?: string): string {
     <h2>2. Competitor Landscape</h2>
     
     <h3>Established Legacy Brands</h3>
+    ${ca.legacy_registry_snapshot ? `
+      <p style="font-size: 11px; color: #666; font-style: italic;">
+        Selected from the ${escapeHtml(ca.legacy_registry_snapshot.category_name)} brand list
+        (${(ca.large_brand_competitors || []).filter((c: any) => c.curated_brand === true).length} of ${(ca.large_brand_competitors || []).length} from curated brands).
+      </p>
+    ` : ""}
     <div class="competitor-grid">
       ${(ca.large_brand_competitors || []).map((c: any) => `
         <div class="comp-card">
           <div class="comp-header">
             <div>
-              <div class="comp-name">${c.name}</div>
+              <div class="comp-name">${c.name}${c.brand_list_status === "not_curated" ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(Not on curated legacy list)</span>` : ""}</div>
               <div class="comp-brand">${c.brand}</div>
             </div>
             <div class="comp-price">${c.price || "—"}</div>

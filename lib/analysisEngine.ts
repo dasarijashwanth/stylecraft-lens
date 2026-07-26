@@ -4,7 +4,7 @@ import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey, searchAmazonCategory } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
-import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck } from "./db/analyses";
+import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck, updatePhase1BrandProgress } from "./db/analyses";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { createReportFromAnalysis } from "./db/reports";
 import { buildPhase3Prompt } from "./prompts/phase3";
@@ -19,6 +19,8 @@ import { resolveCacheKey } from "./product-cache-key";
 import { buildPricingProvenanceTier } from "./section-provenance";
 import { computePriceBand, deriveTierKeyword, isWithinBand, buildOutOfBandLabel, parsePriceToNumber, type CompetitorTier } from "./price-band";
 import { getDocumentByProject, getDocumentFields } from "./db/documents";
+import { resolveLegacyBrandsForIdentity, type ResolvedLegacyRegistry } from "./legacy-brand-registry";
+import { searchCuratedLegacyBrands, normalizeBrandToken, type BrandProgressEntry } from "./legacy-brand-discovery";
 
 export interface AnalysisContext {
   id: string;
@@ -463,7 +465,15 @@ export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaul
 // accepted out-of-band pick with the reason, and only then tops up any
 // still-unfilled slots from the curated fallback dataset — itself gated by
 // the exact same price check, never a silent price-unaware fill.
-export function applyPriceBandGate(candidates: any[], targetPriceRaw: number, tier: CompetitorTier, identity: IdentityCard, limit = 5): any[] {
+export function applyPriceBandGate(
+  candidates: any[],
+  targetPriceRaw: number,
+  tier: CompetitorTier,
+  identity: IdentityCard,
+  limit = 5,
+  opts: { allowStaticFallbackTopup?: boolean } = {}
+): any[] {
+  const allowStaticFallbackTopup = opts.allowStaticFallbackTopup ?? true;
   const withPrice = candidates.map(c => ({
     ...c,
     _resolvedPrice: typeof c.price_raw === "number" ? c.price_raw : parsePriceToNumber(c.ai_claimed_price),
@@ -521,7 +531,12 @@ export function applyPriceBandGate(candidates: any[], targetPriceRaw: number, ti
   // the widest band. Only reachable for categories with real curated
   // fallback data; the generic/uncurated branch returns [] (see
   // getCategoryFallbackCompetitors), so this is a no-op for those.
-  if (final.length < limit) {
+  // Skippable via allowStaticFallbackTopup:false — this static dataset is
+  // unrelated to the legacy-brand registry (lib/db/legacy-brands.ts) and
+  // has no "not on curated list" tagging, so the curated-registry-only gate
+  // call (lib/analysisEngine.ts's Phase 1 branch) must not let it silently
+  // stand in for an honest AI-fallback result.
+  if (final.length < limit && allowStaticFallbackTopup) {
     const usedNames = new Set(final.map(c => (c.name || "").toLowerCase()));
     const fallbackPool = getCategoryFallbackCompetitors(identity, tier);
     for (const fb of fallbackPool) {
@@ -683,6 +698,34 @@ async function persistPricingProvenance(competitors: any[], analysisId: string):
       });
     } catch (e) {
       console.warn("Failed to persist pricing provenance:", e);
+    }
+  }
+}
+
+// One row per legacy competitor recording WHERE it came from — the curated
+// registry category, or (when a competitor had to be filled by the AI
+// top-up because curated brands couldn't reach 5 in-band picks) an honest
+// "not on curated list" tier. Feeds the exact same PDF "Data Sources &
+// Methodology" appendix pricing provenance already uses — best-effort,
+// never blocks the analysis result.
+async function persistLegacyRegistryProvenance(competitors: any[], registry: ResolvedLegacyRegistry, analysisId: string): Promise<void> {
+  for (const comp of competitors) {
+    try {
+      const isCurated = comp.curated_brand === true;
+      await insertProvenance({
+        productKey: resolveCacheKey(comp.asin ?? "", comp.name ?? ""),
+        section: "legacy_brand_registry",
+        analysisId,
+        productName: comp.name ?? null,
+        tiers: [{
+          tier: isCurated ? `Curated list: ${registry.categoryName}` : "Not on curated legacy list — AI-sourced fallback",
+          attempted: true,
+          outcome: "success",
+        }],
+        queries: [],
+      });
+    } catch (e) {
+      console.warn("Failed to persist legacy brand registry provenance:", e);
     }
   }
 }
@@ -861,23 +904,113 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
       }
 
-      const result: any = await withAiFallback(
-        "Phase 1",
-        hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        () => generateMockPhase1(context, identityCard, targetPriceRaw),
-        startTime
-      );
+      // Curated legacy-brand registry (lib/db/legacy-brands.ts) takes
+      // priority over AI judgment when the identified product maps to one
+      // of the 4 registry categories — brand-targeted Rainforest search
+      // (lib/legacy-brand-discovery.ts) instead of an open-ended prompt.
+      // Falls back to today's unmodified AI-discovery flow entirely when
+      // there's no registry match (an out-of-registry category) or the
+      // registry category has zero enabled brands.
+      const registry = await resolveLegacyBrandsForIdentity(identityCard);
+      let result: any;
 
-      result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
-      if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+      if (registry) {
+        // Wrapped with category context on every write — the live panel
+        // (components/analyze/ProgressPanel.tsx, polling this via GET
+        // /api/analyses/[id]) needs the category name/slug alongside each
+        // brand's live status, not just the bare brand array.
+        const writeBrandProgress = (entries: BrandProgressEntry[]) =>
+          updatePhase1BrandProgress(analysisId, {
+            category_slug: registry.categorySlug,
+            category_name: registry.categoryName,
+            brands: entries,
+          });
+
+        await writeBrandProgress(registry.brands.map(b => ({ brand: b.brand_name, status: "searching" })));
+
+        const curatedCandidates = await searchCuratedLegacyBrands(
+          registry.brands,
+          identityCard,
+          targetPriceRaw,
+          registry.categorySlug,
+          writeBrandProgress
+        );
+
+        let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard);
+        // allowStaticFallbackTopup:false — the curated-only pass must never
+        // silently pull from the unrelated static getCategoryFallbackCompetitors
+        // dataset in place of an honest "not on curated list" AI result below.
+        competitors = applyPriceBandGate(competitors, targetPriceRaw, "legacy", identityCard, 5, { allowStaticFallbackTopup: false });
+
+        // Only attempt the AI top-up if the curated pass finished fast — it
+        // has its own ~15s hard cap (CURATED_BRAND_SEARCH_TIME_BUDGET_MS),
+        // and OpenAI's web-search leg (runOpenAiWebSearch) has NO time-budget
+        // check of its own today (only Gemini's fallback leg does), so a
+        // slow curated pass followed by a full ~45s OpenAI attempt could
+        // push this phase past Vercel's 60s ceiling. Skipping is always
+        // safe/honest — fewer real curated results is correct, inventing
+        // competitors to fill the gap is not.
+        const AI_TOPUP_TIME_THRESHOLD_MS = 8_000;
+        if (competitors.length < 5 && Date.now() - startTime < AI_TOPUP_TIME_THRESHOLD_MS) {
+          const aiResult: any = await withAiFallback(
+            "Phase 1 (curated top-up)",
+            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+            () => generateMockPhase1(context, identityCard, targetPriceRaw),
+            startTime
+          );
+          webSearchCount += aiResult.web_searches_performed || 0;
+
+          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard);
+          if (hasRainforestKey) {
+            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors);
+          }
+
+          // Never duplicate a brand slot already filled by the curated pass.
+          const usedBrands = new Set(competitors.map((c: any) => normalizeBrandToken(c.brand || "")));
+          aiCompetitors = aiCompetitors
+            .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
+            .map((c: any) => ({ ...c, curated_brand: false, brand_list_status: "not_curated" }));
+
+          competitors = applyPriceBandGate([...competitors, ...aiCompetitors], targetPriceRaw, "legacy", identityCard, 5);
+        }
+
+        result = {
+          web_searches_performed: webSearchCount,
+          competitors,
+          // Snapshotted per-analysis for auditability — which category and
+          // exact brand list (in priority order) this run actually searched,
+          // independent of any later admin edit to the live registry.
+          legacy_registry_snapshot: {
+            category_slug: registry.categorySlug,
+            category_name: registry.categoryName,
+            brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order })),
+          },
+        };
+        // Per-competitor provenance (which curated list — or the "not on
+        // curated list" AI fallback — sourced each legacy pick), feeding the
+        // PDF's existing "Data Sources & Methodology" appendix.
+        await persistLegacyRegistryProvenance(competitors, registry, analysisId);
+      } else {
+        result = await withAiFallback(
+          "Phase 1",
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          () => generateMockPhase1(context, identityCard, targetPriceRaw),
+          startTime
+        );
+
+        result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
+        if (hasRainforestKey) {
+          result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+        }
+        result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "legacy", identityCard, 5);
+        webSearchCount += result.web_searches_performed || 0;
       }
-      result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "legacy", identityCard, 5);
+
       if (hasRainforestKey) {
         await persistPricingProvenance(result.competitors, analysisId);
       }
-      webSearchCount += result.web_searches_performed || 0;
 
       await updateAnalysisPhase(analysisId, 2, "phase1_result", result, webSearchCount);
       return { analysisId, phase: 2, status: "running", stepResult: result, totalSearches: webSearchCount };
@@ -903,15 +1036,31 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
       }
 
+      // Same registry category as Phase 1 (re-resolved fresh — cheap, and
+      // consistent with resolveDiscoveryTargetPrice's "cheap re-read, not a
+      // second pause opportunity" precedent above). When a registry match
+      // exists, its brand names+aliases become the exclude-hint in place of
+      // the static getKnownBrandsHint list, AND registry brands are hard-
+      // filtered out of the results below — a real guarantee, not just a
+      // prompt-level request the model could ignore.
+      const registry = await resolveLegacyBrandsForIdentity(identityCard);
+      const registryBrandTokens = registry
+        ? new Set(registry.brands.flatMap(b => [b.brand_name, ...b.aliases].map(normalizeBrandToken)))
+        : null;
+      const brandHintOverride = registry ? registry.brands.flatMap(b => [b.brand_name, ...b.aliases]) : undefined;
+
       const result: any = await withAiFallback(
         "Phase 2",
-        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride) : null,
+        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride) : null,
         () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
         startTime
       );
 
       result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
+      if (registryBrandTokens) {
+        result.competitors = result.competitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
+      }
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
       }
@@ -1326,8 +1475,13 @@ async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityC
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number) {
-  const brandHint = getKnownBrandsHint(identity.category);
+function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null) {
+  // brandHintOverride (when the identified product maps to a legacy-brand
+  // registry category, lib/legacy-brand-registry.ts) takes priority over
+  // the static, non-binding lib/known-brands-by-category.ts hint — the
+  // curated registry's brands (and aliases) are excluded here so the same
+  // brand can never appear in both the legacy and emerging lists.
+  const brandHint = brandHintOverride !== undefined ? brandHintOverride : getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
   const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
   const band = computePriceBand(targetPriceRaw, "emerging", 0);
@@ -1403,14 +1557,14 @@ Instructions:
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw);
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));

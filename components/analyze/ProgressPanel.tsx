@@ -20,6 +20,19 @@ const PHASE_LABELS = [
   "Synthesizing market analysis & strategic recommendations",
 ];
 
+interface BrandProgressEntry {
+  brand: string;
+  status: "searching" | "found" | "not_found";
+  price?: string | null;
+  reason?: string | null;
+}
+
+interface BrandProgress {
+  category_slug?: string;
+  category_name?: string;
+  brands?: BrandProgressEntry[];
+}
+
 interface PendingQuestion {
   question: string;
   foundSoFar?: string;
@@ -94,6 +107,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   const [totalSearches, setTotalSearches] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [identity, setIdentity] = useState<any>(null);
+  const [brandProgress, setBrandProgress] = useState<BrandProgress | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   const [answerText, setAnswerText] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
@@ -101,7 +115,35 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   const [runToken, setRunToken] = useState(0);
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
+  // Separate from timerRef — polls GET /api/analyses/[id] WHILE the Phase 1
+  // POST /continue call is still in flight, so the legacy-brand panel
+  // updates live as each brand actually resolves server-side (see
+  // lib/legacy-brand-discovery.ts's onBrandProgress). Must be cleared
+  // everywhere timerRef already is (retry, unmount, AND right after the
+  // phase-1 POST resolves) or a retry leaks an orphaned poller.
+  const brandProgressIntervalRef = useRef<NodeJS.Timeout>();
   const resumeRef = useRef<(() => void) | null>(null);
+
+  function stopBrandProgressPolling() {
+    if (brandProgressIntervalRef.current) {
+      clearInterval(brandProgressIntervalRef.current);
+      brandProgressIntervalRef.current = undefined;
+    }
+  }
+
+  function startBrandProgressPolling() {
+    if (brandProgressIntervalRef.current) return;
+    brandProgressIntervalRef.current = setInterval(async () => {
+      try {
+        const { analysis: latest } = await fetchJson(`/api/analyses/${analysisId}`);
+        if (latest?.phase1_brand_progress) setBrandProgress(latest.phase1_brand_progress);
+      } catch {
+        // Best-effort — a single failed poll just tries again next tick,
+        // never surfaces as a user-facing error (the main phase POST below
+        // is the real source of truth/error reporting).
+      }
+    }, 1500);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +215,13 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
           );
 
+          // Phase 1 (legacy/established competitors) may run a curated
+          // brand-by-brand search server-side (lib/legacy-brand-discovery.ts)
+          // before this POST resolves — poll for its live progress in
+          // parallel so the brand panel below updates in real time, not just
+          // once the whole phase completes.
+          if (runningIdx === 1) startBrandProgressPolling();
+
           const { analysis: updated, step } = await fetchJsonWithRetry(
             `/api/analyses/${analysisId}/continue`,
             { method: "POST" },
@@ -181,6 +230,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
                 prev.map((p, i) => (i === runningIdx ? { ...p, message: `Connection dropped — retrying (${attempt})…` } : p))
               )
           );
+          stopBrandProgressPolling();
           if (cancelled) return;
 
           searchesSoFar += step.totalSearches || 0;
@@ -199,7 +249,13 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
             results.identity = step.stepResult;
             setIdentity(step.stepResult);
           }
-          if (step.phase === 2) results.phase1 = step.stepResult;
+          if (step.phase === 2) {
+            results.phase1 = step.stepResult;
+            // Phase 1 is fully done — the completed competitor list (with
+            // tier badges/out-of-band labels) takes over from here; the
+            // live search-in-progress chip panel has served its purpose.
+            setBrandProgress(null);
+          }
           if (step.phase === 3) results.phase2 = step.stepResult;
           if (step.phase === 5) {
             results.phase3 = step.stepResult;
@@ -216,6 +272,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
       } catch (err: any) {
         if (cancelled) return;
         clearInterval(timerRef.current);
+        stopBrandProgressPolling();
         setPhases((prev) =>
           prev.map((p) => (p.status === "running" ? { ...p, status: "error", message: err.message } : p))
         );
@@ -234,12 +291,14 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
     return () => {
       cancelled = true;
       clearInterval(timerRef.current);
+      stopBrandProgressPolling();
     };
   }, [analysisId, runToken]);
 
   function handleRetry() {
     setFailedMessage(null);
     setPhases(PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" })));
+    setBrandProgress(null);
     setRunToken((t) => t + 1);
   }
 
@@ -345,6 +404,50 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
                   ))}
                 </div>
               )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Legacy brand registry — live per-brand search status while Phase 1
+          runs its curated-brand discovery pass (lib/legacy-brand-discovery.ts),
+          polled via startBrandProgressPolling() above. Disappears once
+          Phase 1 completes (setBrandProgress(null)) — the completed
+          competitor list takes over from there. */}
+      <AnimatePresence initial={false}>
+        {brandProgress && Array.isArray(brandProgress.brands) && brandProgress.brands.length > 0 && (
+          <motion.div
+            key="brand-progress"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mx-5 mt-4 overflow-hidden"
+          >
+            <div className="p-3 bg-surface-3/30 border border-border rounded-lg">
+              <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
+                Legacy brands being searched{brandProgress.category_name ? ` — ${brandProgress.category_name}` : ""}
+              </span>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {brandProgress.brands.map((b, i) => (
+                  <span
+                    key={i}
+                    title={b.reason || undefined}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                      b.status === "found"
+                        ? "bg-success/10 border-success/30 text-success"
+                        : b.status === "not_found"
+                        ? "bg-danger/10 border-danger/25 text-danger"
+                        : "bg-surface-3 border-border text-text-muted"
+                    }`}
+                  >
+                    {b.brand}
+                    {b.status === "found" && <span>✓{b.price ? ` ${b.price}` : ""}</span>}
+                    {b.status === "not_found" && <span>✕</span>}
+                    {b.status === "searching" && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                  </span>
+                ))}
+              </div>
             </div>
           </motion.div>
         )}

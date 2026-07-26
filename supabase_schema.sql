@@ -477,3 +477,98 @@ CREATE TABLE IF NOT EXISTS project_decks (
 CREATE INDEX IF NOT EXISTS project_decks_project_created_idx ON project_decks(project_id, created_at DESC);
 ALTER TABLE project_decks ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for project_decks" ON project_decks FOR ALL USING (true) WITH CHECK (true);
+
+-- 13. LEGACY BRAND REGISTRY
+-- Curated, admin-editable brand lists that competitor discovery's Phase 1
+-- (legacy/established competitors) now searches directly instead of
+-- relying purely on AI judgment (see lib/legacy-brand-discovery.ts). Each
+-- category maps to a stable `slug` the app resolves to from the product's
+-- Identity Card (category/subcategory + pro-vs-retail) — text columns like
+-- `name`/`product_types` are not good join keys, hence the slug.
+CREATE TABLE IF NOT EXISTS brand_categories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    product_types TEXT[] DEFAULT '{}'::text[],
+    audience VARCHAR(20), -- 'professional' | 'retail'
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE brand_categories ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for brand_categories" ON brand_categories FOR ALL USING (true) WITH CHECK (true);
+
+-- sort_order is the search PRIORITY order (lowest first) — also what "fill
+-- 5 slots in priority order" means in lib/legacy-brand-discovery.ts.
+-- `enabled=false` keeps a brand in the registry (never silently deleted)
+-- but skips it in discovery, per the spec's "disable" requirement.
+CREATE TABLE IF NOT EXISTS legacy_brands (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    category_id UUID REFERENCES brand_categories(id) ON DELETE CASCADE NOT NULL,
+    brand_name VARCHAR(255) NOT NULL,
+    aliases TEXT[] DEFAULT '{}'::text[],
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE (category_id, brand_name)
+);
+CREATE INDEX IF NOT EXISTS legacy_brands_category_sort_idx ON legacy_brands(category_id, sort_order);
+ALTER TABLE legacy_brands ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for legacy_brands" ON legacy_brands FOR ALL USING (true) WITH CHECK (true);
+
+-- Seed the 4 default categories + their curated brand lists exactly as
+-- specified. Idempotent — safe to re-run.
+INSERT INTO brand_categories (slug, name, product_types, audience) VALUES
+    ('legacy_professional_clippers', 'Legacy Professional Clippers, Trimmers, and Shavers', ARRAY['clipper','trimmer','shaver'], 'professional'),
+    ('legacy_retail_clippers', 'Legacy Retail Clippers, Trimmers, and Shavers', ARRAY['clipper','trimmer','shaver'], 'retail'),
+    ('professional_beauty', 'Professional Beauty', ARRAY['dryer','iron','styler','brush'], 'professional'),
+    ('retail_beauty', 'Retail Beauty', ARRAY['dryer','iron','styler','brush'], 'retail')
+ON CONFLICT (slug) DO NOTHING;
+
+INSERT INTO legacy_brands (category_id, brand_name, aliases, sort_order)
+SELECT c.id, b.brand_name, b.aliases, b.sort_order
+FROM brand_categories c
+JOIN (VALUES
+    ('legacy_professional_clippers', 'Wahl', ARRAY[]::text[], 0),
+    ('legacy_professional_clippers', 'Andis', ARRAY[]::text[], 1),
+    ('legacy_professional_clippers', 'Oster', ARRAY[]::text[], 2),
+    ('legacy_professional_clippers', 'BaByliss', ARRAY['BaBylissPRO','Babyliss Pro'], 3),
+    ('legacy_professional_clippers', 'TPOB', ARRAY['The Profession Of Barbering'], 4),
+    ('legacy_professional_clippers', 'Cocco', ARRAY[]::text[], 5),
+    ('legacy_professional_clippers', 'JRL', ARRAY[]::text[], 6),
+
+    ('legacy_retail_clippers', 'Wahl', ARRAY[]::text[], 0),
+    ('legacy_retail_clippers', 'Andis', ARRAY[]::text[], 1),
+    ('legacy_retail_clippers', 'Oster', ARRAY[]::text[], 2),
+    ('legacy_retail_clippers', 'Panasonic', ARRAY[]::text[], 3),
+    ('legacy_retail_clippers', 'Conair', ARRAY[]::text[], 4),
+    ('legacy_retail_clippers', 'Manscaped', ARRAY[]::text[], 5),
+    ('legacy_retail_clippers', 'Remington', ARRAY[]::text[], 6),
+
+    ('professional_beauty', 'BaByliss', ARRAY['BaBylissPRO','Babyliss Pro'], 0),
+    ('professional_beauty', 'GHD', ARRAY[]::text[], 1),
+    ('professional_beauty', 'Paul Mitchell', ARRAY[]::text[], 2),
+    ('professional_beauty', 'Bio Ionic', ARRAY[]::text[], 3),
+    ('professional_beauty', 'Dyson', ARRAY[]::text[], 4),
+    ('professional_beauty', 'Shark', ARRAY[]::text[], 5),
+    ('professional_beauty', 'Amika', ARRAY[]::text[], 6),
+    ('professional_beauty', 'Olivia Garden', ARRAY[]::text[], 7),
+    ('professional_beauty', 'T3', ARRAY[]::text[], 8),
+
+    ('retail_beauty', 'Conair', ARRAY[]::text[], 0),
+    ('retail_beauty', 'Revlon', ARRAY[]::text[], 1),
+    ('retail_beauty', 'L''Oreal', ARRAY['L''Oréal','LOreal','L Oreal'], 2),
+    ('retail_beauty', 'Hot Tools', ARRAY['Hot Tools Professional'], 3),
+    ('retail_beauty', 'Drybar', ARRAY[]::text[], 4),
+    ('retail_beauty', 'Dyson', ARRAY[]::text[], 5),
+    ('retail_beauty', 'Shark', ARRAY[]::text[], 6)
+) AS b(category_slug, brand_name, aliases, sort_order) ON b.category_slug = c.slug
+ON CONFLICT DO NOTHING;
+
+-- Live per-brand search progress for Phase 1's curated discovery pass —
+-- written incrementally as each brand resolves (lib/legacy-brand-discovery.ts's
+-- onBrandProgress callback via lib/db/analyses.ts's updatePhase1BrandProgress),
+-- polled by components/analyze/ProgressPanel.tsx via the existing
+-- GET /api/analyses/[id] route WHILE the Phase 1 POST /continue call is
+-- still in flight — this is what makes the brand panel genuinely live
+-- without any new endpoint or websocket/SSE infrastructure.
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS phase1_brand_progress JSONB;

@@ -13,7 +13,8 @@ import {
   LogOut,
   Menu,
   X,
-  Presentation
+  Presentation,
+  Tags
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -44,6 +45,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     ...(user?.role === "OWNER" || user?.role === "ADMIN"
       ? [
           { label: "Deck Templates", href: "/dashboard/admin/deck-templates", icon: Presentation },
+          { label: "Legacy Brands", href: "/dashboard/admin/legacy-brands", icon: Tags },
         ]
       : []),
   ];

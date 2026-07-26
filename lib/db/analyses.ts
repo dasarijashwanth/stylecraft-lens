@@ -231,6 +231,28 @@ export async function setPendingQuestion(analysisId: string, question: { questio
   if (mockAnalysis) mockAnalysis.pendingQuestion = question;
 }
 
+// Live per-brand search progress for Phase 1's curated legacy-brand
+// discovery pass (lib/legacy-brand-discovery.ts's onBrandProgress
+// callback) — written incrementally, multiple times, WHILE Phase 1's own
+// request is still in flight, so a concurrent GET /api/analyses/[id] poll
+// (components/analyze/ProgressPanel.tsx) sees real progress mid-run. Same
+// simple two-path style as setPendingQuestion above (Supabase-or-memoryDb,
+// no Prisma attempt) — this is the same tier of Supabase/memoryDb-only
+// scratch data as pending_question, not part of the Prisma schema.
+export async function updatePhase1BrandProgress(analysisId: string, progress: any) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin
+      .from("analyses")
+      .update({ phase1_brand_progress: progress })
+      .eq("id", analysisId);
+    if (error) throw error;
+    return;
+  }
+
+  const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+  if (mockAnalysis) mockAnalysis.phase1BrandProgress = progress;
+}
+
 export async function failAnalysis(analysisId: string, errorMessage: string) {
   if (isSupabaseConfigured) {
     const { error } = await supabaseAdmin
@@ -319,6 +341,7 @@ export async function getAnalysis(analysisId: string) {
         phase2_result: mockAnalysis.phase2Result,
         phase3_result: mockAnalysis.phase3Result,
         pending_question: mockAnalysis.pendingQuestion,
+        phase1_brand_progress: mockAnalysis.phase1BrandProgress ?? null,
         error_message: mockAnalysis.errorMessage,
         duration_ms: mockAnalysis.durationMs,
         created_at: mockAnalysis.createdAt,

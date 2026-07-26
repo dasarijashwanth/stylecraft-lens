@@ -66,6 +66,7 @@ export interface MockAnalysis {
   phase2Result: any;
   phase3Result: any;
   pendingQuestion?: { question: string; foundSoFar?: string } | null;
+  phase1BrandProgress?: any[] | null;
   errorMessage: string | null;
   durationMs: number | null;
   createdAt: Date;
@@ -232,6 +233,26 @@ export interface MockProjectDeck {
   createdAt: Date;
 }
 
+export interface MockBrandCategory {
+  id: string;
+  slug: string;
+  name: string;
+  productTypes: string[];
+  audience: string | null; // 'professional' | 'retail'
+  createdAt: Date;
+}
+
+export interface MockLegacyBrand {
+  id: string;
+  categoryId: string;
+  brandName: string;
+  aliases: string[];
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -287,11 +308,21 @@ class MemoryDatabase {
   // fine at dev scale, Supabase is the real store in production.
   deckTemplates: MockDeckTemplate[] = [];
   projectDecks: MockProjectDeck[] = [];
+  // Unlike deckTemplates/projectDecks (an empty admin-fills-it-in feature),
+  // this registry must be non-empty in local dev without Supabase too —
+  // real default behavior mirroring the seeded supabase_schema.sql rows.
+  // seedBrandRegistryDefaults() runs unconditionally below (not gated on
+  // loadSnapshot() like seed()), since these arrays are never part of the
+  // snapshot file and would otherwise silently stay empty across every
+  // restart that finds an existing snapshot on disk.
+  brandCategories: MockBrandCategory[] = [];
+  legacyBrands: MockLegacyBrand[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {
       this.seed();
     }
+    this.seedBrandRegistryDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
 
@@ -410,6 +441,88 @@ class MemoryDatabase {
         createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
       }
     ];
+  }
+
+  // Mirrors supabase_schema.sql's seed INSERTs exactly (same 4 categories,
+  // same brands/aliases/sort_order) — called unconditionally (see
+  // constructor) so local dev without Supabase always has real default
+  // behavior, not an empty registry. No-op if already seeded (e.g. called
+  // twice via a hot reload sharing the global instance).
+  seedBrandRegistryDefaults() {
+    if (this.brandCategories.length > 0) return;
+
+    const now = new Date();
+    const categoryDefs: { slug: string; name: string; productTypes: string[]; audience: string }[] = [
+      { slug: "legacy_professional_clippers", name: "Legacy Professional Clippers, Trimmers, and Shavers", productTypes: ["clipper", "trimmer", "shaver"], audience: "professional" },
+      { slug: "legacy_retail_clippers", name: "Legacy Retail Clippers, Trimmers, and Shavers", productTypes: ["clipper", "trimmer", "shaver"], audience: "retail" },
+      { slug: "professional_beauty", name: "Professional Beauty", productTypes: ["dryer", "iron", "styler", "brush"], audience: "professional" },
+      { slug: "retail_beauty", name: "Retail Beauty", productTypes: ["dryer", "iron", "styler", "brush"], audience: "retail" },
+    ];
+
+    const brandDefs: Record<string, { name: string; aliases: string[] }[]> = {
+      legacy_professional_clippers: [
+        { name: "Wahl", aliases: [] },
+        { name: "Andis", aliases: [] },
+        { name: "Oster", aliases: [] },
+        { name: "BaByliss", aliases: ["BaBylissPRO", "Babyliss Pro"] },
+        { name: "TPOB", aliases: ["The Profession Of Barbering"] },
+        { name: "Cocco", aliases: [] },
+        { name: "JRL", aliases: [] },
+      ],
+      legacy_retail_clippers: [
+        { name: "Wahl", aliases: [] },
+        { name: "Andis", aliases: [] },
+        { name: "Oster", aliases: [] },
+        { name: "Panasonic", aliases: [] },
+        { name: "Conair", aliases: [] },
+        { name: "Manscaped", aliases: [] },
+        { name: "Remington", aliases: [] },
+      ],
+      professional_beauty: [
+        { name: "BaByliss", aliases: ["BaBylissPRO", "Babyliss Pro"] },
+        { name: "GHD", aliases: [] },
+        { name: "Paul Mitchell", aliases: [] },
+        { name: "Bio Ionic", aliases: [] },
+        { name: "Dyson", aliases: [] },
+        { name: "Shark", aliases: [] },
+        { name: "Amika", aliases: [] },
+        { name: "Olivia Garden", aliases: [] },
+        { name: "T3", aliases: [] },
+      ],
+      retail_beauty: [
+        { name: "Conair", aliases: [] },
+        { name: "Revlon", aliases: [] },
+        { name: "L'Oreal", aliases: ["L'Oréal", "LOreal", "L Oreal"] },
+        { name: "Hot Tools", aliases: ["Hot Tools Professional"] },
+        { name: "Drybar", aliases: [] },
+        { name: "Dyson", aliases: [] },
+        { name: "Shark", aliases: [] },
+      ],
+    };
+
+    for (const cat of categoryDefs) {
+      const categoryId = `bcat_${cat.slug}`;
+      this.brandCategories.push({
+        id: categoryId,
+        slug: cat.slug,
+        name: cat.name,
+        productTypes: cat.productTypes,
+        audience: cat.audience,
+        createdAt: now,
+      });
+      brandDefs[cat.slug].forEach((b, i) => {
+        this.legacyBrands.push({
+          id: `lbrand_${cat.slug}_${i}`,
+          categoryId,
+          brandName: b.name,
+          aliases: b.aliases,
+          enabled: true,
+          sortOrder: i,
+          createdAt: now,
+          updatedAt: now,
+        });
+      });
+    }
   }
 }
 

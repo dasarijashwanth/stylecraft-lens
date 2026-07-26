@@ -15,6 +15,10 @@ function competitorSummary(c: any): string {
   if (c.manufacturer) parts.push(`Mfr: ${c.manufacturer}`);
   if (c.model_number) parts.push(`Model: ${c.model_number}`);
   if (c.verified_by_rainforest === false) parts.push("unverified");
+  // Only the exception is flagged — a curated-list pick is the expected
+  // default and needs no extra tag; a competitor the curated registry
+  // couldn't fill (lib/analysisEngine.ts's AI top-up fallback) does.
+  if (c.brand_list_status === "not_curated") parts.push("Not on curated legacy list");
   return parts.length > 0 ? parts.join(" · ") : "No verified pricing/rating data found for this competitor";
 }
 
@@ -44,6 +48,8 @@ export function ActiveReportPdf({
   const wins = gtm.quick_wins || [];
   const citations = ca.citations || [];
   const provenanceRows: ProvenanceRow[] = ca.section_provenance || [];
+  const registrySnapshot = ca.legacy_registry_snapshot || null;
+  const curatedCount = largeComps.filter((c: any) => c.curated_brand === true).length;
 
   return (
     <Document>
@@ -68,6 +74,11 @@ export function ActiveReportPdf({
         <BulletList items={opps.map((o: any) => `${o.action}: ${o.description}`)} />
 
         <SectionHeader title="Large Brand Competitors" />
+        {registrySnapshot && (
+          <Text style={{ fontSize: 8, color: "#666666", fontStyle: "italic", marginBottom: 4 }}>
+            Selected from the {registrySnapshot.category_name} brand list ({curatedCount} of {largeComps.length} from curated brands).
+          </Text>
+        )}
         {largeComps.map((c: any, i: number) => (
           <TwoColRow key={i} question={c.name} answer={competitorSummary(c)} />
         ))}
