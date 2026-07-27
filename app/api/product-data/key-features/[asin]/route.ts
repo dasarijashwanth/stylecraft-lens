@@ -3,6 +3,7 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { resolveKeyFeatures, KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
+import { getAuthSession } from "@/lib/auth";
 
 // Multi-tier feature resolution (Amazon -> brand site -> retailers ->
 // expert reviews) can genuinely take 30-40s when Amazon has nothing and
@@ -60,6 +61,11 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
   const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName);
 
   try {
+    // No per-user ownership concept on this shared, ASIN-keyed cache —
+    // middleware.ts already blocks anonymous /api/** requests; this is
+    // defense-in-depth consistency with the rest of the codebase.
+    await getAuthSession();
+
     if (!forceRefresh) {
       const cached = await getCachedFeatures(cacheKey);
       if (cached) {

@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAmazonProduct, hasRainforestKey } from "@/lib/rainforest";
+import { getAuthSession } from "@/lib/auth";
 
+// ASIN-keyed Amazon data has no per-user ownership concept (it's shared,
+// public product data, cached in amazon_cache by ASIN for every caller) —
+// middleware.ts already blocks fully-unauthenticated /api/** requests, so
+// this call is defense-in-depth consistency with every other route, not
+// closing an otherwise-open door.
 export async function GET(req: NextRequest, { params }: { params: { asin: string } }) {
+  await getAuthSession();
   const asin = params.asin?.toUpperCase();
   if (!asin || !/^[A-Z0-9]{10}$/.test(asin)) {
     return NextResponse.json({ error: "Invalid ASIN" }, { status: 400 });

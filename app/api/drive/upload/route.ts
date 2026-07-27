@@ -91,11 +91,17 @@ export async function POST(req: NextRequest) {
     // phase or an explicit Regenerate action — so this just fetches the
     // latest already-generated file, unlike every other docType here.
     if (docType === "deck") {
+      // getLatestProjectDeck/getProjectDeckFileBuffer have no org/user
+      // awareness of their own (they fetch by project/deck id alone) — this
+      // check is what actually enforces ownership; it must run BEFORE any
+      // read below, not just be computed for the cosmetic projectName fallback.
+      const project = await getProject(id, session.orgId);
+      if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
       const deck = await getLatestProjectDeck(id);
       if (!deck || deck.status !== "complete") {
         return NextResponse.json({ error: "No completed deck found for this project" }, { status: 404 });
       }
-      const project = await getProject(id, session.orgId);
       const buffer = await getProjectDeckFileBuffer(deck);
 
       const { fileId, webViewLink } = await uploadToDrive({

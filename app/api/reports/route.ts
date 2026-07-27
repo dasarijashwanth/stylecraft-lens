@@ -45,9 +45,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Fetch the analysis
+    // Fetch the analysis — getAnalysis() itself has no user/org filter (it
+    // fetches by id alone), so ownership is checked here, same pattern as
+    // app/api/analyses/[id]/answer/route.ts and .../continue/route.ts.
     const analysisData = await getAnalysis(analysisId);
-    if (!analysisData) {
+    if (!analysisData || analysisData.user_id !== session.userId) {
       return NextResponse.json(
         { error: "NOT_FOUND", message: "Analysis not found" },
         { status: 404 }

@@ -4,6 +4,7 @@ import { getAmazonProduct } from "@/lib/rainforest";
 import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
+import { getAuthSession } from "@/lib/auth";
 
 // 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
 // the multi-tier resolver (Amazon -> expert reviews -> forums) sometimes
@@ -67,6 +68,11 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
   const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName || rawAsin || "product");
 
   try {
+    // No per-user ownership concept on this shared, ASIN-keyed cache —
+    // middleware.ts already blocks anonymous /api/** requests; this is
+    // defense-in-depth consistency with the rest of the codebase.
+    await getAuthSession();
+
     if (!forceRefresh) {
       const cached = await getCachedAnalysis(cacheKey);
       if (cached) {

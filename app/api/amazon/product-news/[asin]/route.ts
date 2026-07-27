@@ -3,6 +3,7 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { findProductNews, ProductNewsResult } from "@/lib/product-news";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
+import { getAuthSession } from "@/lib/auth";
 
 // 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
 // a real news search can take 30s+ and a hard Vercel kill mid-response
@@ -64,6 +65,11 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
   const cacheKey = resolveCacheKey(isRealAsin ? rawAsin : "", productName);
 
   try {
+    // No per-user ownership concept on this shared, ASIN-keyed cache —
+    // middleware.ts already blocks anonymous /api/** requests; this is
+    // defense-in-depth consistency with the rest of the codebase.
+    await getAuthSession();
+
     if (!forceRefresh) {
       const cached = await getCachedNews(cacheKey);
       if (cached) {

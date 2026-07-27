@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getAuthSession } from "@/lib/auth";
+import { getProject } from "@/lib/db/projects";
 import { retryFailedGeneration, reclaimStaleRunningState } from "@/lib/db/generation-state";
 
 // The one primitive the phase-continue pattern was missing: today a failed
@@ -8,6 +10,10 @@ import { retryFailedGeneration, reclaimStaleRunningState } from "@/lib/db/genera
 // stopped, safely (that route already re-reads the current phase every time).
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
+    const session = await getAuthSession();
+    const project = await getProject(params.id, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
     // Reclaim a stuck "running" state (a hard platform kill mid-step, never
     // a catchable exception) before the failed-state check below — this way
     // clicking Retry on a card stuck at "running" forever both reclaims AND

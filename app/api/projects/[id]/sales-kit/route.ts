@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthSession } from "@/lib/auth";
+import { getProject } from "@/lib/db/projects";
 import { buildFullProjectContext } from "@/lib/project-context";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
@@ -8,6 +10,10 @@ export const maxDuration = 60;
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const session = await getAuthSession();
+    const project = await getProject(params.id, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
     if (isSupabaseConfigured) {
       const { data } = await supabaseAdmin
         .from("project_outputs")
@@ -33,6 +39,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const session = await getAuthSession();
+    const project = await getProject(params.id, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
+    // buildFullProjectContext itself has no org filter of its own (fetches
+    // by id alone) — the check above is what actually enforces ownership
+    // here, same pattern as app/api/projects/[id]/artwork/route.ts.
     const ctx = await buildFullProjectContext(params.id);
     if (!ctx) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 

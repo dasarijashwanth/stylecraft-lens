@@ -388,7 +388,7 @@ export async function createReportFromAnalysis(
   }
 }
 
-export async function getUserReports(userId: string) {
+export async function getUserReports(userId: string, orgId?: string) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("reports")
@@ -404,7 +404,13 @@ export async function getUserReports(userId: string) {
   }
 
   try {
+    // The Prisma Report model has no userId column (only orgId) — filtering
+    // by orgId is the closest available scope on this fallback path. orgId
+    // is optional only for backward compatibility with any other caller;
+    // omitting it would return every org's reports, so every real call site
+    // must pass it (app/api/reports/route.ts does).
     const reports = await prisma.report.findMany({
+      where: orgId ? { orgId } : undefined,
       include: { project: true },
       orderBy: { updatedAt: "desc" },
     });
@@ -474,7 +480,7 @@ async function recomputeLegacyPricingAnalysis(report: any): Promise<PricingAnaly
   });
 }
 
-export async function getReport(reportId: string, userId: string) {
+export async function getReport(reportId: string, userId: string, orgId?: string) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("reports")
@@ -501,11 +507,14 @@ export async function getReport(reportId: string, userId: string) {
   }
 
   try {
+    // Same schema limitation as getUserReports above — Report has no
+    // userId column, so orgId is the closest real ownership check
+    // available on this fallback path.
     const report = await prisma.report.findUnique({
       where: { id: reportId },
       include: { project: true },
     });
-    if (!report) return null;
+    if (!report || (orgId && report.orgId !== orgId)) return null;
     return toApiShape({
       id: report.id, orgId: report.orgId, userId, projectId: report.projectId, analysisId: null,
       title: report.title, status: report.status, fileUrl: report.fileUrl, content: report.content,
@@ -606,7 +615,7 @@ export async function linkReportToProject(reportId: string, projectId: string, u
   }
 }
 
-export async function updateReport(reportId: string, userId: string, updates: any) {
+export async function updateReport(reportId: string, userId: string, updates: any, orgId?: string) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("reports")
@@ -629,6 +638,14 @@ export async function updateReport(reportId: string, userId: string, updates: an
   if (project_id !== undefined) prismaData.projectId = project_id;
 
   try {
+    // Same schema limitation as getReport above — verify orgId ownership
+    // (the closest real check available, no userId column on this model)
+    // BEFORE mutating, since prisma.report.update's own where clause can't
+    // express that filter without a compound unique key.
+    if (orgId) {
+      const existing = await prisma.report.findUnique({ where: { id: reportId }, select: { orgId: true } });
+      if (!existing || existing.orgId !== orgId) throw new Error("Report not found");
+    }
     const report = await prisma.report.update({
       where: { id: reportId },
       data: {

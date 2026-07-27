@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { AnalysisFormSchema } from "@/lib/validations";
 import { createAnalysis, getUserAnalyses } from "@/lib/db/analyses";
+import { getProject } from "@/lib/db/projects";
 
 export async function GET(request: Request) {
   try {
@@ -38,6 +39,17 @@ export async function POST(request: Request) {
 
     const data = validation.data;
     const { projectId } = body; // optional link to project
+
+    // projectId is client-supplied — verify it actually belongs to the
+    // caller before linking an analysis to it, otherwise a fabricated
+    // analysis could be attached to (and later read data back through)
+    // another org's project.
+    if (projectId) {
+      const project = await getProject(projectId, session.orgId);
+      if (!project) {
+        return NextResponse.json({ error: "VALIDATION_FAILED", message: "Project not found" }, { status: 404 });
+      }
+    }
 
     const created = await createAnalysis(session.userId, session.orgId, projectId || undefined, data);
 

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getAuthSession } from "@/lib/auth";
+import { getProject } from "@/lib/db/projects";
 import { getGenerationState, startGenerationState } from "@/lib/db/generation-state";
 import { getDocumentByProject } from "@/lib/db/documents";
 
@@ -15,6 +17,10 @@ export const dynamic = "force-dynamic";
 // started for this project (no product anchor was given at creation).
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   try {
+    const session = await getAuthSession();
+    const project = await getProject(params.id, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
     let state = await getGenerationState(params.id);
 
     // Self-heal, precisely gated: a missing state row for a project that

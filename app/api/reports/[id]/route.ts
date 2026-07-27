@@ -14,7 +14,7 @@ export async function GET(
     const session = await getAuthSession();
     const { id } = params;
 
-    const report = await getReport(id, session.userId);
+    const report = await getReport(id, session.userId, session.orgId);
     if (!report) {
       return NextResponse.json(
         { error: "NOT_FOUND", message: "Report not found" },
@@ -40,7 +40,7 @@ export async function PATCH(
     const { id } = params;
     const body = await request.json();
 
-    const report = await updateReport(id, session.userId, body);
+    const report = await updateReport(id, session.userId, body, session.orgId);
     return NextResponse.json({ report });
   } catch (error: any) {
     return NextResponse.json(
@@ -68,15 +68,22 @@ export async function DELETE(
       if (error) throw error;
       return NextResponse.json({ success: true });
     } else {
-      // Local DB/memoryDb Fallback
+      // Local DB/memoryDb Fallback — deleteMany's where clause (rather than
+      // delete's, which can only match by unique id) lets orgId be checked
+      // as part of the same query; count === 0 means either the report
+      // doesn't exist or belongs to another org, so both are reported as
+      // NOT_FOUND rather than leaking which case it was.
       try {
-        await prisma.report.delete({
-          where: { id }
+        const { count } = await prisma.report.deleteMany({
+          where: { id, orgId: session.orgId },
         });
+        if (count === 0) {
+          return NextResponse.json({ error: "NOT_FOUND", message: "Report not found" }, { status: 404 });
+        }
         return NextResponse.json({ success: true });
       } catch (dbError) {
         console.warn(`PostgreSQL/Prisma unavailable in DELETE /api/reports/${id}. Falling back to memoryDb:`, dbError);
-        const reportIndex = memoryDb.reports.findIndex(r => r.id === id);
+        const reportIndex = memoryDb.reports.findIndex(r => r.id === id && r.userId === session.userId);
         if (reportIndex === -1) {
           return NextResponse.json(
             { error: "NOT_FOUND", message: "Report not found" },
