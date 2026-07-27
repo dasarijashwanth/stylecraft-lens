@@ -184,7 +184,10 @@ export default function AnalyzePage() {
           description: description.trim(),
           category: category.trim() || undefined,
           companyContext: companyContext.trim() || undefined,
-          motorTech: motorTech || undefined,
+          // Never submit a motor type for Hair Care & Styling — the field
+          // only applies to Grooming & Barbering, even if a catalog
+          // auto-fill left a stale value sitting in state.
+          motorTech: industry === "haircare-styling" ? undefined : (motorTech || undefined),
           keyDiff: keyDiff.trim() || undefined,
           pricePoint: pricePoint.trim() || undefined,
         })
@@ -323,7 +326,14 @@ export default function AnalyzePage() {
                 <label className="font-semibold text-text-primary block">Industry *</label>
                 <select
                   value={industry}
-                  onChange={(e) => setIndustry(e.target.value)}
+                  onChange={(e) => {
+                    setIndustry(e.target.value);
+                    // Motor technology (rotary/magnetic/pivot clipper-style
+                    // motors) only applies to Grooming & Barbering tools —
+                    // clear any prior selection so a stale motor type never
+                    // gets submitted for a Hair Care & Styling product.
+                    if (e.target.value === "haircare-styling") setMotorTech("");
+                  }}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                   required
                 >
@@ -440,23 +450,27 @@ export default function AnalyzePage() {
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
             <h2 className="text-sm font-bold text-text-primary">Precision targeting</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="font-semibold text-text-primary block">Motor technology</label>
-                <select
-                  value={motorTech}
-                  onChange={(e) => setMotorTech(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
-                >
-                  <option value="">Select motor type</option>
-                  <option value="Brushless DC">Brushless DC (BLDC)</option>
-                  <option value="Rotary">Rotary motor</option>
-                  <option value="Magnetic/Pivot">Magnetic / Pivot motor</option>
-                  <option value="Universal/Corded">Universal corded motor</option>
-                  <option value="Cordless Li-ion">Cordless / Lithium-ion</option>
-                </select>
-              </div>
+              {/* Motor technology — Grooming & Barbering only (clipper/trimmer/
+                  shaver-style motors); not applicable to Hair Care & Styling tools. */}
+              {industry !== "haircare-styling" && (
+                <div className="space-y-1">
+                  <label className="font-semibold text-text-primary block">Motor technology</label>
+                  <select
+                    value={motorTech}
+                    onChange={(e) => setMotorTech(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                  >
+                    <option value="">Select motor type</option>
+                    <option value="Brushless DC">Brushless DC (BLDC)</option>
+                    <option value="Rotary">Rotary motor</option>
+                    <option value="Magnetic/Pivot">Magnetic / Pivot motor</option>
+                    <option value="Universal/Corded">Universal corded motor</option>
+                    <option value="Cordless Li-ion">Cordless / Lithium-ion</option>
+                  </select>
+                </div>
+              )}
 
-              <div className="space-y-1">
+              <div className={`space-y-1 ${industry === "haircare-styling" ? "md:col-span-2" : ""}`}>
                 <label className="font-semibold text-text-primary block">Key differentiating feature</label>
                 <input
                   type="text"
