@@ -7,6 +7,7 @@
 // this never throws and never estimates missing data.
 import * as cheerio from "cheerio";
 import { hasOpenAIKey, searchAndExtractJson } from "./openai";
+import { safeFetch } from "./safe-fetch";
 
 export interface ScrapedProduct {
   title?: string;
@@ -50,9 +51,12 @@ function extractJsonLdProduct($: cheerio.CheerioAPI): any | null {
 export async function scrapeProductPage(url: string): Promise<ScrapedProduct | null> {
   let html: string;
   try {
-    const res = await fetch(url, {
+    // url is a user-entered product URL — safeFetch blocks non-http(s)
+    // protocols, private/reserved IP ranges (incl. cloud metadata), and
+    // re-validates every redirect hop (see lib/safe-fetch.ts).
+    const res = await safeFetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      timeoutMs: FETCH_TIMEOUT_MS,
     });
     if (!res.ok) return null;
     html = await res.text();

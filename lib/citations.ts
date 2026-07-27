@@ -14,6 +14,7 @@
 // server-side" has to come from an independent fetch of the URL the model
 // cited, done here — otherwise there'd be nothing real to verify against.
 import * as cheerio from "cheerio";
+import { safeFetch } from "./safe-fetch";
 
 const FETCH_TIMEOUT_MS = 6_000;
 const USER_AGENT = "StylecraftLensBot/1.0 (+https://stylecraft-lens.vercel.app; citation verification)";
@@ -23,9 +24,12 @@ const USER_AGENT = "StylecraftLensBot/1.0 (+https://stylecraft-lens.vercel.app; 
 // lib/amazon-review-analysis.ts's web tiers) — not just Phase 3 citations.
 export async function fetchPageText(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, {
+    // url is AI-provider-cited, not directly typed by a user, but it's still
+    // an arbitrary external address this server fetches — same SSRF surface
+    // as lib/scrape.ts, so it gets the same protection (see lib/safe-fetch.ts).
+    const res = await safeFetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      timeoutMs: FETCH_TIMEOUT_MS,
     });
     if (!res.ok) return null;
     const html = await res.text();
