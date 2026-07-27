@@ -19,6 +19,7 @@ import Topbar from "./Topbar";
 import { useAuth } from "@/hooks/useAuth";
 import { Spinner } from "@/components/ui/Spinner";
 import { Modal } from "@/components/ui/Modal";
+import GettingStartedBanner from "@/components/help/GettingStartedBanner";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -177,7 +178,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           onSearchClick={() => setSearchOpen(true)} 
         />
         
-        <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-4">
+          <GettingStartedBanner />
           {children}
         </main>
       </div>

@@ -5,6 +5,7 @@
 // dev convenience, not a substitute for a real database in production.
 import fs from "fs";
 import path from "path";
+import { FAQ_SEED_DATA } from "./faq-seed-data";
 
 const SNAPSHOT_PATH = path.join(process.cwd(), ".local-data", "memdb-snapshot.json");
 const AUTOSAVE_INTERVAL_MS = 3000;
@@ -274,6 +275,30 @@ export interface MockCompetitorMatchingConfig {
   updatedAt: Date;
 }
 
+export interface MockFaq {
+  id: string;
+  category: string;
+  question: string;
+  answer: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockFaqVote {
+  id: string;
+  faqId: string;
+  vote: "up" | "down";
+  createdAt: Date;
+}
+
+export interface MockFaqSearchMiss {
+  id: string;
+  term: string;
+  createdAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -343,6 +368,11 @@ class MemoryDatabase {
   // empty admin table.
   motorFamilies: MockMotorFamily[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
+  // Same always-seeded precedent — real default Help content, not an
+  // empty admin table. Votes/search-misses start empty (real usage data).
+  faqs: MockFaq[] = [];
+  faqVotes: MockFaqVote[] = [];
+  faqSearchMisses: MockFaqSearchMiss[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {
@@ -350,6 +380,7 @@ class MemoryDatabase {
     }
     this.seedBrandRegistryDefaults();
     this.seedMotorFamilyDefaults();
+    this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
 
@@ -581,6 +612,29 @@ class MemoryDatabase {
         updatedAt: now,
       });
     });
+  }
+
+  // Mirrors scripts/seed-faqs.ts's upsert logic, from the same shared
+  // lib/faq-seed-data.ts source — sort_order is assigned per-category, in
+  // the array's own listed order.
+  seedFaqDefaults() {
+    if (this.faqs.length > 0) return;
+    const now = new Date();
+    const countByCategory = new Map<string, number>();
+    for (const entry of FAQ_SEED_DATA) {
+      const sortOrder = countByCategory.get(entry.category) ?? 0;
+      countByCategory.set(entry.category, sortOrder + 1);
+      this.faqs.push({
+        id: `faq_${this.faqs.length}`,
+        category: entry.category,
+        question: entry.question,
+        answer: entry.answer,
+        sortOrder,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
   }
 }
 

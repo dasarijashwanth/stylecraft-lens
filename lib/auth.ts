@@ -13,7 +13,15 @@ export interface UserSession {
   // True until the seeded admin changes their bootstrap password — gates
   // access via components/layout/Shell.tsx's redirect to /change-password.
   mustChangePassword: boolean;
+  // null = never dismissed the first-login "Getting Started FAQ" banner —
+  // shows it. Only meaningfully persisted via the real Supabase/profiles
+  // path (see getAuthSession below); fallback/mock sessions have no real
+  // profile row to persist against, so they use a fixed already-dismissed
+  // marker rather than nagging in dev.
+  faqBannerDismissedAt: string | null;
 }
+
+const ALREADY_DISMISSED = "1970-01-01T00:00:00.000Z";
 
 const MOCK_SESSION: UserSession = {
   userId: "dev_user_id",
@@ -24,6 +32,7 @@ const MOCK_SESSION: UserSession = {
   role: "OWNER",
   plan: "FREE",
   mustChangePassword: false,
+  faqBannerDismissedAt: ALREADY_DISMISSED,
 };
 
 export const hasClerkKeys =
@@ -81,6 +90,7 @@ export async function getAuthSession(): Promise<UserSession> {
       role: profile.role,
       plan: "FREE",
       mustChangePassword: profile.must_change_password,
+      faqBannerDismissedAt: profile.faq_banner_dismissed_at ?? null,
     };
   }
 
@@ -137,6 +147,7 @@ export async function getAuthSession(): Promise<UserSession> {
           role: dbUser.role as any,
           plan: (dbUser.org?.plan as any) || "FREE",
           mustChangePassword: false,
+          faqBannerDismissedAt: ALREADY_DISMISSED,
         };
       }
     } catch (e) {
@@ -183,6 +194,7 @@ export async function getAuthSession(): Promise<UserSession> {
         role: user.role as any,
         plan: org.plan as any,
         mustChangePassword: false,
+        faqBannerDismissedAt: ALREADY_DISMISSED,
       };
     } catch (error) {
       // Graceful degradation when the database is completely offline/unconfigured

@@ -30,6 +30,7 @@
     "csv-stringify": "^6.8.1",
     "docxtemplater": "^3.69.3",
     "framer-motion": "^12.42.0",
+    "fuse.js": "^7.5.0",
     "googleapis": "^173.0.0",
     "gsap": "^3.15.0",
     "lucide-react": "^1.21.0",

@@ -18,6 +18,7 @@ import {
   Presentation
 } from "lucide-react";
 import { toast } from "sonner";
+import FaqHelpLink from "@/components/help/FaqHelpLink";
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -96,8 +97,9 @@ export default function ProjectsPage() {
           <span className="inline-flex items-center justify-center bg-surface-3 border border-border px-2 py-0.5 rounded-full text-xs font-semibold text-text-secondary">
             {filteredProjects.length} total
           </span>
+          <FaqHelpLink category="Creating Projects" />
         </div>
-        
+
         <Link
           href="/dashboard/projects/new"
           className="flex items-center gap-1.5 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/20 shrink-0"

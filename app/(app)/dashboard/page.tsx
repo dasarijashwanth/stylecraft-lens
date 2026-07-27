@@ -29,6 +29,7 @@ import KPICard from "@/components/dashboard/KPICard";
 import { toast } from "sonner";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
+import FaqHelpLink from "@/components/help/FaqHelpLink";
 
 function timeAgo(date: Date) {
   const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
@@ -182,6 +183,11 @@ export default function DashboardOverview() {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center gap-2">
+        <h1 className="text-display">Dashboard</h1>
+        <FaqHelpLink category="Dashboard" />
+      </div>
+
       {/* KPI Cards Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard

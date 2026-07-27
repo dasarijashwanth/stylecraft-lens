@@ -625,3 +625,59 @@ CREATE TABLE IF NOT EXISTS competitor_matching_config (
 ALTER TABLE competitor_matching_config ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for competitor_matching_config" ON competitor_matching_config FOR ALL USING (true) WITH CHECK (true);
 INSERT INTO competitor_matching_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- 15. FAQ / HELP CENTER
+-- Content lives in lib/faq-seed-data.ts (a plain TS array), NOT duplicated
+-- as raw SQL here — FAQ answers are long free-text prose with apostrophes/
+-- quotes/markdown, a much higher escaping-risk content type than the short
+-- brand/motor-family string arrays seeded directly in SQL elsewhere in this
+-- file. Run `npx tsx scripts/seed-faqs.ts` once after this table exists to
+-- load the real content (idempotent — safe to re-run after editing the
+-- source array). `sort_order` is the priority WITHIN its category (the
+-- left-sidebar category order itself is a fixed list in code,
+-- lib/faq-seed-data.ts's FAQ_CATEGORIES, not derived from this table).
+CREATE TABLE IF NOT EXISTS faqs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    category VARCHAR(100) NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL, -- light markdown: **bold**, `code`, "- "/"1. " lists
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS faqs_category_sort_idx ON faqs(category, sort_order);
+ALTER TABLE faqs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for faqs" ON faqs FOR ALL USING (true) WITH CHECK (true);
+
+-- One row per vote (not an aggregate counter column) — avoids increment
+-- race conditions and keeps a real audit trail, matching this app's
+-- general "insert a row, never mutate a counter in place" preference
+-- (e.g. product_snapshots). Anonymous — no user identification required,
+-- just aggregate counts for the admin view.
+CREATE TABLE IF NOT EXISTS faq_votes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    faq_id UUID REFERENCES faqs(id) ON DELETE CASCADE NOT NULL,
+    vote VARCHAR(10) NOT NULL CHECK (vote IN ('up', 'down')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS faq_votes_faq_idx ON faq_votes(faq_id);
+ALTER TABLE faq_votes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for faq_votes" ON faq_votes FOR ALL USING (true) WITH CHECK (true);
+
+-- One row per zero-result search — lets admins see what people searched
+-- for and couldn't find, to grow the FAQ where users actually get stuck
+-- (Part 3's explicit ask).
+CREATE TABLE IF NOT EXISTS faq_search_misses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    term VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE faq_search_misses ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for faq_search_misses" ON faq_search_misses FOR ALL USING (true) WITH CHECK (true);
+
+-- Tracks dismissal of the first-login "New here? Read the Getting Started
+-- FAQ" banner (Part 1's onboarding hook) — persists across devices/sessions
+-- rather than a localStorage-only flag, and doubles as "has this user seen
+-- the FAQ at all" for admins. NULL = never dismissed = still shows the banner.
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS faq_banner_dismissed_at TIMESTAMP WITH TIME ZONE;

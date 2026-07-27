@@ -40,6 +40,7 @@ import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillRepo
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
+import FaqHelpLink from "@/components/help/FaqHelpLink";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork" | "project-deck";
 type ReportTab = Exclude<Tab, "artwork" | "project-deck">;
@@ -303,6 +304,11 @@ export default function ProjectDetailPage() {
                   {TAB_LABELS[tab]}
                 </button>
               ))}
+              <FaqHelpLink
+                category={TAB_FAQ_CATEGORY[activeTab]}
+                className="ml-auto shrink-0 mr-2 inline-flex items-center justify-center text-text-muted hover:text-accent transition-colors"
+                title={`Help: ${TAB_LABELS[activeTab]}`}
+              />
             </div>
 
             {/* Tab Content Canvas */}
@@ -406,6 +412,18 @@ const TAB_LABELS: Record<Tab, string> = {
   "content-form":         "Content Form",
   "artwork":              "Artwork",
   "project-deck":         "Project Deck",
+};
+
+// Maps each tab to the FAQ category its contextual "?" icon deep-links to
+// (see lib/faq-seed-data.ts's FAQ_CATEGORIES) — Content Form and Artwork
+// share one combined category, matching the FAQ spec's category list.
+const TAB_FAQ_CATEGORY: Record<Tab, string> = {
+  "competitive-analysis": "Competitive Analysis Tab",
+  "pricing":              "Pricing Tab",
+  "go-to-market":         "Go To Market Tab",
+  "content-form":         "Content Form & Artwork Tabs",
+  "artwork":              "Content Form & Artwork Tabs",
+  "project-deck":         "Project Deck Tab",
 };
 
 // ─── Tab Content Container ──────────────────────────────────────────────────
@@ -1077,6 +1095,7 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
       <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Technical Data Sheet</span>
+          <FaqHelpLink category="TDS" title="Help: TDS" />
           {hasDocument && (
             <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
               {completedCount}/{TDS_FIELD_SCHEMA.length} fields completed
