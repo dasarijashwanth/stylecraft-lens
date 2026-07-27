@@ -9,6 +9,10 @@ import type { ProvenanceRow } from "@/lib/db/section-provenance";
 // literally nothing was resolved for this competitor.
 function competitorSummary(c: any): string {
   const parts: string[] = [];
+  // Motor Type leads — it's the #1 selection criterion, not incidental spec
+  // data (lib/analysisEngine.ts's selectByCompositeScore).
+  if (c.motor_match_tier === "unverified") parts.push("Motor: Unverified");
+  else if (c.motor_type) parts.push(`Motor: ${c.motor_type}`);
   if (c.price) parts.push(c.price);
   if (c.rating) parts.push(`★${c.rating}${c.review_count ? ` (${c.review_count} reviews)` : ""}`);
   else if (c.review_count) parts.push(`${c.review_count} reviews`);
@@ -48,6 +52,7 @@ export function ActiveReportPdf({
   const wins = gtm.quick_wins || [];
   const citations = ca.citations || [];
   const provenanceRows: ProvenanceRow[] = ca.section_provenance || [];
+  const matchingWeights = ca.matching_weights;
   const registrySnapshot = ca.legacy_registry_snapshot || null;
   const curatedCount = largeComps.filter((c: any) => c.curated_brand === true).length;
 
@@ -140,8 +145,15 @@ export function ActiveReportPdf({
         </Page>
       )}
 
-      {provenanceRows.length > 0 && (
+      {(provenanceRows.length > 0 || matchingWeights) && (
         <Page size="A4" style={styles.page}>
+          {matchingWeights && (
+            <Text style={{ fontSize: 8, color: "#666666", marginBottom: 8, lineHeight: 1.4 }}>
+              Competitors are prioritized by motor type match ({Math.round(matchingWeights.motor * 100)}%), then price
+              proximity ({Math.round(matchingWeights.price * 100)}%) — absolute for legacy brands, relative to each
+              indie brand&apos;s own lineup — then comparable feature/spec overlap ({Math.round(matchingWeights.feature * 100)}%).
+            </Text>
+          )}
           <ProvenanceAppendix rows={provenanceRows} />
           <PageFooter />
         </Page>

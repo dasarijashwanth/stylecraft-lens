@@ -23,9 +23,12 @@ interface ResultsPanelProps {
     };
     phase1: {
       competitors: any[];
+      matching_weights?: { motor: number; price: number; feature: number } | null;
+      legacy_registry_snapshot?: { category_slug: string; category_name: string; brands: any[] } | null;
     };
     phase2: {
       competitors: any[];
+      matching_weights?: { motor: number; price: number; feature: number } | null;
     };
     phase3: {
       amazon_category: string;
@@ -437,6 +440,15 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           </span>
         </div>
 
+        {phase1.matching_weights && (
+          <p className="text-[10px] text-text-muted italic -mt-3">
+            Competitors prioritized by motor type, then price (legacy: nearest to your target price), then comparable specs.
+            {phase1.legacy_registry_snapshot && (
+              <> Legacy competitors selected from the {phase1.legacy_registry_snapshot.category_name} brand list ({phase1.competitors?.filter((c: any) => c.curated_brand === true).length ?? 0} of {phase1.competitors?.length ?? 0} from curated brands).</>
+            )}
+          </p>
+        )}
+
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
             phase1.competitors.map((comp, i) => (
@@ -464,6 +476,12 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             {phase2.competitors?.length ?? 0} Brands
           </span>
         </div>
+
+        {phase2.matching_weights && (
+          <p className="text-[10px] text-text-muted italic -mt-3">
+            Competitors prioritized by motor type, then price (indie: relative to each brand&apos;s own lineup tier), then comparable specs.
+          </p>
+        )}
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors && phase2.competitors.length > 0 ? (
@@ -505,6 +523,15 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
   if (!competitors || competitors.length === 0) return null;
 
   const rows: TableRowDef[] = [
+    // Motor Type and Price lead the table — they're the #1 and #2
+    // competitor-selection criteria (lib/analysisEngine.ts's
+    // selectByCompositeScore), not just incidental spec data, so they're
+    // always populated for a selected competitor rather than something
+    // that can fall through to "Not available."
+    {
+      label: "Motor Type",
+      getValue: (c) => (c.motor_match_tier === "unverified" ? "Unverified" : c.motor_type || null),
+    },
     { label: "Amazon Price", getValue: (c) => c.price || null },
     { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null) },
     { label: "Review Count", getValue: (c) => c.review_count || null },

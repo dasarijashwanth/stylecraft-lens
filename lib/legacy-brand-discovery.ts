@@ -28,6 +28,13 @@ export interface BrandProgressEntry {
   status: BrandProgressStatus;
   price?: string | null;
   reason?: string | null;
+  // Best-effort LIVE hint only — true when the motor-first query (not the
+  // plain fallback) is what actually produced this brand's match. The
+  // authoritative motor match tier (exact/adjacent/different/unverified)
+  // is computed properly downstream by lib/analysisEngine.ts's
+  // selectByCompositeScore against the real motor taxonomy; this is just
+  // what the in-progress panel can show without duplicating that logic.
+  motorMatched?: boolean;
 }
 
 export interface CuratedBrandCandidate {
@@ -150,7 +157,13 @@ export async function searchCuratedLegacyBrands(
   // getting the real CURATED_BRAND_SEARCH_TIME_BUDGET_MS. Lets offline
   // verification exercise the time-budget cutoff path deterministically
   // instead of waiting out a real 15s window.
-  timeBudgetMsOverride?: number
+  timeBudgetMsOverride?: number,
+  // Motor type is priority #1 (Part 2.1) — when known, each brand is
+  // searched motor-first ("{brand} {motor} {subcategory}") before falling
+  // back to the plain query, so a brand's same-motor model is found
+  // directly rather than relying on price/category filtering alone to
+  // surface it.
+  ourMotorLabel?: string | null
 ): Promise<CuratedBrandCandidate[]> {
   const subcategory = identity.subcategory || identity.category || "";
   const isProfessional = categorySlug.includes("professional");
@@ -187,14 +200,25 @@ export async function searchCuratedLegacyBrands(
 
     await mapWithConcurrency(unmatched, 3, async (brand) => {
       const alias = pickSearchAlias(brand, isProfessional);
-      const results = await searchAmazonCategory(`${alias} ${subcategory}`.trim(), 8);
+      const queries = ourMotorLabel
+        ? [`${alias} ${ourMotorLabel} ${subcategory}`.trim(), `${alias} ${subcategory}`.trim()]
+        : [`${alias} ${subcategory}`.trim()];
 
-      const inBand = results.filter(r =>
-        r.price_raw != null &&
-        isWithinBand(r.price_raw, band) &&
-        brandMatchesTitle(r.title, brand.brand_name, brand.aliases) &&
-        competitorMatchesCategory(r.title, identity.category || "", identity.subcategory || undefined)
-      );
+      let inBand: CategorySearchResult[] = [];
+      let matchedViaMotorQuery = false;
+      for (let qi = 0; qi < queries.length; qi++) {
+        const results = await searchAmazonCategory(queries[qi], 8);
+        inBand = results.filter(r =>
+          r.price_raw != null &&
+          isWithinBand(r.price_raw, band) &&
+          brandMatchesTitle(r.title, brand.brand_name, brand.aliases) &&
+          competitorMatchesCategory(r.title, identity.category || "", identity.subcategory || undefined)
+        );
+        if (inBand.length > 0) {
+          matchedViaMotorQuery = !!ourMotorLabel && qi === 0;
+          break;
+        }
+      }
 
       const entry = progressByBrand.get(brand.brand_name)!;
       if (inBand.length > 0) {
@@ -204,6 +228,7 @@ export async function searchCuratedLegacyBrands(
         matched.set(brand.brand_name, toCandidate(best, brand));
         entry.status = "found";
         entry.price = best.price;
+        entry.motorMatched = matchedViaMotorQuery;
         entry.reason = widenStep > 0 ? `Found within widened band (±${WIDEN_PCT_LABELS[widenStep]}%)` : null;
       } else if (widenStep === 2) {
         entry.status = "not_found";

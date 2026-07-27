@@ -34,9 +34,19 @@ function renderProvenanceAppendixHTML(report: any): string {
     legacy_brand_registry: "Legacy Brand Sourcing",
   };
 
+  const weights = ca.matching_weights;
+
   return `
     <div class="page-break"></div>
     <h2>Data Sources &amp; Methodology</h2>
+    ${weights ? `
+      <p style="font-size: 10px; color: #666;">
+        Competitors are prioritized by motor type match (${Math.round(weights.motor * 100)}%), then price proximity
+        (${Math.round(weights.price * 100)}%) — absolute for legacy brands, relative to each indie brand's own lineup —
+        then comparable feature/spec overlap (${Math.round(weights.feature * 100)}%). Each competitor's individual
+        motor/price/feature scores are noted on its comparison table row above.
+      </p>
+    ` : ""}
     ${rows.map(row => `
       <div class="comp-specs" style="margin-bottom: 10px;">
         <p><strong>${escapeHtml(row.product_name || "Unknown product")} — ${SECTION_LABELS[row.section] || row.section}</strong></p>
@@ -510,34 +520,35 @@ function generatePrintHTML(report: any, activeTab?: string): string {
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
           ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${c.description.slice(0, 300)}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
-            <strong>Specs:</strong> Motor: ${c.confirmed_technical_specs?.motor_type || "—"} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
+            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
           </div>
         </div>
       `).join("")}
     </div>
 
     <h3>Legacy Brand Comparison Table</h3>
+    <p style="font-size: 10px; color: #666;">Motor Type and Price lead this table — they're the #1 and #2 competitor-selection criteria, not incidental spec data.</p>
     <table class="comparison-table">
       <thead>
         <tr>
-          <th style="width: 25%">Model</th>
+          <th style="width: 22%">Model</th>
+          <th style="width: 15%">Motor Type</th>
           <th style="width: 10%">Price</th>
           <th style="width: 10%">Rating</th>
           <th style="width: 12%">Review Count</th>
-          <th style="width: 15%">Monthly Sales</th>
-          <th style="width: 15%">Motor Type</th>
+          <th style="width: 13%">Monthly Sales</th>
           <th style="width: 13%">RPM</th>
         </tr>
       </thead>
       <tbody>
         ${(ca.large_brand_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${c.name}</strong></td>
+            <td><strong>${c.name}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
+            <td>${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")}</td>
             <td>${c.price || "—"}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
             <td>${c.review_count || "—"}</td>
             <td>${c.monthly_sales || "—"}</td>
-            <td>${c.confirmed_technical_specs?.motor_type || "—"}</td>
             <td>${c.confirmed_technical_specs?.rpm || "—"}</td>
           </tr>
         `).join("")}
@@ -569,34 +580,35 @@ function generatePrintHTML(report: any, activeTab?: string): string {
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
           ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${c.description.slice(0, 300)}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
-            <strong>Specs:</strong> Motor: ${c.confirmed_technical_specs?.motor_type || "—"} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
+            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
           </div>
         </div>
       `).join("")}
     </div>
 
     <h3>Indie Brand Comparison Table</h3>
+    <p style="font-size: 10px; color: #666;">Motor Type and Price lead this table — they're the #1 and #2 competitor-selection criteria. Price for indie brands reflects RELATIVE brand-tier positioning (see each competitor's rationale), not just absolute dollars.</p>
     <table class="comparison-table">
       <thead>
         <tr>
-          <th style="width: 25%">Model</th>
+          <th style="width: 22%">Model</th>
+          <th style="width: 15%">Motor Type</th>
           <th style="width: 10%">Price</th>
           <th style="width: 10%">Rating</th>
           <th style="width: 12%">Review Count</th>
-          <th style="width: 15%">Monthly Sales</th>
-          <th style="width: 15%">Motor Type</th>
+          <th style="width: 13%">Monthly Sales</th>
           <th style="width: 13%">RPM</th>
         </tr>
       </thead>
       <tbody>
         ${(ca.indie_emerging_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${c.name}</strong></td>
-            <td>${c.price || "—"}</td>
+            <td><strong>${c.name}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
+            <td>${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")}</td>
+            <td>${c.price || "—"}${c.price_logic === "relative" ? ` <span style="font-size:9px; color:#666;">(relative tier)</span>` : ""}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
             <td>${c.review_count || "—"}</td>
             <td>${c.monthly_sales || "—"}</td>
-            <td>${c.confirmed_technical_specs?.motor_type || "—"}</td>
             <td>${c.confirmed_technical_specs?.rpm || "—"}</td>
           </tr>
         `).join("")}

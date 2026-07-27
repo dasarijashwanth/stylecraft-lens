@@ -21,6 +21,26 @@ import { computePriceBand, deriveTierKeyword, isWithinBand, buildOutOfBandLabel,
 import { getDocumentByProject, getDocumentFields } from "./db/documents";
 import { resolveLegacyBrandsForIdentity, type ResolvedLegacyRegistry } from "./legacy-brand-registry";
 import { searchCuratedLegacyBrands, normalizeBrandToken, type BrandProgressEntry } from "./legacy-brand-discovery";
+import { listMotorFamilies } from "./db/motor-families";
+import type { MotorFamilyRow } from "./db/motor-families";
+import { getMatchingWeights } from "./db/competitor-matching-config";
+import { isMotorizedCategory, computeMotorMatchTier } from "./motor-taxonomy";
+import { extractCompetitorMotorType, resolveOurMotorType, type OurMotorResolution } from "./motor-extraction";
+import {
+  computeMotorScore, computePriceScoreAbsolute, computePriceScoreRelative, computeFeatureScore,
+  computeCompositeScore, dedupeToOnePerBrand, type MatchingWeights,
+} from "./competitor-scoring";
+import { buildIndieBrandLineups, computePercentileInLineup, type LineupProduct } from "./indie-brand-lineup";
+import { resolveOurLineupTier, percentileForManualTier, type LineupTier } from "./our-product-position";
+import { extractCompetitorSpecs, extractOurSpecsFromTds } from "./spec-extraction";
+import { getTdsFieldsForProject } from "./db/documents";
+
+// "brushless rotary" style combined label — used consistently everywhere
+// our own motor type needs to appear in a search query or prompt.
+function formatMotorLabel(motor: OurMotorResolution | null): string | null {
+  if (!motor) return null;
+  return motor.modifierLabel ? `${motor.modifierLabel} ${motor.label}` : motor.label;
+}
 
 export interface AnalysisContext {
   id: string;
@@ -36,6 +56,11 @@ export interface AnalysisContext {
   motorTech?: string;
   keyDiff?: string;
   pricePoint?: string;
+  // Set via the pause-and-ask answer route when resolveOurLineupTier
+  // (lib/our-product-position.ts) can't match the input to a real
+  // StyleCraft catalog product — needed only for indie-brand relative
+  // price scoring (Phase 2).
+  lineupTier?: LineupTier;
 }
 
 // Keyed off the VERIFIED category/subcategory from Stage 1's Identity
@@ -576,6 +601,163 @@ export function applyPriceBandGate(
   return final;
 }
 
+export interface CompositeScoringContext {
+  motorFamilies: MotorFamilyRow[];
+  ourMotor: OurMotorResolution | null;
+  ourSpecs: import("./competitor-scoring").FeatureComparable;
+  weights: MatchingWeights;
+  // Indie-only — absent/undefined for legacy, in which case price scoring
+  // is always absolute-to-target (per the spec, relative pricing is an
+  // indie-specific concept).
+  ourLineupPercentile?: number | null;
+  indieLineups?: Map<string, LineupProduct[]>;
+}
+
+// Replaces applyPriceBandGate's plain "in-band first, then closest to
+// target price" selection with the full motor -> price -> feature
+// composite (Part 3). applyPriceBandGate itself is left untouched (still
+// exported, still used by the offline verify suite) — this is a fresh,
+// independent implementation of the same widen-step band math (identical
+// ±30/40/50% legacy / asymmetric emerging bands, same static-fallback-topup
+// safety net) so that motor/price/feature scoring can influence WHICH
+// candidates survive out of the fuller pre-truncation pool, not just
+// re-sort an already-capped 5 (see the plan's Context section for why that
+// distinction matters). When ourMotor is null (a non-motorized category, or
+// motor genuinely undeterminable), every candidate's motor tier resolves to
+// "unverified" uniformly via computeMotorMatchTier's own null-handling —
+// motor scoring becomes a neutral constant that doesn't discriminate
+// between candidates, so ranking gracefully degrades to price+feature only,
+// with no separate code path needed for "motor doesn't apply here."
+export function selectByCompositeScore(
+  candidates: any[],
+  targetPriceRaw: number,
+  tier: CompetitorTier,
+  identity: IdentityCard,
+  limit: number,
+  ctx: CompositeScoringContext,
+  opts: { allowStaticFallbackTopup?: boolean } = {}
+): any[] {
+  const allowStaticFallbackTopup = opts.allowStaticFallbackTopup ?? true;
+  const withPrice = candidates.map(c => ({
+    ...c,
+    _resolvedPrice: typeof c.price_raw === "number" ? c.price_raw : parsePriceToNumber(c.ai_claimed_price ?? c.price),
+  }));
+
+  const primaryBand = computePriceBand(targetPriceRaw, tier, 0);
+  const widestBand = computePriceBand(targetPriceRaw, tier, 2);
+
+  let accepted: any[] = [];
+  for (let widenStep = 0; widenStep <= 2; widenStep++) {
+    const band = computePriceBand(targetPriceRaw, tier, widenStep);
+    const inBand = withPrice.filter(c => c._resolvedPrice != null && isWithinBand(c._resolvedPrice, band));
+    if (inBand.length >= limit || widenStep === 2) {
+      accepted = inBand;
+      break;
+    }
+  }
+
+  const scored = accepted.map(c => {
+    const motorExtraction = extractCompetitorMotorType(c, ctx.motorFamilies);
+    const motorMatchTier = computeMotorMatchTier(ctx.ourMotor?.familyKey ?? null, motorExtraction?.familyKey ?? null, ctx.motorFamilies);
+    const motorScore = computeMotorScore(motorMatchTier);
+
+    let priceScore: number;
+    let priceLogic: "absolute" | "relative" = "absolute";
+    let theirLineupPercentile: number | null = null;
+    let theirLineupSample: LineupProduct[] | null = null;
+
+    if (tier === "emerging" && ctx.ourLineupPercentile != null && ctx.indieLineups) {
+      const lineup = ctx.indieLineups.get(c.brand) || [];
+      const pct = lineup.length >= 2 ? computePercentileInLineup(c._resolvedPrice, lineup) : null;
+      if (pct != null) {
+        priceScore = computePriceScoreRelative(ctx.ourLineupPercentile, pct);
+        priceLogic = "relative";
+        theirLineupPercentile = pct;
+        theirLineupSample = lineup;
+      } else {
+        priceScore = computePriceScoreAbsolute(c._resolvedPrice, targetPriceRaw);
+      }
+    } else {
+      priceScore = computePriceScoreAbsolute(c._resolvedPrice, targetPriceRaw);
+    }
+
+    const theirSpecs = extractCompetitorSpecs(c);
+    const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs);
+    const compositeScore = computeCompositeScore(motorScore, priceScore, featureScore, ctx.weights);
+
+    const outOfBand = !isWithinBand(c._resolvedPrice, primaryBand);
+    const { _resolvedPrice, ai_claimed_price, ...rest } = c;
+
+    return {
+      ...rest,
+      motor_type: motorExtraction?.label ?? null,
+      motor_family_key: motorExtraction?.familyKey ?? null,
+      motor_modifier: motorExtraction?.modifierLabel ?? null,
+      motor_source_quote: motorExtraction?.sourceQuote ?? null,
+      motor_match_tier: motorMatchTier,
+      motor_score: motorScore,
+      price_score: priceScore,
+      price_logic: priceLogic,
+      their_lineup_percentile: theirLineupPercentile,
+      their_lineup_sample: theirLineupSample,
+      our_lineup_percentile: ctx.ourLineupPercentile ?? null,
+      feature_score: featureScore,
+      composite_score: compositeScore,
+      ...(outOfBand ? { out_of_band: true, out_of_band_reason: buildOutOfBandLabel(_resolvedPrice, primaryBand) } : {}),
+    };
+  });
+
+  scored.sort((a, b) => b.composite_score - a.composite_score);
+  let final = tier === "legacy" ? dedupeToOnePerBrand(scored, limit) : scored.slice(0, limit);
+
+  // Same static-fallback topup as applyPriceBandGate, for the same reason —
+  // only reachable for categories with real curated fallback data.
+  // Skippable via allowStaticFallbackTopup:false for the exact same reason
+  // applyPriceBandGate's own opts param exists (see its header comment).
+  if (final.length < limit && allowStaticFallbackTopup) {
+    const usedNames = new Set(final.map((c: any) => (c.name || "").toLowerCase()));
+    const fallbackPool = getCategoryFallbackCompetitors(identity, tier);
+    for (const fb of fallbackPool) {
+      if (final.length >= limit) break;
+      if (usedNames.has((fb.name || "").toLowerCase())) continue;
+      const fbPrice = parsePriceToNumber(fb.price);
+      if (fbPrice == null || !isWithinBand(fbPrice, widestBand)) continue;
+
+      usedNames.add((fb.name || "").toLowerCase());
+      const outOfBand = !isWithinBand(fbPrice, primaryBand);
+      final.push({
+        name: fb.name,
+        brand: fb.brand,
+        tier,
+        asin: fb.asin,
+        amazon_url: `https://www.amazon.com/dp/${fb.asin}`,
+        price: fb.price,
+        price_raw: fbPrice,
+        rating: fb.rating,
+        review_count: fb.reviewCount || (fb as any).review_count,
+        monthly_sales: fb.sales || (fb as any).monthly_sales,
+        bsr_rank: fb.bsr || (fb as any).bsr_rank,
+        initials: fb.initials,
+        key_features: [],
+        strengths: [],
+        weaknesses: [],
+        recent_news: [],
+        top_feature_summary: "",
+        motor_type: null,
+        motor_match_tier: "unverified",
+        motor_score: computeMotorScore("unverified"),
+        price_score: computePriceScoreAbsolute(fbPrice, targetPriceRaw),
+        price_logic: "absolute",
+        feature_score: 0,
+        composite_score: 0,
+        ...(outOfBand ? { out_of_band: true, out_of_band_reason: buildOutOfBandLabel(fbPrice, primaryBand) } : {}),
+      });
+    }
+  }
+
+  return final;
+}
+
 // Runs `fn` over `items` with at most `limit` in flight at once — Rainforest
 // enforces a concurrent-request cap on some plans, and firing all 10
 // competitors' lookups (each up to 2 sequential Rainforest calls) via a
@@ -904,6 +1086,35 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
       }
 
+      // Motor type is priority #1 (dominates selection, per the matching
+      // spec) — resolved once, before any discovery runs. isMotorizedCategory
+      // reuses the exact category-keyword resolution the legacy registry
+      // already does; a genuinely unrelated product skips the requirement
+      // entirely rather than being forced to answer an inapplicable question.
+      const motorFamilies = await listMotorFamilies();
+      const motorRequired = isMotorizedCategory(identityCard);
+      const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
+      if (motorRequired && !ourMotor) {
+        const question = {
+          question: `What motor technology does ${context.productName} use? (e.g. "brushless rotary", "magnetic/vector", "pivot")`,
+          field: "motorType",
+          placeholder: "e.g. brushless rotary",
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      }
+      const ourMotorLabel = formatMotorLabel(ourMotor);
+      const weights = await getMatchingWeights();
+      const ourSpecs = context.projectId
+        ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
+        : extractOurSpecsFromTds(null);
+      const scoringCtx: CompositeScoringContext = {
+        motorFamilies,
+        ourMotor,
+        ourSpecs,
+        weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+      };
+
       // Curated legacy-brand registry (lib/db/legacy-brands.ts) takes
       // priority over AI judgment when the identified product maps to one
       // of the 4 registry categories — brand-targeted Rainforest search
@@ -933,14 +1144,21 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           identityCard,
           targetPriceRaw,
           registry.categorySlug,
-          writeBrandProgress
+          writeBrandProgress,
+          undefined,
+          ourMotorLabel
         );
 
         let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard);
-        // allowStaticFallbackTopup:false — the curated-only pass must never
-        // silently pull from the unrelated static getCategoryFallbackCompetitors
-        // dataset in place of an honest "not on curated list" AI result below.
-        competitors = applyPriceBandGate(competitors, targetPriceRaw, "legacy", identityCard, 5, { allowStaticFallbackTopup: false });
+        // Motor -> price -> feature composite selection, not just
+        // "in-band first, then closest to target price" — see
+        // selectByCompositeScore's own header comment for why
+        // applyPriceBandGate itself stays untouched. allowStaticFallbackTopup:
+        // false — the curated-only pass must never silently pull from the
+        // unrelated static getCategoryFallbackCompetitors dataset in place
+        // of an honest "not on curated list" AI result below (topup is
+        // still available on the SECOND, post-AI-topup call further down).
+        competitors = selectByCompositeScore(competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: false });
 
         // Only attempt the AI top-up if the curated pass finished fast — it
         // has its own ~15s hard cap (CURATED_BRAND_SEARCH_TIME_BUDGET_MS),
@@ -954,8 +1172,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         if (competitors.length < 5 && Date.now() - startTime < AI_TOPUP_TIME_THRESHOLD_MS) {
           const aiResult: any = await withAiFallback(
             "Phase 1 (curated top-up)",
-            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
             () => generateMockPhase1(context, identityCard, targetPriceRaw),
             startTime
           );
@@ -972,7 +1190,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
             .map((c: any) => ({ ...c, curated_brand: false, brand_list_status: "not_curated" }));
 
-          competitors = applyPriceBandGate([...competitors, ...aiCompetitors], targetPriceRaw, "legacy", identityCard, 5);
+          competitors = selectByCompositeScore([...competitors, ...aiCompetitors], targetPriceRaw, "legacy", identityCard, 5, scoringCtx);
         }
 
         result = {
@@ -986,6 +1204,9 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             category_name: registry.categoryName,
             brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order })),
           },
+          // Same auditability reasoning — the actual weights THIS run used,
+          // independent of any later admin edit to the live config.
+          matching_weights: scoringCtx.weights,
         };
         // Per-competitor provenance (which curated list — or the "not on
         // curated list" AI fallback — sourced each legacy pick), feeding the
@@ -994,8 +1215,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       } else {
         result = await withAiFallback(
           "Phase 1",
-          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed) : null,
-          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed) : null,
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
           () => generateMockPhase1(context, identityCard, targetPriceRaw),
           startTime
         );
@@ -1004,7 +1225,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         if (hasRainforestKey) {
           result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
         }
-        result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "legacy", identityCard, 5);
+        result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx);
+        result.matching_weights = scoringCtx.weights;
         webSearchCount += result.web_searches_performed || 0;
       }
 
@@ -1049,10 +1271,51 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         : null;
       const brandHintOverride = registry ? registry.brands.flatMap(b => [b.brand_name, ...b.aliases]) : undefined;
 
+      // Same motor resolution as Phase 1 (cheap re-read — already resolved
+      // once, or already in context.motorTech from that phase's own pause).
+      const motorFamilies = await listMotorFamilies();
+      const motorRequired = isMotorizedCategory(identityCard);
+      const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
+      if (motorRequired && !ourMotor) {
+        const question = {
+          question: `What motor technology does ${context.productName} use? (e.g. "brushless rotary", "magnetic/vector", "pivot")`,
+          field: "motorType",
+          placeholder: "e.g. brushless rotary",
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      }
+      const ourMotorLabel = formatMotorLabel(ourMotor);
+      const weights = await getMatchingWeights();
+      const ourSpecs = context.projectId
+        ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
+        : extractOurSpecsFromTds(null);
+
+      // Relative pricing (Part 4) needs to know where OUR product sits in
+      // OUR OWN lineup — resolved lazily here (indie-only), not in Phase 1,
+      // since a legacy-only analysis never needs this. Real StyleCraft
+      // catalog match first; a one-field pause-and-ask ("flagship/mid/
+      // entry?") only when the product isn't a recognized catalog entry.
+      let ourLineupPercentile: number | null = null;
+      const lineupPosition = resolveOurLineupTier(context.productName);
+      if (lineupPosition) {
+        ourLineupPercentile = lineupPosition.percentile;
+      } else if (context.lineupTier) {
+        ourLineupPercentile = percentileForManualTier(context.lineupTier);
+      } else {
+        const question = {
+          question: `Is ${context.productName} your premium/flagship model, a mid-tier model, or an entry-level model?`,
+          field: "lineupTier",
+          placeholder: "flagship, mid, or entry",
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      }
+
       const result: any = await withAiFallback(
         "Phase 2",
-        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride) : null,
-        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride) : null,
+        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
+        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
         () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
         startTime
       );
@@ -1064,7 +1327,25 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
       }
-      result.competitors = applyPriceBandGate(result.competitors, targetPriceRaw, "emerging", identityCard, 5);
+
+      // Build each surviving candidate's brand's own price lineup (Part 4) —
+      // the one genuinely new, costly operation this feature adds, so it's
+      // scoped to only the distinct brands still in play at this point, not
+      // every brand the AI ever mentioned.
+      const subcategoryForLineups = identityCard.subcategory || identityCard.category || "";
+      const distinctBrands: string[] = Array.from(new Set(result.competitors.map((c: any) => c.brand as string).filter(Boolean)));
+      const indieLineups = await buildIndieBrandLineups(distinctBrands.map(brand => ({ brand, subcategory: subcategoryForLineups })));
+
+      const scoringCtx: CompositeScoringContext = {
+        motorFamilies,
+        ourMotor,
+        ourSpecs,
+        weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+        ourLineupPercentile,
+        indieLineups,
+      };
+      result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx);
+      result.matching_weights = scoringCtx.weights;
       if (hasRainforestKey) {
         await persistPricingProvenance(result.competitors, analysisId);
       }
@@ -1371,7 +1652,7 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
 // known-brand hint is only included when the identified category matches
 // a family this app already has real brand knowledge for
 // (lib/known-brands-by-category.ts); otherwise the model searches freely.
-function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number) {
+function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, ourMotorLabel?: string | null) {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
   const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
@@ -1386,6 +1667,7 @@ Do not narrate your search process or explain what you're doing between searches
 Your task: Research up to 8 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
 For each brand, find their ONE best matching product THAT FALLS WITHIN THE ACCEPTABLE PRICE RANGE below, in the SAME category as the identified product — among in-band candidates only, prioritize matching key attributes first. Return up to 8 products total.
+${ourMotorLabel ? `\nMOTOR TYPE IS THE #1 PRIORITY, ABOVE PRICE AND FEATURES: the identified product uses a ${ourMotorLabel} motor. For each brand, prefer their model that ALSO uses ${ourMotorLabel} (or the closest related motor technology in their lineup) over a model that merely matches on price — search directly for e.g. "{brand} ${ourMotorLabel} ${identity.subcategory || identity.category}" before falling back to a plain brand+category search. If a brand's only in-range model uses a different motor type, still include it (never leave a brand slot empty over motor mismatch alone) but make that clear in its inclusion_rationale.` : ""}
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
@@ -1449,8 +1731,8 @@ Instructions:
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw);
+async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -1468,14 +1750,14 @@ function assertHasCompetitors(parsed: any): any {
   return parsed;
 }
 
-async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw);
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null) {
+function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
   // brandHintOverride (when the identified product maps to a legacy-brand
   // registry category, lib/legacy-brand-registry.ts) takes priority over
   // the static, non-binding lib/known-brands-by-category.ts hint — the
@@ -1494,10 +1776,11 @@ Do not narrate your search process or explain what you're doing between searches
 
 Your task: Research up to 8 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
+${ourMotorLabel ? `\nMOTOR TYPE IS THE #1 PRIORITY: the identified product uses a ${ourMotorLabel} motor. Prioritize indie/emerging brands specifically known for similar motor technology — lead your searches with the motor type itself (e.g. "${ourMotorLabel} ${identity.subcategory || identity.category}", "best ${ourMotorLabel} ${identity.subcategory || identity.category} ${new Date().getFullYear()}", "new ${ourMotorLabel} ${identity.subcategory || identity.category} brand") before falling back to generic category searches. A candidate whose motor type you cannot confirm from its own listing should still be included if nothing better is found, but note in its inclusion_rationale that motor type could not be verified.` : ""}
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
-2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs. If data is unavailable, use "—" NOT a guess.
+2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs — INCLUDING motor type/technology whenever the listing states it. If data is unavailable, use "—" NOT a guess.
 3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
 4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term before selecting competitors.
 5. PRICE IS A HARD CONSTRAINT: the acceptable price range for every candidate is ${bandLabel} (the user's target price of ${targetDisplay}). Value/indie challengers priced meaningfully below this range are still legitimately relevant competitors, which is why this range already extends lower than the established-brand search — but reject anything above the range, and never below 50% of the target price. Reject any product priced outside ${bandLabel}, even if it is an excellent category/attribute match.
@@ -1557,14 +1840,14 @@ Instructions:
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride);
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));

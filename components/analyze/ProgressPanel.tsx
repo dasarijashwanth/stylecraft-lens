@@ -20,11 +20,28 @@ const PHASE_LABELS = [
   "Synthesizing market analysis & strategic recommendations",
 ];
 
+// Which phase row shows the "waiting for input" icon for a given pause
+// field — "category" (Phase 0 product identification) is the default for
+// old paused questions that predate this field. "motorType" pauses during
+// Phase 1 (lib/analysisEngine.ts's resolveOurMotorType gate), "lineupTier"
+// during Phase 2 (resolveOurLineupTier, indie relative pricing).
+const PENDING_QUESTION_PHASE_INDEX: Record<string, number> = {
+  category: 0,
+  pricePoint: 1,
+  motorType: 1,
+  lineupTier: 2,
+};
+
 interface BrandProgressEntry {
   brand: string;
   status: "searching" | "found" | "not_found";
   price?: string | null;
   reason?: string | null;
+  // Best-effort live hint (lib/legacy-brand-discovery.ts) — whether the
+  // motor-first search query is what actually found this brand's match.
+  // The authoritative motor match tier is computed later and shown on the
+  // completed competitor card/table.
+  motorMatched?: boolean;
 }
 
 interface BrandProgress {
@@ -37,9 +54,9 @@ interface PendingQuestion {
   question: string;
   foundSoFar?: string;
   // Which context field the answer patches — "category" (Phase 0 product
-  // identification, the original/default use of this pause mechanism) or
-  // "pricePoint" (Phase 1's price-anchored discovery gate). Absent on old
-  // paused questions that predate this field — treated as "category".
+  // identification), "pricePoint"/"motorType" (Phase 1's price/motor gates),
+  // or "lineupTier" (Phase 2's relative-pricing gate). Absent on old paused
+  // questions that predate this field — treated as "category".
   field?: string;
   placeholder?: string;
 }
@@ -442,7 +459,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
                     }`}
                   >
                     {b.brand}
-                    {b.status === "found" && <span>✓{b.price ? ` ${b.price}` : ""}</span>}
+                    {b.status === "found" && <span>✓{b.price ? ` ${b.price}` : ""}{b.motorMatched ? " · motor match" : ""}</span>}
                     {b.status === "not_found" && <span>✕</span>}
                     {b.status === "searching" && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
                   </span>
@@ -511,7 +528,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
                 <CheckCircle className="w-5 h-5 text-success" />
               ) : phase.status === "error" ? (
                 <AlertCircle className="w-5 h-5 text-danger" />
-              ) : pendingQuestion && i === (pendingQuestion.field === "pricePoint" ? 1 : 0) ? (
+              ) : pendingQuestion && i === PENDING_QUESTION_PHASE_INDEX[pendingQuestion.field || "category"] ? (
                 <HelpCircle className="w-5 h-5 text-warning" />
               ) : phase.status === "running" ? (
                 <Loader2 className="w-5 h-5 text-accent animate-spin" />

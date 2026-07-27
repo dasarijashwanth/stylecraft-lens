@@ -253,6 +253,27 @@ export interface MockLegacyBrand {
   updatedAt: Date;
 }
 
+export interface MockMotorFamily {
+  id: string;
+  familyKey: string;
+  label: string;
+  domain: string; // 'clipper_trimmer_shaver' | 'beauty'
+  aliases: string[];
+  modifier: boolean;
+  adjacentFamilies: string[];
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockCompetitorMatchingConfig {
+  motorWeight: number;
+  priceWeight: number;
+  featureWeight: number;
+  updatedAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -317,12 +338,18 @@ class MemoryDatabase {
   // restart that finds an existing snapshot on disk.
   brandCategories: MockBrandCategory[] = [];
   legacyBrands: MockLegacyBrand[] = [];
+  // Same always-seeded (not snapshot-gated) precedent as brandCategories/
+  // legacyBrands above — real default competitor-matching config, not an
+  // empty admin table.
+  motorFamilies: MockMotorFamily[] = [];
+  competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {
       this.seed();
     }
     this.seedBrandRegistryDefaults();
+    this.seedMotorFamilyDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
 
@@ -523,6 +550,37 @@ class MemoryDatabase {
         });
       });
     }
+  }
+
+  // Mirrors supabase_schema.sql's motor_families seed INSERT exactly.
+  seedMotorFamilyDefaults() {
+    if (this.motorFamilies.length > 0) return;
+    const now = new Date();
+    const defs: { key: string; label: string; domain: string; aliases: string[]; modifier?: boolean; adjacent?: string[] }[] = [
+      { key: "rotary", label: "Rotary", domain: "clipper_trimmer_shaver", aliases: ["rotary motor"] },
+      { key: "magnetic_vector", label: "Magnetic / Vector", domain: "clipper_trimmer_shaver", aliases: ["electromagnetic", "vector", "magnetic"], adjacent: ["pivot", "linear"] },
+      { key: "pivot", label: "Pivot", domain: "clipper_trimmer_shaver", aliases: ["pivot motor"], adjacent: ["magnetic_vector"] },
+      { key: "linear", label: "Linear", domain: "clipper_trimmer_shaver", aliases: ["linear magnetic"], adjacent: ["magnetic_vector"] },
+      { key: "ac_motor", label: "AC Motor", domain: "beauty", aliases: ["ac motor"] },
+      { key: "dc_motor", label: "DC Motor", domain: "beauty", aliases: ["dc motor"] },
+      { key: "brushless_digital", label: "Brushless Digital", domain: "beauty", aliases: ["brushless digital motor", "digital motor"] },
+      { key: "brushless", label: "Brushless (modifier)", domain: "clipper_trimmer_shaver", aliases: ["brushless dc", "bldc", "brushless"], modifier: true },
+    ];
+    defs.forEach((d, i) => {
+      this.motorFamilies.push({
+        id: `mfam_${d.key}`,
+        familyKey: d.key,
+        label: d.label,
+        domain: d.domain,
+        aliases: d.aliases,
+        modifier: d.modifier ?? false,
+        adjacentFamilies: d.adjacent ?? [],
+        enabled: true,
+        sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
   }
 }
 

@@ -47,6 +47,24 @@ interface Competitor {
   // One sentence justifying why this is a real legacy/emerging competitor
   // at this price tier, per lib/analysisEngine.ts's Phase 1/2 prompts.
   inclusion_rationale?: string;
+  // Set by lib/analysisEngine.ts's selectByCompositeScore — motor type is
+  // the #1 selection priority (lib/motor-taxonomy.ts/lib/motor-extraction.ts),
+  // then price, then comparable specs. motor_type is the canonical family
+  // label (e.g. "Magnetic / Vector"), always populated with SOMETHING for a
+  // selected competitor (never blank) — "unverified" tier means neither
+  // side's motor type could be determined, not that they differ.
+  motor_type?:            string | null;
+  motor_modifier?:         string | null;
+  motor_source_quote?:     string | null;
+  motor_match_tier?:       "exact" | "adjacent" | "different" | "unverified";
+  motor_score?:            number;
+  price_score?:            number;
+  price_logic?:            "absolute" | "relative";
+  their_lineup_percentile?: number | null;
+  their_lineup_sample?:    { asin: string; title: string; price_raw: number }[] | null;
+  our_lineup_percentile?:  number | null;
+  feature_score?:          number;
+  composite_score?:        number;
 }
 
 interface CompetitorCardProps {
@@ -351,6 +369,55 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
         )}
       </div>
 
+      {/* "Why this competitor" — motor match, price logic, matched features,
+          composite score (lib/analysisEngine.ts's selectByCompositeScore).
+          Static/synchronous, like inclusion_rationale above — doesn't
+          interact with the four useEffect-driven fetch sections below. */}
+      {typeof c.composite_score === "number" && (
+        <div className="rounded-lg border border-border/60 bg-surface-3/20 p-2.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] font-bold text-text-muted uppercase tracking-wider">Why this competitor</span>
+            <span className="text-[9px] font-mono text-text-secondary" title="Composite match score (motor + price + features)">
+              score {c.composite_score.toFixed(2)}
+            </span>
+          </div>
+          <p className="text-[10px] text-text-secondary leading-snug">
+            <span className="font-semibold">Motor: </span>
+            {c.motor_match_tier === "unverified" ? (
+              "Motor type could not be confirmed for one or both products"
+            ) : c.motor_match_tier === "exact" ? (
+              `Same motor type (${c.motor_type})`
+            ) : c.motor_match_tier === "adjacent" ? (
+              `Related motor technology (${c.motor_type} vs. yours)`
+            ) : (
+              `Different motor type (${c.motor_type || "unknown"} vs. yours)`
+            )}
+            {c.motor_source_quote && <span className="italic text-text-muted"> — &quot;{c.motor_source_quote}&quot;</span>}
+          </p>
+          <p className="text-[10px] text-text-secondary leading-snug">
+            <span className="font-semibold">Price: </span>
+            {c.price_logic === "relative" ? (
+              <>
+                Matched by relative brand tier
+                {typeof c.their_lineup_percentile === "number" && typeof c.our_lineup_percentile === "number"
+                  ? ` — their top ${Math.round((1 - c.their_lineup_percentile) * 100)}% model matched to your top ${Math.round((1 - c.our_lineup_percentile) * 100)}% model`
+                  : ""}
+                {c.their_lineup_sample && c.their_lineup_sample.length > 1 && (
+                  <span className="text-text-muted"> ({c.their_lineup_sample.length} of their products compared)</span>
+                )}
+              </>
+            ) : (
+              "Matched by absolute proximity to your target price"
+            )}
+          </p>
+          {c.motor_match_tier === "different" && (
+            <p className="text-[10px] text-warning leading-snug">
+              Included despite a different motor type — no exact/adjacent-motor candidate was available for this slot.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Live price / rating / reviews */}
       <div className="grid grid-cols-3 gap-2 py-2 border-y border-border/40 text-center font-mono">
         <div className="text-left font-sans">
@@ -397,6 +464,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
           {c.brand_list_status === "not_curated" && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="Curated brands couldn't fill all 5 legacy slots within the price band — this pick came from AI research instead.">
               Not on curated legacy list
+            </span>
+          )}
+          {c.motor_match_tier === "different" && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No exact or adjacent-motor candidate was available for this slot.">
+              Different motor type ({c.motor_type || "unknown"})
             </span>
           )}
         </div>

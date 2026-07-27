@@ -572,3 +572,56 @@ ON CONFLICT DO NOTHING;
 -- still in flight — this is what makes the brand panel genuinely live
 -- without any new endpoint or websocket/SSE infrastructure.
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS phase1_brand_progress JSONB;
+
+-- 14. MOTOR TAXONOMY + COMPETITOR MATCHING WEIGHTS
+-- Admin-editable motor-type families competitor selection now matches on
+-- (lib/motor-taxonomy.ts) — mirrors legacy_brands/brand_categories's exact
+-- dual-path CRUD pattern. `modifier=true` rows (e.g. "brushless") combine
+-- with a non-modifier family rather than competing as their own family
+-- (e.g. "brushless rotary") — never matched as a family on their own.
+-- `adjacent_families` is a self-referencing array of other rows' family_key
+-- (not a FK — simpler for a small, rarely-changed admin list) used for
+-- "adjacent family" partial-credit scoring (lib/competitor-scoring.ts).
+CREATE TABLE IF NOT EXISTS motor_families (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    family_key VARCHAR(50) UNIQUE NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    domain VARCHAR(30) NOT NULL, -- 'clipper_trimmer_shaver' | 'beauty'
+    aliases TEXT[] DEFAULT '{}'::text[],
+    modifier BOOLEAN NOT NULL DEFAULT false,
+    adjacent_families TEXT[] DEFAULT '{}'::text[],
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE motor_families ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for motor_families" ON motor_families FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO motor_families (family_key, label, domain, aliases, modifier, adjacent_families, sort_order) VALUES
+    ('rotary', 'Rotary', 'clipper_trimmer_shaver', ARRAY['rotary motor'], false, ARRAY[]::text[], 0),
+    ('magnetic_vector', 'Magnetic / Vector', 'clipper_trimmer_shaver', ARRAY['electromagnetic','vector','magnetic'], false, ARRAY['pivot','linear'], 1),
+    ('pivot', 'Pivot', 'clipper_trimmer_shaver', ARRAY['pivot motor'], false, ARRAY['magnetic_vector'], 2),
+    ('linear', 'Linear', 'clipper_trimmer_shaver', ARRAY['linear magnetic'], false, ARRAY['magnetic_vector'], 3),
+    ('ac_motor', 'AC Motor', 'beauty', ARRAY['ac motor'], false, ARRAY[]::text[], 4),
+    ('dc_motor', 'DC Motor', 'beauty', ARRAY['dc motor'], false, ARRAY[]::text[], 5),
+    ('brushless_digital', 'Brushless Digital', 'beauty', ARRAY['brushless digital motor','digital motor'], false, ARRAY[]::text[], 6),
+    ('brushless', 'Brushless (modifier)', 'clipper_trimmer_shaver', ARRAY['brushless dc','bldc','brushless'], true, ARRAY[]::text[], 7)
+ON CONFLICT (family_key) DO NOTHING;
+
+-- Singleton config row for the composite-score weights
+-- (lib/competitor-scoring.ts's computeCompositeScore) — admin-editable at
+-- /dashboard/admin/competitor-matching without a deploy. No generic
+-- settings/config table existed anywhere in this schema before this; a
+-- dedicated small table (rather than a KV blob) matches this file's
+-- existing preference for explicit typed columns.
+CREATE TABLE IF NOT EXISTS competitor_matching_config (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    motor_weight NUMERIC(4,3) NOT NULL DEFAULT 0.45,
+    price_weight NUMERIC(4,3) NOT NULL DEFAULT 0.35,
+    feature_weight NUMERIC(4,3) NOT NULL DEFAULT 0.20,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE competitor_matching_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for competitor_matching_config" ON competitor_matching_config FOR ALL USING (true) WITH CHECK (true);
+INSERT INTO competitor_matching_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;

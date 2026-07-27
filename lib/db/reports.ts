@@ -194,6 +194,11 @@ export async function buildReportSections(analysis: {
       // product didn't match any of the 4 registry categories (today's
       // unmodified AI-judgment flow ran instead).
       legacy_registry_snapshot: analysis.phase1?.legacy_registry_snapshot ?? null,
+      // The actual motor/price/feature composite weights THIS analysis used
+      // (lib/analysisEngine.ts's selectByCompositeScore) — independent of
+      // any later admin edit to the live /dashboard/admin/competitor-matching
+      // config, same auditability reasoning as legacy_registry_snapshot above.
+      matching_weights: analysis.phase1?.matching_weights ?? analysis.phase2?.matching_weights ?? null,
       market_snapshot: snapshot,
       key_trends: trends,
       market_gaps: gaps,
