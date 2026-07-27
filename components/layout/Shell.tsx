@@ -20,6 +20,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Spinner } from "@/components/ui/Spinner";
 import { Modal } from "@/components/ui/Modal";
 import GettingStartedBanner from "@/components/help/GettingStartedBanner";
+import { ContactSupportProvider } from "@/components/help/ContactSupportProvider";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -167,17 +168,18 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   if (!isSignedIn) return null;
 
   return (
+    <ContactSupportProvider>
     <div className="min-h-screen bg-bg text-text-primary">
       {/* Sidebar navigation */}
       <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
 
       {/* Main content wrapper */}
       <div className="flex flex-col lg:pl-[var(--sidebar-width)] min-h-screen">
-        <Topbar 
-          onMenuClick={() => setSidebarOpen(true)} 
-          onSearchClick={() => setSearchOpen(true)} 
+        <Topbar
+          onMenuClick={() => setSidebarOpen(true)}
+          onSearchClick={() => setSearchOpen(true)}
         />
-        
+
         <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-4">
           <GettingStartedBanner />
           {children}
@@ -274,5 +276,6 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             </div>
       </Modal>
     </div>
+    </ContactSupportProvider>
   );
 }

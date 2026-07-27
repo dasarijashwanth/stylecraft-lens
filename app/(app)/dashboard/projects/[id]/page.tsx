@@ -26,7 +26,8 @@ import {
   Eye,
   RefreshCw,
   Undo2,
-  AlertCircle
+  AlertCircle,
+  Mail
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
@@ -41,6 +42,7 @@ import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerati
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
+import { useContactSupport } from "@/components/help/ContactSupportProvider";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork" | "project-deck";
 type ReportTab = Exclude<Tab, "artwork" | "project-deck">;
@@ -57,6 +59,7 @@ export default function ProjectDetailPage() {
   const [pipelineState, setPipelineState] = useState<any>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const { open: openContactSupport } = useContactSupport();
 
   const fetchProjectDetails = async () => {
     try {
@@ -306,9 +309,17 @@ export default function ProjectDetailPage() {
               ))}
               <FaqHelpLink
                 category={TAB_FAQ_CATEGORY[activeTab]}
-                className="ml-auto shrink-0 mr-2 inline-flex items-center justify-center text-text-muted hover:text-accent transition-colors"
+                className="ml-auto shrink-0 inline-flex items-center justify-center text-text-muted hover:text-accent transition-colors"
                 title={`Help: ${TAB_LABELS[activeTab]}`}
               />
+              <button
+                type="button"
+                onClick={() => openContactSupport({ context: { tab: TAB_LABELS[activeTab], projectId: id, productName: project?.productName } })}
+                className="shrink-0 mr-2 inline-flex items-center justify-center text-text-muted hover:text-accent transition-colors"
+                title="Contact support about this project"
+              >
+                <Mail className="w-3.5 h-3.5" />
+              </button>
             </div>
 
             {/* Tab Content Canvas */}

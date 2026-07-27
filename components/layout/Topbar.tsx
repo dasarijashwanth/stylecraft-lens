@@ -23,15 +23,61 @@ interface TopbarProps {
   onSearchClick: () => void;
 }
 
+interface NotificationItem {
+  id: string | number;
+  text: string;
+  time: string;
+  read: boolean;
+  href?: string;
+  supportMessageId?: string;
+}
+
 export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuth();
-  const [notifications, setNotifications] = useState([
+  const [notifications, setNotifications] = useState<NotificationItem[]>([
     { id: 1, text: "Apex Clipper Analysis completed", time: "5 min ago", read: false },
     { id: 2, text: "Wahl Professional details updated", time: "2 hours ago", read: true },
   ]);
   const [showNotifications, setShowNotifications] = useState(false);
+
+  // Real admin-only notification: unread Contact Support submissions (see
+  // support_messages.admin_notification_read) — the mock entries above stay
+  // as-is, these are prepended on top for OWNER/ADMIN users.
+  useEffect(() => {
+    if (!user || (user.role !== "OWNER" && user.role !== "ADMIN")) return;
+    fetch("/api/admin/support-messages")
+      .then(res => res.json())
+      .then(data => {
+        const unread = (data.messages || []).filter((m: any) => !m.admin_notification_read);
+        if (unread.length === 0) return;
+        const items: NotificationItem[] = unread.map((m: any) => ({
+          id: `support-${m.id}`,
+          text: `New support message from ${m.name}: ${m.topic.replace(/_/g, " ")}`,
+          time: new Date(m.created_at).toLocaleDateString(),
+          read: false,
+          href: "/dashboard/admin/support-messages",
+          supportMessageId: m.id,
+        }));
+        setNotifications(prev => [...items, ...prev]);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  function handleNotificationClick(n: NotificationItem) {
+    setNotifications(prev => prev.map(item => (item.id === n.id ? { ...item, read: true } : item)));
+    if (n.supportMessageId) {
+      fetch(`/api/admin/support-messages/${n.supportMessageId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminNotificationRead: true }),
+      }).catch(() => {});
+    }
+    setShowNotifications(false);
+    if (n.href) router.push(n.href);
+  }
   const [ringing, setRinging] = useState(false);
   const ringTimeout = useRef<ReturnType<typeof setTimeout>>();
 
@@ -138,8 +184,9 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
                 </div>
                 <div className="mt-1.5 max-h-[220px] overflow-y-auto space-y-1">
                   {notifications.map((n) => (
-                    <div 
-                      key={n.id} 
+                    <div
+                      key={n.id}
+                      onClick={() => handleNotificationClick(n)}
                       className={`p-2 rounded-lg text-xs leading-normal transition-colors cursor-pointer ${
                         n.read ? "hover:bg-surface-3/50 text-text-secondary" : "bg-accent-bg/40 text-text-primary hover:bg-accent-bg/60"
                       }`}

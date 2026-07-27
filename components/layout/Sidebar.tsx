@@ -16,7 +16,8 @@ import {
   Presentation,
   Tags,
   Gauge,
-  BookOpenCheck
+  BookOpenCheck,
+  Mail
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -50,6 +51,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           { label: "Legacy Brands", href: "/dashboard/admin/legacy-brands", icon: Tags },
           { label: "Competitor Matching", href: "/dashboard/admin/competitor-matching", icon: Gauge },
           { label: "FAQ Editor", href: "/dashboard/admin/faqs", icon: BookOpenCheck },
+          { label: "Support Messages", href: "/dashboard/admin/support-messages", icon: Mail },
         ]
       : []),
   ];

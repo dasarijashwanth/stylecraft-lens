@@ -681,3 +681,39 @@ CREATE POLICY "Allow all operations for faq_search_misses" ON faq_search_misses 
 -- rather than a localStorage-only flag, and doubles as "has this user seen
 -- the FAQ at all" for admins. NULL = never dismissed = still shows the banner.
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS faq_banner_dismissed_at TIMESTAMP WITH TIME ZONE;
+
+-- 16. CONTACT SUPPORT
+-- Optional screenshot binary lives in the public Supabase Storage bucket
+-- "support-screenshots" (create it manually in the Supabase dashboard, same
+-- as "deck-templates"/"artwork" — Storage buckets aren't SQL objects).
+-- screenshot_url stores the bucket's permanent public URL, matching the
+-- existing "artwork" bucket's getPublicUrl() convention (not a signed URL,
+-- which would expire and break the record for admins reviewing it later).
+--
+-- Persistence-first design: a row is inserted here BEFORE any email send is
+-- attempted (see app/api/support/contact/route.ts) — a mail-provider hiccup
+-- must never lose a message. email_status/email_error track the admin
+-- notification email; ack_email_status tracks the separate best-effort
+-- "we got your message" reply to the submitter. admin_notification_read
+-- doubles as the in-app "unread support message" flag the Topbar bell polls
+-- — no separate notifications table needed for this single event type.
+CREATE TABLE IF NOT EXISTS support_messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    topic VARCHAR(30) NOT NULL, -- 'bug' | 'question' | 'data_wrong' | 'feature_request' | 'other'
+    message TEXT NOT NULL,
+    context JSONB,
+    screenshot_url TEXT,
+    email_status VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending' | 'sent' | 'failed'
+    email_error TEXT,
+    ack_email_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    admin_notification_read BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS support_messages_created_idx ON support_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS support_messages_identity_idx ON support_messages(user_id, created_at);
+ALTER TABLE support_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for support_messages" ON support_messages FOR ALL USING (true) WITH CHECK (true);

@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Fuse from "fuse.js";
 import { toast } from "sonner";
-import { HelpCircle, ChevronDown, ChevronUp, Search, Link2, ThumbsUp, ThumbsDown, X } from "lucide-react";
+import { HelpCircle, ChevronDown, ChevronUp, Search, Link2, ThumbsUp, ThumbsDown, X, Mail } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import FaqMarkdown from "@/components/help/FaqMarkdown";
 import { FAQ_CATEGORIES } from "@/lib/faq-seed-data";
 import { slugifyFaqCategory } from "@/lib/faq-slugs";
+import { useContactSupport } from "@/components/help/ContactSupportProvider";
 
 interface Faq {
   id: string;
@@ -45,6 +46,8 @@ export default function HelpPage() {
   const [query, setQuery] = useState("");
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
   const [votedIds, setVotedIds] = useState<Set<string>>(new Set());
+  const [downvotedIds, setDownvotedIds] = useState<Set<string>>(new Set());
+  const { open: openContactSupport } = useContactSupport();
   const loggedMissRef = useRef<string | null>(null);
   const pendingHashRef = useRef<string | null>(
     typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : null
@@ -132,6 +135,7 @@ export default function HelpPage() {
   async function handleVote(id: string, vote: "up" | "down") {
     if (votedIds.has(id)) return;
     setVotedIds(prev => new Set(prev).add(id));
+    if (vote === "down") setDownvotedIds(prev => new Set(prev).add(id));
     try {
       const res = await fetch(`/api/faqs/${id}/vote`, {
         method: "POST",
@@ -210,6 +214,15 @@ export default function HelpPage() {
                 </button>
               </div>
             </div>
+            {downvotedIds.has(faq.id) && (
+              <button
+                type="button"
+                onClick={() => openContactSupport({ prefillTopic: "question", prefillMessage: `Regarding: "${faq.question}"\n\n` })}
+                className="mt-2 text-[10px] text-accent hover:underline"
+              >
+                Contact support about this
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -221,6 +234,19 @@ export default function HelpPage() {
       <div className="flex items-center gap-2">
         <HelpCircle className="w-5 h-5 text-accent" />
         <h1 className="text-display">Help & Support</h1>
+      </div>
+
+      <div className="flex items-center gap-1 border-b border-border">
+        <div className="px-3 py-2 border-b-2 border-accent text-accent font-bold text-xs flex items-center gap-1.5">
+          <HelpCircle className="w-3.5 h-3.5" /> FAQ
+        </div>
+        <button
+          type="button"
+          onClick={() => openContactSupport()}
+          className="px-3 py-2 border-b-2 border-transparent text-text-secondary hover:text-text-primary font-bold text-xs flex items-center gap-1.5 transition-colors"
+        >
+          <Mail className="w-3.5 h-3.5" /> Contact Support
+        </button>
       </div>
 
       <div className="relative max-w-md">
@@ -313,6 +339,23 @@ export default function HelpPage() {
           </div>
         </div>
       )}
+
+      <div className="flex items-center justify-between gap-4 p-5 border border-border rounded-xl bg-surface-2">
+        <div className="flex items-center gap-3">
+          <Mail className="w-5 h-5 text-accent shrink-0" />
+          <div>
+            <p className="text-xs font-bold text-text-primary">Didn&apos;t find your answer?</p>
+            <p className="text-[11px] text-text-muted">Contact support and we&apos;ll reply directly to your email.</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => openContactSupport()}
+          className="px-3.5 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shrink-0"
+        >
+          Contact support
+        </button>
+      </div>
     </div>
   );
 }

@@ -299,6 +299,23 @@ export interface MockFaqSearchMiss {
   createdAt: Date;
 }
 
+export interface MockSupportMessage {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  topic: string;
+  message: string;
+  context: Record<string, any> | null;
+  screenshotUrl: string | null;
+  emailStatus: "pending" | "sent" | "failed";
+  emailError: string | null;
+  ackEmailStatus: "pending" | "sent" | "failed";
+  adminNotificationRead: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -373,6 +390,9 @@ class MemoryDatabase {
   faqs: MockFaq[] = [];
   faqVotes: MockFaqVote[] = [];
   faqSearchMisses: MockFaqSearchMiss[] = [];
+  // Real usage data (Contact Support submissions) — same non-seeded,
+  // non-persisted-across-restart precedent as faqVotes/faqSearchMisses.
+  supportMessages: MockSupportMessage[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {
