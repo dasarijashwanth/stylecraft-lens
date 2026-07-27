@@ -717,3 +717,62 @@ CREATE INDEX IF NOT EXISTS support_messages_created_idx ON support_messages(crea
 CREATE INDEX IF NOT EXISTS support_messages_identity_idx ON support_messages(user_id, created_at);
 ALTER TABLE support_messages ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for support_messages" ON support_messages FOR ALL USING (true) WITH CHECK (true);
+
+-- 17. CRITICAL SECURITY FIX — lock down RLS on every table
+-- Every table above was created with `FOR ALL USING (true) WITH CHECK (true)`
+-- — fully permissive to ANY caller, including the public/anon Supabase key.
+-- Since NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are (by
+-- Next.js's own NEXT_PUBLIC_ convention, and by Supabase's design) shipped
+-- in the browser bundle, this meant literally anyone on the internet could
+-- read/write EVERY row of EVERY table directly via the Supabase REST API —
+-- profiles (every user's email/role), support_messages, all project/GTM/TDS
+-- data — by lifting the anon key out of the client bundle, completely
+-- bypassing this app's own authentication and authorization entirely.
+-- Empirically confirmed exploitable (2026-07-27): an unauthenticated GET
+-- with only the anon key returned real rows from profiles, support_messages,
+-- projects, and document_fields.
+--
+-- The fix is safe with ZERO functional impact: every server-side query in
+-- this app already goes through `supabaseAdmin` (the SERVICE ROLE key, in
+-- lib/supabase.ts), which bypasses RLS entirely regardless of policy — RLS
+-- policies here have never actually protected anything the app relies on.
+-- The only other Supabase clients in this app (lib/supabase-browser.ts,
+-- lib/supabase-server.ts) are used exclusively for `.auth.*` (login/session)
+-- and `.storage.*` (signed upload URLs) — never a single `.from(table)`
+-- call anywhere outside standalone scripts/*.ts maintenance scripts, which
+-- all construct their own service-role client independent of these policies.
+--
+-- Dropping every permissive policy while RLS stays ENABLED makes Postgres
+-- deny ALL access by default for the `anon`/`authenticated` roles — exactly
+-- what's wanted, since this app has no legitimate use case for a real user's
+-- own Supabase session JWT to query a table directly. Run this in the
+-- Supabase SQL editor immediately; it is safe to run before, with, or after
+-- any other pending schema change in this file.
+DROP POLICY IF EXISTS "Allow all operations for projects" ON projects;
+DROP POLICY IF EXISTS "Allow all operations for analyses" ON analyses;
+DROP POLICY IF EXISTS "Allow all operations for amazon_cache" ON amazon_cache;
+DROP POLICY IF EXISTS "Allow all operations for reports" ON reports;
+DROP POLICY IF EXISTS "Allow all operations for competitors" ON competitors;
+DROP POLICY IF EXISTS "Allow all operations for analysis_competitors" ON analysis_competitors;
+DROP POLICY IF EXISTS "Allow all operations for project_outputs" ON project_outputs;
+DROP POLICY IF EXISTS "Allow all operations for documents" ON documents;
+DROP POLICY IF EXISTS "Allow all operations for document_fields" ON document_fields;
+DROP POLICY IF EXISTS "Allow all operations for document_field_history" ON document_field_history;
+DROP POLICY IF EXISTS "Allow all operations for product_snapshots" ON product_snapshots;
+DROP POLICY IF EXISTS "Allow all operations for project_generation_state" ON project_generation_state;
+DROP POLICY IF EXISTS "Allow all operations for analysis_tasks" ON analysis_tasks;
+DROP POLICY IF EXISTS "Allow all operations for provider_circuit_state" ON provider_circuit_state;
+DROP POLICY IF EXISTS "Allow all operations for profiles" ON profiles;
+DROP POLICY IF EXISTS "Allow all operations for section_provenance" ON section_provenance;
+DROP POLICY IF EXISTS "Allow all operations for deck_templates" ON deck_templates;
+DROP POLICY IF EXISTS "Allow all operations for project_decks" ON project_decks;
+DROP POLICY IF EXISTS "Allow all operations for brand_categories" ON brand_categories;
+DROP POLICY IF EXISTS "Allow all operations for legacy_brands" ON legacy_brands;
+DROP POLICY IF EXISTS "Allow all operations for motor_families" ON motor_families;
+DROP POLICY IF EXISTS "Allow all operations for competitor_matching_config" ON competitor_matching_config;
+DROP POLICY IF EXISTS "Allow all operations for faqs" ON faqs;
+DROP POLICY IF EXISTS "Allow all operations for faq_votes" ON faq_votes;
+DROP POLICY IF EXISTS "Allow all operations for faq_search_misses" ON faq_search_misses;
+DROP POLICY IF EXISTS "Allow all operations for support_messages" ON support_messages;
+-- (All 26 tables now have RLS enabled with zero policies — anon/authenticated
+-- get zero rows on every operation; supabaseAdmin/service-role is unaffected.)
