@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthSession } from "@/lib/auth";
+import { getProject } from "@/lib/db/projects";
 import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 import { isRealAnswer, buildFillReport } from "@/lib/field-answer-state";
 
 // Looks up a project's GTM document by project id — the UI only knows the
-// project it's on, not the document's own id, until one exists.
+// project it's on, not the document's own id, until one exists. Ownership
+// is checked via the PROJECT (lib/db/documents.ts itself has no org/user
+// awareness), same pattern as the regenerate/export-csv siblings below.
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("projectId");
   if (!projectId) return NextResponse.json({ error: "projectId is required" }, { status: 400 });
 
   try {
+    const session = await getAuthSession();
+    const project = await getProject(projectId, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
     const document = await getDocumentByProject(projectId, "gtm");
     if (!document) return NextResponse.json({ document: null, fields: [] });
 

@@ -11,7 +11,7 @@ export async function GET(
     const { id } = params;
 
     const analysis = await getAnalysis(id);
-    if (!analysis) {
+    if (!analysis || analysis.user_id !== session.userId) {
       return NextResponse.json(
         { error: "NOT_FOUND", message: "Analysis not found" },
         { status: 404 }
@@ -36,7 +36,7 @@ export async function DELETE(
     const { id } = params;
 
     const analysis = await getAnalysis(id);
-    if (!analysis) {
+    if (!analysis || analysis.user_id !== session.userId) {
       return NextResponse.json(
         { error: "NOT_FOUND", message: "Analysis not found" },
         { status: 404 }

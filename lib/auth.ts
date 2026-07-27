@@ -71,19 +71,21 @@ export async function getAuthSession(): Promise<UserSession> {
       throw new Error(`No profile found for ${user.email} — run scripts/create-admin-user.ts and ensure the profiles table exists.`);
     }
 
+    // OWNER/ADMIN accounts keep the original fixed pinned literal — this
+    // preserves 100% of the existing admin's pre-multi-user data
+    // (projects/analyses/reports/competitors created before real per-user
+    // accounts existed) with zero migration, and matches "admin stays as
+    // is" when real team member accounts were introduced. Every other role
+    // (MEMBER/VIEWER) gets its OWN real Supabase Auth user id as BOTH
+    // userId and orgId — each such account is its own single-user tenant,
+    // genuinely isolated from every other one via the org_id/user_id
+    // filters lib/db/projects.ts, lib/db/analyses.ts, lib/db/reports.ts,
+    // and the competitors routes already enforce (they were previously
+    // real but moot, since every real account shared the same literal).
+    const isAdminRole = profile.role === "OWNER" || profile.role === "ADMIN";
     return {
-      // Domain data (projects/competitors/analyses/reports) stays keyed to
-      // these existing fixed literals rather than the real Supabase user
-      // id — ownership filtering is inconsistent across lib/db/*.ts today
-      // (some filter by org_id, some by user_id), so a real per-row
-      // migration risks silently orphaning data in whichever tables use
-      // the column not migrated. Pinning here means the admin sees 100% of
-      // existing data with zero SQL migration. This is a single-admin app
-      // with no multi-tenant management requested — if a second real user
-      // is ever added, this pinning strategy needs to be replaced with a
-      // genuine per-user migration first.
-      userId: "dev_user_id",
-      orgId: "dev_org_id",
+      userId: isAdminRole ? "dev_user_id" : user.id,
+      orgId: isAdminRole ? "dev_org_id" : user.id,
       email: profile.email,
       name: profile.name || profile.email,
       avatarUrl: "",

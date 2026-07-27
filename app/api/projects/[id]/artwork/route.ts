@@ -3,9 +3,15 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 import { buildFullProjectContext } from "@/lib/project-context";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini";
+import { getAuthSession } from "@/lib/auth";
+import { getProject } from "@/lib/db/projects";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const session = await getAuthSession();
+    const project = await getProject(params.id, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
     if (isSupabaseConfigured) {
       const { data } = await supabaseAdmin
         .from("project_artwork")
@@ -24,6 +30,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const session = await getAuthSession();
+    const project = await getProject(params.id, session.orgId);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const purpose = (formData.get("purpose") as string) ?? "family_artwork";
