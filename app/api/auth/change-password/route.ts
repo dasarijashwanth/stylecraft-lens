@@ -1,11 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { validatePassword } from "@/lib/password-policy";
+import { logAuthEvent } from "@/lib/db/auth-events";
+import { getClientIp } from "@/lib/request-ip";
 
 // Shared by both the forced /change-password redirect (Shell.tsx, when
 // profiles.must_change_password is true) and the real "Change Password"
 // form in Settings -> User Profile.
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const supabase = createSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -17,8 +20,9 @@ export async function POST(request: Request) {
     if (!currentPassword || !newPassword) {
       return NextResponse.json({ error: "Current and new password are required" }, { status: 400 });
     }
-    if (newPassword.length < 8) {
-      return NextResponse.json({ error: "New password must be at least 8 characters" }, { status: 400 });
+    const validation = validatePassword(newPassword);
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
     // Re-verify the current password before allowing a change — cheap,
@@ -62,6 +66,28 @@ export async function POST(request: Request) {
       console.error("change-password: profiles update failed:", profileError);
       return NextResponse.json({ error: profileError.message || "Failed to update profile" }, { status: 500 });
     }
+
+    // Revoke every OTHER active session/device for this account — a
+    // changed password should mean a previously-stolen/left-open session
+    // elsewhere stops working. Keeps the CURRENT session (this request's
+    // own token) alive via scope:'others'. Best-effort: never fails the
+    // password change itself over this.
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await supabaseAdmin.auth.admin.signOut(session.access_token, "others");
+      }
+    } catch (e) {
+      console.error("change-password: failed to revoke other sessions:", e);
+    }
+
+    await logAuthEvent({
+      eventType: "password_change",
+      email: user.email,
+      userId: user.id,
+      ipAddress: getClientIp(request),
+      userAgent: request.headers.get("user-agent"),
+    });
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {

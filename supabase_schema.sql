@@ -776,3 +776,27 @@ DROP POLICY IF EXISTS "Allow all operations for faq_search_misses" ON faq_search
 DROP POLICY IF EXISTS "Allow all operations for support_messages" ON support_messages;
 -- (All 26 tables now have RLS enabled with zero policies — anon/authenticated
 -- get zero rows on every operation; supabaseAdmin/service-role is unaffected.)
+
+-- 18. AUTH EVENTS — audit log + login rate-limiting
+-- Real sign-in happens server-side now (app/api/auth/login/route.ts,
+-- app/api/auth/forgot-password/route.ts) specifically so this table can
+-- both rate-limit (count recent 'login_failure' rows for an email+ip
+-- pair) AND serve as the security-relevant audit log Section 9 asks for
+-- (logins, failed logins, permission denials, admin changes). One row per
+-- event, never mutated — same "insert, never mutate a counter" precedent
+-- as every other event-log table in this app (faq_votes, product_snapshots).
+CREATE TABLE IF NOT EXISTS auth_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    event_type VARCHAR(40) NOT NULL, -- 'login_success' | 'login_failure' | 'password_change' | 'password_reset_requested' | 'permission_denied' | 'admin_change'
+    email VARCHAR(255),
+    user_id UUID,
+    ip_address VARCHAR(64),
+    user_agent TEXT,
+    detail TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS auth_events_rate_limit_idx ON auth_events(email, ip_address, event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS auth_events_created_idx ON auth_events(created_at DESC);
+ALTER TABLE auth_events ENABLE ROW LEVEL SECURITY;
+-- Deliberately NO policy (see Section 17 above) — only supabaseAdmin
+-- (service role) ever reads/writes this table.

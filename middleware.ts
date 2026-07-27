@@ -10,7 +10,7 @@ import { updateSession } from "@/lib/supabase-middleware";
 // (401 JSON) — the API gate goes beyond the literal "login page" ask
 // because leaving e.g. /api/projects directly curl-able while only
 // protecting pages would leave the actual data unprotected.
-const PUBLIC_PATHS = ["/", "/sign-in", "/sign-up"];
+const PUBLIC_PATHS = ["/", "/sign-in", "/sign-up", "/forgot-password"];
 
 export default async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

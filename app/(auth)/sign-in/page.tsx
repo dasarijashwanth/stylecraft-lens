@@ -3,9 +3,9 @@
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import Link from "next/link";
 import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
-import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { useAuthStore } from "@/stores/authStore";
 import { Logo, Wordmark } from "@/components/ui/Logo";
 
@@ -24,11 +24,18 @@ function SignInForm() {
 
     setLoading(true);
     try {
-      const supabase = createSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (error) {
-        // Don't leak which field was wrong.
-        toast.error("Incorrect email or password");
+      // Goes through our own server route (not supabase.auth.signInWithPassword
+      // directly) so failed attempts can be rate-limited and audit-logged —
+      // see app/api/auth/login/route.ts. It sets the same session cookies
+      // a direct client-side call would have.
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Incorrect email or password");
         return;
       }
 
@@ -68,7 +75,10 @@ function SignInForm() {
           />
         </div>
         <div className="space-y-1">
-          <label className="font-semibold text-text-primary block">Password</label>
+          <div className="flex items-center justify-between">
+            <label className="font-semibold text-text-primary block">Password</label>
+            <Link href="/forgot-password" className="text-accent hover:underline">Forgot password?</Link>
+          </div>
           <input
             type="password"
             autoComplete="current-password"

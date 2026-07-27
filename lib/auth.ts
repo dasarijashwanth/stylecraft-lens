@@ -96,6 +96,19 @@ export async function getAuthSession(): Promise<UserSession> {
     };
   }
 
+  // SECURITY GUARD: everything below this line is a local-development
+  // convenience (Clerk, a Prisma-backed "dev workspace", and finally a
+  // hardcoded OWNER-role MOCK_SESSION requiring no login at all). Supabase
+  // is always configured in the real deployment, so none of this normally
+  // runs there — but if it ever silently became unconfigured in production
+  // (a cleared/mistyped env var, a bad redeploy), falling through to
+  // MOCK_SESSION would make the ENTIRE APP openly accessible to anyone as
+  // a full admin with zero authentication. Fail loudly instead.
+  const isProductionEnv = process.env.VERCEL_ENV === "production" || (process.env.NODE_ENV === "production" && !process.env.VERCEL_ENV);
+  if (isProductionEnv) {
+    throw new Error("Supabase is not configured in production — refusing to fall back to a no-login dev session. Check NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY.");
+  }
+
   if (hasClerkKeys && isDbConfigured) {
     try {
       const { auth, currentUser } = await import("@clerk/nextjs/server");

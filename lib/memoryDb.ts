@@ -316,6 +316,17 @@ export interface MockSupportMessage {
   updatedAt: Date;
 }
 
+export interface MockAuthEvent {
+  id: string;
+  eventType: string;
+  email: string | null;
+  userId: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  detail: string | null;
+  createdAt: Date;
+}
+
 export interface MockNote {
   id: string;
   competitorId: string;
@@ -393,6 +404,8 @@ class MemoryDatabase {
   // Real usage data (Contact Support submissions) — same non-seeded,
   // non-persisted-across-restart precedent as faqVotes/faqSearchMisses.
   supportMessages: MockSupportMessage[] = [];
+  // Auth audit log / login-rate-limit tracking — same non-seeded precedent.
+  authEvents: MockAuthEvent[] = [];
 
   constructor() {
     if (IS_SERVERLESS || !this.loadSnapshot()) {

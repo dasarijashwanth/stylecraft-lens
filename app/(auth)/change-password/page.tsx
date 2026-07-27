@@ -21,8 +21,8 @@ export default function ChangePasswordPage() {
       toast.error("New password and confirmation don't match");
       return;
     }
-    if (newPassword.length < 8) {
-      toast.error("New password must be at least 8 characters");
+    if (newPassword.length < 10) {
+      toast.error("New password must be at least 10 characters");
       return;
     }
 
@@ -77,7 +77,7 @@ export default function ChangePasswordPage() {
               type="password"
               autoComplete="new-password"
               required
-              minLength={8}
+              minLength={10}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
@@ -89,7 +89,7 @@ export default function ChangePasswordPage() {
               type="password"
               autoComplete="new-password"
               required
-              minLength={8}
+              minLength={10}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
