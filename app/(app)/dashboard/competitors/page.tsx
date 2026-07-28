@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
+import { sanitizeCsvCell } from "@/lib/csv-safe";
 
 function statusBadgeTone(status: string): BadgeTone {
   const s = status.toUpperCase();
@@ -213,8 +214,8 @@ export default function CompetitorsPage() {
       c.review_count || ""
     ]);
     
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + [headers.join(","), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))].join("\n");
+    const csvContent = "data:text/csv;charset=utf-8,"
+      + [headers.join(","), ...rows.map(e => e.map(val => `"${sanitizeCsvCell(String(val)).replace(/"/g, '""')}"`).join(","))].join("\n");
       
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");

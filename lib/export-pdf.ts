@@ -2,13 +2,7 @@
 import { isPricingAnalysisEmpty } from "./pricing-analysis";
 import { summarizeSource, describeProvenanceTier } from "./provenance-format";
 import type { ProvenanceRow } from "./db/section-provenance";
-
-// This file otherwise interpolates every value unescaped — queries are the
-// field most likely to contain <, >, &, or quotes from search syntax, so
-// they're the one place worth guarding explicitly.
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
+import { escapeHtml } from "./html-escape";
 
 // "Data Sources & Methodology" appendix — one block per product+section,
 // rendered from whatever persisted provenance rows ended up on the report
@@ -115,7 +109,11 @@ export async function downloadTabPDF(report: any, activeTab: string) {
 function parseTipTapNode(node: any): string {
   if (!node) return "";
   if (node.type === "text") {
-    let text = node.text || "";
+    // Escaped BEFORE marks wrap it in real <strong>/<em> tags below — this
+    // is a user-typed rich-text editor node (the report's free-form
+    // content field), the one true stored-XSS path in this file (reports
+    // are viewed by other team members, not just their author).
+    let text = escapeHtml(node.text || "");
     if (node.marks) {
       node.marks.forEach((mark: any) => {
         if (mark.type === "bold") text = `<strong>${text}</strong>`;
@@ -165,7 +163,7 @@ function renderStarRating(rating: string | number | null | undefined, reviewCoun
       </span>
     </span>`;
   }).join("");
-  return `<span style="display:inline-flex;align-items:center;gap:2px;vertical-align:middle;">${stars}<span style="margin-left:3px;">${clamped.toFixed(1)}${reviewCount ? ` (${reviewCount})` : ""}</span></span>`;
+  return `<span style="display:inline-flex;align-items:center;gap:2px;vertical-align:middle;">${stars}<span style="margin-left:3px;">${clamped.toFixed(1)}${reviewCount ? ` (${escapeHtml(reviewCount)})` : ""}</span></span>`;
 }
 
 function generatePrintHTML(report: any, activeTab?: string): string {
@@ -178,15 +176,19 @@ function generatePrintHTML(report: any, activeTab?: string): string {
 
   // Handle TipTap format if there is a content field and no structured tabs
   if (report.content && (!ca.market_snapshot && !pa.price_positioning)) {
-    const bodyHtml = Array.isArray(report.content.content) 
-      ? report.content.content.map(parseTipTapNode).join("") 
-      : typeof report.content === "string" ? report.content : "No content available.";
-    
+    const bodyHtml = Array.isArray(report.content.content)
+      ? report.content.content.map(parseTipTapNode).join("")
+      // A legacy/plain-string content value is raw user-typed text, not
+      // pre-built HTML — escape it before wrapping, same as any other
+      // untrusted string in this file (the TipTap branch above already
+      // escapes at the leaf-node level in parseTipTapNode).
+      : typeof report.content === "string" ? `<p>${escapeHtml(report.content)}</p>` : "No content available.";
+
     return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${report.title}</title>
+  <title>${escapeHtml(report.title)}</title>
   <style>
     @media print {
       body { margin: 15mm; background: #fff; color: #000; }
@@ -216,7 +218,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
 <body>
   <div class="header">
     <div class="logo">STYLECRAFT <span>LENS</span></div>
-    <h1>${report.title}</h1>
+    <h1>${escapeHtml(report.title)}</h1>
     <div class="meta">Generated: ${new Date(report.created_at || Date.now()).toLocaleDateString()}</div>
   </div>
   <div class="report-body">
@@ -237,7 +239,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${report.title}</title>
+  <title>${escapeHtml(report.title)}</title>
   <style>
     @media print {
       body { margin: 15mm 15mm 15mm 15mm; background: #fff; color: #000; }
@@ -461,30 +463,30 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   <div class="cover-page">
     <div class="cover-brand">STYLECRAFT <span>LENS</span></div>
     <div class="cover-badge">Competitive Intelligence Report</div>
-    <h1 class="cover-title">${ca.product_name || report.title || "Apex Cordless Clipper"}</h1>
-    <p class="cover-subtitle">Target Category: ${categoryName}</p>
+    <h1 class="cover-title">${escapeHtml(ca.product_name || report.title || "Apex Cordless Clipper")}</h1>
+    <p class="cover-subtitle">Target Category: ${escapeHtml(categoryName)}</p>
     <div class="cover-divider"></div>
     <div class="cover-meta">
       <div><strong>Prepared For:</strong> StyleCraft B2B Dashboard</div>
       <div><strong>Date Compiled:</strong> ${dateStr}</div>
-      <div style="font-family: monospace; font-size: 9px; margin-top: 20px; opacity: 0.5;">REPORT ID: ${report.id || "TEMP_ID"}</div>
+      <div style="font-family: monospace; font-size: 9px; margin-top: 20px; opacity: 0.5;">REPORT ID: ${escapeHtml(report.id || "TEMP_ID")}</div>
     </div>
   </div>
 
   ${(showAll || activeTab === "competitive-analysis") ? `
     <h2>1. Market Analysis & Gaps</h2>
-    <p><strong>Product Name:</strong> ${ca.product_name || report.title}</p>
-    <p><strong>Market Overview:</strong> ${ca.market_snapshot?.overview_paragraph || "No snapshot available."}</p>
-    
+    <p><strong>Product Name:</strong> ${escapeHtml(ca.product_name || report.title)}</p>
+    <p><strong>Market Overview:</strong> ${escapeHtml(ca.market_snapshot?.overview_paragraph || "No snapshot available.")}</p>
+
     <h3>Key Industry Trends</h3>
     <ul>
-      ${(ca.key_trends || []).map((t: any) => `<li><strong>${t.trend_name}:</strong> ${t.description}</li>`).join("")}
+      ${(ca.key_trends || []).map((t: any) => `<li><strong>${escapeHtml(t.trend_name)}:</strong> ${escapeHtml(t.description)}</li>`).join("")}
       ${(ca.key_trends || []).length === 0 ? "<li>No trends recorded.</li>" : ""}
     </ul>
 
     <h3>Market Gaps Identified</h3>
     <ul>
-      ${(ca.market_gaps || []).map((g: any) => `<li>${g}</li>`).join("")}
+      ${(ca.market_gaps || []).map((g: any) => `<li>${escapeHtml(g)}</li>`).join("")}
       ${(ca.market_gaps || []).length === 0 ? "<li>No market gaps recorded.</li>" : ""}
     </ul>
 
@@ -504,23 +506,23 @@ function generatePrintHTML(report: any, activeTab?: string): string {
         <div class="comp-card">
           <div class="comp-header">
             <div>
-              <div class="comp-name">${c.name}${c.brand_list_status === "not_curated" ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(Not on curated legacy list)</span>` : ""}</div>
-              <div class="comp-brand">${c.brand}</div>
+              <div class="comp-name">${escapeHtml(c.name)}${c.brand_list_status === "not_curated" ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(Not on curated legacy list)</span>` : ""}</div>
+              <div class="comp-brand">${escapeHtml(c.brand)}</div>
             </div>
-            <div class="comp-price">${c.price || "—"}</div>
+            <div class="comp-price">${escapeHtml(c.price) || "—"}</div>
           </div>
           <div class="comp-metrics">
-            <div><strong>ASIN:</strong> ${c.asin}</div>
+            <div><strong>ASIN:</strong> ${escapeHtml(c.asin)}</div>
             ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
-            <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
-            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${c.bsr_rank}</div>` : ""}
-            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${c.manufacturer}</div>` : ""}
-            ${c.model_number ? `<div><strong>Model:</strong> ${c.model_number}</div>` : ""}
+            <div><strong>Sales:</strong> ${escapeHtml(c.monthly_sales) || "—"}</div>
+            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${escapeHtml(c.bsr_rank)}</div>` : ""}
+            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${escapeHtml(c.manufacturer)}</div>` : ""}
+            ${c.model_number ? `<div><strong>Model:</strong> ${escapeHtml(c.model_number)}</div>` : ""}
           </div>
-          ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
-          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${c.description.slice(0, 300)}${c.description.length > 300 ? "…" : ""}</div>` : ""}
+          ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${escapeHtml(c.top_feature_summary)}</div>` : ""}
+          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${escapeHtml(c.description.slice(0, 300))}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
-            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
+            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"} | RPM: ${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"} | Run: ${escapeHtml(c.confirmed_technical_specs?.run_time) || "—"}
           </div>
         </div>
       `).join("")}
@@ -543,13 +545,13 @@ function generatePrintHTML(report: any, activeTab?: string): string {
       <tbody>
         ${(ca.large_brand_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${c.name}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
-            <td>${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")}</td>
-            <td>${c.price || "—"}</td>
+            <td><strong>${escapeHtml(c.name)}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
+            <td>${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"}</td>
+            <td>${escapeHtml(c.price) || "—"}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
-            <td>${c.review_count || "—"}</td>
-            <td>${c.monthly_sales || "—"}</td>
-            <td>${c.confirmed_technical_specs?.rpm || "—"}</td>
+            <td>${escapeHtml(c.review_count) || "—"}</td>
+            <td>${escapeHtml(c.monthly_sales) || "—"}</td>
+            <td>${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"}</td>
           </tr>
         `).join("")}
         ${(ca.large_brand_competitors || []).length === 0 ? "<tr><td colspan='7'>No legacy competitors analyzed.</td></tr>" : ""}
@@ -564,23 +566,23 @@ function generatePrintHTML(report: any, activeTab?: string): string {
         <div class="comp-card">
           <div class="comp-header">
             <div>
-              <div class="comp-name">${c.name}</div>
-              <div class="comp-brand">${c.brand}</div>
+              <div class="comp-name">${escapeHtml(c.name)}</div>
+              <div class="comp-brand">${escapeHtml(c.brand)}</div>
             </div>
-            <div class="comp-price">${c.price || "—"}</div>
+            <div class="comp-price">${escapeHtml(c.price) || "—"}</div>
           </div>
           <div class="comp-metrics">
-            <div><strong>ASIN:</strong> ${c.asin}</div>
+            <div><strong>ASIN:</strong> ${escapeHtml(c.asin)}</div>
             ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
-            <div><strong>Sales:</strong> ${c.monthly_sales || "—"}</div>
-            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${c.bsr_rank}</div>` : ""}
-            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${c.manufacturer}</div>` : ""}
-            ${c.model_number ? `<div><strong>Model:</strong> ${c.model_number}</div>` : ""}
+            <div><strong>Sales:</strong> ${escapeHtml(c.monthly_sales) || "—"}</div>
+            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${escapeHtml(c.bsr_rank)}</div>` : ""}
+            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${escapeHtml(c.manufacturer)}</div>` : ""}
+            ${c.model_number ? `<div><strong>Model:</strong> ${escapeHtml(c.model_number)}</div>` : ""}
           </div>
-          ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${c.top_feature_summary}</div>` : ""}
-          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${c.description.slice(0, 300)}${c.description.length > 300 ? "…" : ""}</div>` : ""}
+          ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${escapeHtml(c.top_feature_summary)}</div>` : ""}
+          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${escapeHtml(c.description.slice(0, 300))}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
-            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")} | RPM: ${c.confirmed_technical_specs?.rpm || "—"} | Run: ${c.confirmed_technical_specs?.run_time || "—"}
+            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"} | RPM: ${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"} | Run: ${escapeHtml(c.confirmed_technical_specs?.run_time) || "—"}
           </div>
         </div>
       `).join("")}
@@ -603,13 +605,13 @@ function generatePrintHTML(report: any, activeTab?: string): string {
       <tbody>
         ${(ca.indie_emerging_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${c.name}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
-            <td>${c.motor_match_tier === "unverified" ? "Unverified" : (c.motor_type || "—")}</td>
-            <td>${c.price || "—"}${c.price_logic === "relative" ? ` <span style="font-size:9px; color:#666;">(relative tier)</span>` : ""}</td>
+            <td><strong>${escapeHtml(c.name)}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
+            <td>${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"}</td>
+            <td>${escapeHtml(c.price) || "—"}${c.price_logic === "relative" ? ` <span style="font-size:9px; color:#666;">(relative tier)</span>` : ""}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
-            <td>${c.review_count || "—"}</td>
-            <td>${c.monthly_sales || "—"}</td>
-            <td>${c.confirmed_technical_specs?.rpm || "—"}</td>
+            <td>${escapeHtml(c.review_count) || "—"}</td>
+            <td>${escapeHtml(c.monthly_sales) || "—"}</td>
+            <td>${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"}</td>
           </tr>
         `).join("")}
         ${(ca.indie_emerging_competitors || []).length === 0 ? "<tr><td colspan='7'>No indie competitors analyzed.</td></tr>" : ""}
@@ -619,15 +621,15 @@ function generatePrintHTML(report: any, activeTab?: string): string {
     <div class="page-break"></div>
 
     <h3>Strategic Positioning Statement</h3>
-    <p>${ca.positioning_recommendation || "No positioning recommendation specified."}</p>
+    <p>${escapeHtml(ca.positioning_recommendation || "No positioning recommendation specified.")}</p>
   ` : ""}
 
   ${(showAll || activeTab === "pricing") && !isPricingAnalysisEmpty(pa) ? `
     ${showAll ? "" : '<div class="page-break"></div>'}
     <h2>3. Pricing Analysis & Benchmarks</h2>
     ${pa.provenance ? `<p class="comp-specs">Source: ${escapeHtml(summarizeSource("pricing", pa.provenance, pa.provenance_resolved_at))}</p>` : ""}
-    ${pa.target_price ? `<p><strong>Target Price:</strong> ${pa.target_price}</p>` : ""}
-    ${pa.price_positioning ? `<p><strong>Price Positioning:</strong> ${pa.price_positioning}</p>` : ""}
+    ${pa.target_price ? `<p><strong>Target Price:</strong> ${escapeHtml(pa.target_price)}</p>` : ""}
+    ${pa.price_positioning ? `<p><strong>Price Positioning:</strong> ${escapeHtml(pa.price_positioning)}</p>` : ""}
 
     <h3>Pricing Benchmarks</h3>
     <table class="comparison-table">
@@ -642,10 +644,10 @@ function generatePrintHTML(report: any, activeTab?: string): string {
       <tbody>
         ${(pa.competitor_prices || []).map((p: any) => `
           <tr>
-            <td>${p.name}${p.source_url ? ` <a href="${p.source_url}" style="font-size:9px;">[source]</a>` : ""}</td>
-            <td>${p.brand || ""}</td>
-            <td>${p.tier ? `<span class="badge ${p.tier === "Best" ? "badge-pro" : ""}">${p.tier}</span>` : ""}</td>
-            <td>${p.price || ""}</td>
+            <td>${escapeHtml(p.name)}${p.source_url && /^https?:\/\//i.test(p.source_url) ? ` <a href="${encodeURI(p.source_url)}" style="font-size:9px;">[source]</a>` : ""}</td>
+            <td>${escapeHtml(p.brand) || ""}</td>
+            <td>${p.tier ? `<span class="badge ${p.tier === "Best" ? "badge-pro" : ""}">${escapeHtml(p.tier)}</span>` : ""}</td>
+            <td>${escapeHtml(p.price) || ""}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -653,7 +655,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
 
     ${pa.notes ? `
       <h3>Pricing Strategy Notes</h3>
-      <p>${pa.notes}</p>
+      <p>${escapeHtml(pa.notes)}</p>
     ` : ""}
   ` : ""}
   ${activeTab === "pricing" && !showAll && isPricingAnalysisEmpty(pa) ? `
@@ -664,24 +666,24 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   ${(showAll || activeTab === "go-to-market") ? `
     ${showAll ? '<div class="page-break"></div>' : ""}
     <h2>4. Strategic Recommendations & GTM</h2>
-    <p><strong>Core Positioning Strategy:</strong> ${gtm.positioning || "No positioning statement recorded."}</p>
+    <p><strong>Core Positioning Strategy:</strong> ${escapeHtml(gtm.positioning || "No positioning statement recorded.")}</p>
 
     <h3>Strategic Recommendations</h3>
     <div class="rec-grid">
       ${(gtm.recommendations || []).map((r: any) => `
-        <div class="rec-card priority-${r.priority || "medium"}">
+        <div class="rec-card priority-${["high", "medium", "low"].includes(r.priority) ? r.priority : "medium"}">
           <div class="rec-header">
-            <span class="rec-title">${r.headline || r.title || "Recommendation"}</span>
-            <span class="rec-badge ${r.priority}">${r.priority} Priority</span>
+            <span class="rec-title">${escapeHtml(r.headline || r.title || "Recommendation")}</span>
+            <span class="rec-badge ${["high", "medium", "low"].includes(r.priority) ? r.priority : "medium"}">${escapeHtml(r.priority)} Priority</span>
           </div>
-          <p style="margin-top: 4px; font-size: 11px; color: #4B5563;">${r.explanation || r.detail || ""}</p>
+          <p style="margin-top: 4px; font-size: 11px; color: #4B5563;">${escapeHtml(r.explanation || r.detail || "")}</p>
         </div>
       `).join("")}
     </div>
 
     <h3>Tactical Quick Wins</h3>
     <ul>
-      ${(gtm.quick_wins || []).map((w: any) => `<li>${w}</li>`).join("")}
+      ${(gtm.quick_wins || []).map((w: any) => `<li>${escapeHtml(w)}</li>`).join("")}
       ${(gtm.quick_wins || []).length === 0 ? "<li>No quick wins recorded.</li>" : ""}
     </ul>
   ` : ""}
@@ -689,18 +691,18 @@ function generatePrintHTML(report: any, activeTab?: string): string {
   ${(showAll || activeTab === "content-form") ? `
     ${showAll ? '<div class="page-break"></div>' : ""}
     <h2>5. Creative Brief & Content Specs</h2>
-    <p><strong>Product / Initiative:</strong> ${cf.product_name || "Stylecraft Lens Tooling"}</p>
-    <p><strong>Target Audience Persona:</strong> ${cf.target_audience || "Professional barbers and hair stylists."}</p>
+    <p><strong>Product / Initiative:</strong> ${escapeHtml(cf.product_name || "Stylecraft Lens Tooling")}</p>
+    <p><strong>Target Audience Persona:</strong> ${escapeHtml(cf.target_audience || "Professional barbers and hair stylists.")}</p>
 
     <h3>Core Creative Messages</h3>
     <ul>
-      ${(cf.key_messages || []).map((m: any) => `<li>${m}</li>`).join("")}
+      ${(cf.key_messages || []).map((m: any) => `<li>${escapeHtml(m)}</li>`).join("")}
       ${(cf.key_messages || []).length === 0 ? "<li>No key messages listed.</li>" : ""}
     </ul>
 
     ${cf.notes ? `
       <h3>Content Creation Notes</h3>
-      <p>${cf.notes}</p>
+      <p>${escapeHtml(cf.notes)}</p>
     ` : ""}
   ` : ""}
 

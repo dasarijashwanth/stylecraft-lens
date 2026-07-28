@@ -5,6 +5,7 @@ import { buildFullProjectContext } from "@/lib/project-context";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 import { callAiForJson } from "@/lib/ai-json-call";
+import { escapeHtml as esc } from "@/lib/html-escape";
 
 export const maxDuration = 60;
 
@@ -154,7 +155,7 @@ function buildSalesKitHTML(productName: string, kit: any): string {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Sales Kit — ${productName}</title>
+<title>Sales Kit — ${esc(productName)}</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #111; background: #fff; }
@@ -191,19 +192,19 @@ h2 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacin
 <div class="page">
   <div class="header">
     <div class="brand">STYLECRAFT LENS · Sales Kit</div>
-    <h1>${productName}</h1>
-    <div class="tagline">${kit.tagline}</div>
+    <h1>${esc(productName)}</h1>
+    <div class="tagline">${esc(kit.tagline)}</div>
   </div>
 
   <h2>Elevator Pitch</h2>
-  <div class="elevator">${kit.elevator_pitch}</div>
+  <div class="elevator">${esc(kit.elevator_pitch)}</div>
 
   <h2>Key Features & Benefits</h2>
   <div class="features-grid">
     ${(kit.key_features ?? []).map((f: any) => `
       <div class="feature-card">
-        <div class="feature-headline">${f.headline}</div>
-        <div class="feature-benefit">${f.benefit}</div>
+        <div class="feature-headline">${esc(f.headline)}</div>
+        <div class="feature-benefit">${esc(f.benefit)}</div>
       </div>`).join("")}
   </div>
 
@@ -212,7 +213,7 @@ h2 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacin
     <thead><tr><th>vs Competitor</th><th>Why We Win</th></tr></thead>
     <tbody>
       ${(kit.competitive_advantages ?? []).map((c: any) => `
-        <tr><td>${c.vs}</td><td>${c.advantage}</td></tr>`).join("")}
+        <tr><td>${esc(c.vs)}</td><td>${esc(c.advantage)}</td></tr>`).join("")}
     </tbody>
   </table>
 
@@ -220,8 +221,8 @@ h2 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacin
   <div class="objections">
     ${(kit.objection_handlers ?? []).map((o: any) => `
       <div class="objection-card">
-        <div class="objection-q">❓ ${o.objection}</div>
-        <div class="objection-a">✓ ${o.response}</div>
+        <div class="objection-q">❓ ${esc(o.objection)}</div>
+        <div class="objection-a">✓ ${esc(o.response)}</div>
       </div>`).join("")}
   </div>
 
@@ -230,13 +231,13 @@ h2 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacin
     ${(kit.key_messages ?? []).map((m: string) => `
       <div class="message-item">
         <span class="message-bullet">→</span>
-        <span>${m}</span>
+        <span>${esc(m)}</span>
       </div>`).join("")}
   </div>
 
   <div class="cta-box">
     <div class="cta-label">Call to Action</div>
-    <div class="cta-text">${kit.call_to_action}</div>
+    <div class="cta-text">${esc(kit.call_to_action)}</div>
   </div>
 
   <div class="footer">

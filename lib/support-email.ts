@@ -6,6 +6,7 @@
 // "persistence first, email second" flow).
 import { Resend } from "resend";
 import type { SupportMessageRow } from "@/lib/db/support-messages";
+import { escapeHtml } from "@/lib/html-escape";
 
 export const SUPPORT_INBOX_EMAIL = process.env.SUPPORT_INBOX_EMAIL || "jashwanthd@stylecraftus.com";
 const SUPPORT_FROM_EMAIL = process.env.SUPPORT_FROM_EMAIL || "Lens Support <lens-support@stylecraftus.com>";
@@ -18,17 +19,17 @@ export const TOPIC_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 function nl2br(escaped: string): string {
   return escaped.replace(/\n/g, "<br/>");
+}
+
+// Strips CR/LF before anything goes into an email HEADER (subject, not
+// body) — a header value containing a raw newline could inject additional
+// SMTP/MIME headers (e.g. a fake Bcc) on providers that don't already
+// reject this themselves. m.name is admin-set today, not end-user-editable,
+// but this costs nothing and removes the assumption entirely.
+function sanitizeHeaderValue(input: string): string {
+  return input.replace(/[\r\n]+/g, " ").trim();
 }
 
 function sleep(ms: number): Promise<void> {
@@ -54,7 +55,7 @@ function buildContextRows(context: Record<string, any> | null): string[] {
 
 function buildAdminEmail(m: SupportMessageRow): { subject: string; html: string; text: string } {
   const topicLabel = TOPIC_LABELS[m.topic] || m.topic;
-  const subject = `[Lens Support] ${topicLabel} — ${m.name}`;
+  const subject = `[Lens Support] ${sanitizeHeaderValue(topicLabel)} — ${sanitizeHeaderValue(m.name)}`;
   const contextRows = buildContextRows(m.context);
   const submittedAt = new Date(m.created_at).toLocaleString();
 

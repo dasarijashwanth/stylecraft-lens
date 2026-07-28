@@ -5,6 +5,7 @@ import { getProject } from "@/lib/db/projects";
 import { getDocumentById, getDocumentFields } from "@/lib/db/documents";
 import { GTM_FIELD_SCHEMA, GTM_SOURCE_LABELS, type GtmFieldSource } from "@/lib/gtm-field-schema";
 import { isRealAnswer } from "@/lib/field-answer-state";
+import { sanitizeCsvCell } from "@/lib/csv-safe";
 
 // A flagged field's `answer` almost always still holds the real (if
 // imperfect/conflicting) value — never destroy it with a generic message.
@@ -17,14 +18,6 @@ function buildFlagAnnotation(sourceDetail: any): string {
 }
 
 export const maxDuration = 30;
-
-// Cells starting with these characters are interpreted as formulas by
-// Excel/Sheets — prefixing with a single quote defuses CSV injection
-// without changing what a human sees when they open the file.
-function sanitizeCsvCell(value: string): string {
-  if (/^[=+\-@]/.test(value)) return `'${value}`;
-  return value;
-}
 
 function slugify(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "Product";
