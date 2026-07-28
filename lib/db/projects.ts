@@ -10,6 +10,12 @@ interface ProjectInput {
   productName: string;
   description?: string;
   category?: string;
+  // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — persisted so
+  // it's reused every time an analysis is (re)run from this project, same
+  // as motorTech/pricePoint below. Not in the Prisma insert branch further
+  // down (dev-bypass-only path, no matching schema column — same
+  // precedent already set by productUrl/asin below).
+  toolType?: string;
   companyContext?: string;
   motorTech?: string;
   keyDiff?: string;
@@ -36,6 +42,7 @@ function toProjectShape(row: any) {
     productName: row.product_name,
     description: row.description,
     category: row.category,
+    toolType: row.tool_type,
     companyContext: row.company_context,
     motorTech: row.motor_tech,
     keyDiff: row.key_diff,
@@ -69,6 +76,7 @@ export async function createProject(userId: string, orgId: string, data: Project
         product_name: data.productName,
         description: data.description ?? "",
         category: data.category ?? null,
+        tool_type: data.toolType ?? null,
         company_context: data.companyContext ?? null,
         motor_tech: data.motorTech ?? null,
         key_diff: data.keyDiff ?? null,
@@ -114,6 +122,7 @@ export async function createProject(userId: string, orgId: string, data: Project
       productName: data.productName,
       description: data.description ?? "",
       category: data.category || null,
+      toolType: data.toolType || null,
       companyContext: data.companyContext || null,
       motorTech: data.motorTech || null,
       keyDiff: data.keyDiff || null,
@@ -221,6 +230,7 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   productName: "product_name",
   description: "description",
   category: "category",
+  toolType: "tool_type",
   companyContext: "company_context",
   motorTech: "motor_tech",
   keyDiff: "key_diff",

@@ -44,6 +44,7 @@ export async function PATCH(
     if (body.productName !== undefined) updateData.productName = body.productName;
     if (body.description !== undefined) updateData.description = body.description;
     if (body.category !== undefined) updateData.category = body.category || null;
+    if (body.toolType !== undefined) updateData.toolType = body.toolType || null;
     if (body.companyContext !== undefined) updateData.companyContext = body.companyContext || null;
     if (body.motorTech !== undefined) updateData.motorTech = body.motorTech || null;
     if (body.keyDiff !== undefined) updateData.keyDiff = body.keyDiff || null;

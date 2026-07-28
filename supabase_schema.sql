@@ -800,3 +800,12 @@ CREATE INDEX IF NOT EXISTS auth_events_created_idx ON auth_events(created_at DES
 ALTER TABLE auth_events ENABLE ROW LEVEL SECURITY;
 -- Deliberately NO policy (see Section 17 above) — only supabaseAdmin
 -- (service role) ever reads/writes this table.
+
+-- 19. STRICT TOOL-TYPE ISOLATION — a project's tool type (clipper/trimmer/
+-- shaver/etc., see lib/tool-type-taxonomy.ts) is a real, persisted column
+-- rather than living only in the free-text `category` field, so it's
+-- reused consistently every time an analysis is (re)run from this project
+-- — the same pattern price_point/motor_tech/key_diff above already
+-- establish. NULL means "not yet selected" (analyses created against a
+-- project from before this column existed) — never a silent guess.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS tool_type VARCHAR(30);

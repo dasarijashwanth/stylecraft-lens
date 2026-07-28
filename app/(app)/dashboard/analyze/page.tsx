@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { ProgressPanel } from "@/components/analyze/ProgressPanel";
 import { ResultsPanel } from "@/components/analyze/ResultsPanel";
 import { STYLECRAFT_PRODUCTS, PRODUCT_CATEGORIES } from "@/lib/stylecraft-products";
+import { ToolType, TOOL_TYPE_LABELS, deriveToolTypeFromCatalogProduct } from "@/lib/tool-type-taxonomy";
 
 export default function AnalyzePage() {
   const router = useRouter();
@@ -28,6 +29,11 @@ export default function AnalyzePage() {
   const [productName, setProductName] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
+  // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — required so a
+  // trimmer analysis can never pull in clipper data (or vice versa). Kept
+  // separate from the free-text "category" field above, which is not
+  // reliable enough on its own to gate competitor/spec/review selection.
+  const [toolType, setToolType] = useState<ToolType | "">("");
   const [pricePoint, setPricePoint] = useState("");
   const [companyContext, setCompanyContext] = useState("");
   const [motorTech, setMotorTech] = useState("");
@@ -44,6 +50,7 @@ export default function AnalyzePage() {
       setTargetMarket("both");
       setDescription("");
       setCategory("");
+      setToolType("");
       setCompanyContext("StylecraftUS® is an innovative hair tools brand established in the USA, known for professional-grade barber clippers, trimmers, and beauty tools. Collections include Saber, Instinct, Rebel, Reign, Rogue, and Ace lines. Featured in Good Housekeeping, Rolling Stone, GMA, and NY Times.");
       setMotorTech("");
       setKeyDiff("");
@@ -59,6 +66,7 @@ export default function AnalyzePage() {
     setProductName(product.name);
     setDescription(product.description);
     setCategory(product.amazonCategory);
+    setToolType(deriveToolTypeFromCatalogProduct(product) || "");
     setCompanyContext("StylecraftUS® is an innovative hair tools brand established in the USA, known for professional-grade barber clippers, trimmers, and beauty tools. Collections include Saber, Instinct, Rebel, Reign, Rogue, and Ace lines. Featured in Good Housekeeping, Rolling Stone, GMA, and NY Times.");
     setMotorTech(product.motorType);
     setKeyDiff(product.keyFeatures[0] || "");
@@ -83,6 +91,7 @@ export default function AnalyzePage() {
             setTargetMarket(p.targetMarket || "both");
             setDescription(p.description || "");
             setCategory(p.category || "");
+            setToolType(p.toolType || "");
             setPricePoint(p.pricePoint || "");
             setCompanyContext(p.companyContext || "");
             setMotorTech(p.motorTech || "");
@@ -141,6 +150,7 @@ export default function AnalyzePage() {
     } else if (description.trim().length < 10) {
       errs.description = "Add at least 10 characters for sharper results";
     }
+    if (!toolType) errs.toolType = "Select the exact tool type";
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -164,6 +174,7 @@ export default function AnalyzePage() {
               targetMarket,
               description: description.trim(),
               category: category.trim(),
+              toolType,
               pricePoint: pricePoint.trim(),
               companyContext: companyContext.trim(),
               motorTech,
@@ -183,6 +194,7 @@ export default function AnalyzePage() {
           productName: productName.trim(),
           description: description.trim(),
           category: category.trim() || undefined,
+          toolType,
           companyContext: companyContext.trim() || undefined,
           // Never submit a motor type for Hair Care & Styling — the field
           // only applies to Grooming & Barbering, even if a catalog
@@ -386,7 +398,26 @@ export default function AnalyzePage() {
                 {errors.productName && <p className="text-[10px] text-danger">{errors.productName}</p>}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="font-semibold text-text-primary block">Tool Type *</label>
+                  <select
+                    value={toolType}
+                    onChange={(e) => {
+                      setToolType(e.target.value as ToolType);
+                      if (errors.toolType) setErrors(prev => { const n = { ...prev }; delete n.toolType; return n; });
+                    }}
+                    className={`w-full px-3 py-2 border rounded-lg bg-surface-1 outline-none text-text-primary focus:border-accent ${
+                      errors.toolType ? "border-danger" : "border-border"
+                    }`}
+                  >
+                    <option value="" disabled>Select exact tool type…</option>
+                    {Object.entries(TOOL_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                  {errors.toolType && <p className="text-[10px] text-danger">{errors.toolType}</p>}
+                </div>
                 <div className="space-y-1">
                   <label className="font-semibold text-text-primary block">Market Category</label>
                   <input

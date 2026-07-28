@@ -22,11 +22,14 @@ const PHASE_LABELS = [
 
 // Which phase row shows the "waiting for input" icon for a given pause
 // field — "category" (Phase 0 product identification) is the default for
-// old paused questions that predate this field. "motorType" pauses during
+// old paused questions that predate this field. "toolType" also pauses
+// during Phase 0 (lib/product-identification.ts's strict tool-type
+// resolution — see lib/tool-type-taxonomy.ts). "motorType" pauses during
 // Phase 1 (lib/analysisEngine.ts's resolveOurMotorType gate), "lineupTier"
 // during Phase 2 (resolveOurLineupTier, indie relative pricing).
 const PENDING_QUESTION_PHASE_INDEX: Record<string, number> = {
   category: 0,
+  toolType: 0,
   pricePoint: 1,
   motorType: 1,
   lineupTier: 2,

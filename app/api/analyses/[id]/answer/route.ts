@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis, mergeAnalysisContext } from "@/lib/db/analyses";
+import { resolveToolType, TOOL_TYPE_LABELS, type ToolType } from "@/lib/tool-type-taxonomy";
 
 // Free-text -> one of the 3 tiers lib/our-product-position.ts's
 // percentileForManualTier expects — accepts "flagship"/"premium", "entry"/
@@ -11,6 +12,17 @@ function normalizeLineupTierAnswer(answer: string): "flagship" | "mid" | "entry"
   if (/(flagship|premium|top)/.test(lower)) return "flagship";
   if (/(entry|budget|basic|starter)/.test(lower)) return "entry";
   return "mid";
+}
+
+// Free-text -> a real ToolType, or null if it can't be resolved cleanly
+// (still ambiguous, or no recognized tool-type word at all) — never a
+// silent guess, since a wrong guess here is exactly the clipper/trimmer
+// contamination lib/tool-type-taxonomy.ts exists to prevent. A null
+// result is rejected below with a 400 asking the user to be specific.
+function normalizeToolTypeAnswer(answer: string): ToolType | null {
+  const resolved = resolveToolType(answer);
+  if (resolved && !resolved.ambiguous && resolved.type) return resolved.type;
+  return null;
 }
 
 // Answers a paused question — Product Identification (see
@@ -48,8 +60,24 @@ export async function POST(request: Request, { params }: { params: { id: string 
       pausedField === "pricePoint" ? "pricePoint" :
       pausedField === "motorType" ? "motorTech" :
       pausedField === "lineupTier" ? "lineupTier" :
+      pausedField === "toolType" ? "toolType" :
       "category";
-    const value = field === "lineupTier" ? normalizeLineupTierAnswer(answer.trim()) : answer.trim();
+
+    let value: string;
+    if (field === "lineupTier") {
+      value = normalizeLineupTierAnswer(answer.trim());
+    } else if (field === "toolType") {
+      const resolved = normalizeToolTypeAnswer(answer.trim());
+      if (!resolved) {
+        return NextResponse.json(
+          { error: "VALIDATION_FAILED", message: `Please answer with one exact tool type: ${Object.values(TOOL_TYPE_LABELS).join(", ")}` },
+          { status: 400 }
+        );
+      }
+      value = resolved;
+    } else {
+      value = answer.trim();
+    }
     await mergeAnalysisContext(params.id, { [field]: value });
     const analysis = await getAnalysis(params.id);
     return NextResponse.json({ analysis });

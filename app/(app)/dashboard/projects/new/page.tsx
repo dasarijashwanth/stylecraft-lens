@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { ToolType, TOOL_TYPE_LABELS } from "@/lib/tool-type-taxonomy";
 
 export default function NewProjectPage() {
   const router = useRouter();
@@ -17,6 +18,10 @@ export default function NewProjectPage() {
   const [productName, setProductName] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
+  // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — required so a
+  // trimmer project can never pull in clipper data (or vice versa) across
+  // every analysis run from it.
+  const [toolType, setToolType] = useState<ToolType | "">("");
   const [pricePoint, setPricePoint] = useState("");
   
   // Advanced / Precision fields
@@ -53,6 +58,7 @@ export default function NewProjectPage() {
         if (ctx.industry) setIndustry(prev => prev === "grooming-barbering" ? ctx.industry : prev);
         if (ctx.targetMarket) setTargetMarket(prev => prev === "both" ? ctx.targetMarket : prev);
         setCategory(prev => prev.trim() ? prev : (ctx.category || ""));
+        if (ctx.toolType) setToolType(prev => prev ? prev : ctx.toolType);
         setPricePoint(prev => prev.trim() ? prev : (ctx.pricePoint || ""));
         setCompanyContext(prev => prev.trim() ? prev : (ctx.companyContext || ""));
         setMotorTech(prev => prev.trim() ? prev : (ctx.motorTech || ""));
@@ -72,6 +78,7 @@ export default function NewProjectPage() {
     } else if (description.length < 10) {
       errs.description = "Add at least 10 characters for sharper results";
     }
+    if (!toolType) errs.toolType = "Select the exact tool type";
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -92,6 +99,7 @@ export default function NewProjectPage() {
           productName: productName.trim(),
           description: description.trim(),
           category: category.trim() || undefined,
+          toolType,
           pricePoint: pricePoint.trim() || undefined,
           companyContext: companyContext.trim() || undefined,
           // Never submit a motor type for Hair Care & Styling — the field
@@ -289,6 +297,30 @@ export default function NewProjectPage() {
           <h2 className="text-sm font-bold text-text-primary">Advanced marketing positioning</h2>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Tool Type — strict, required (lib/tool-type-taxonomy.ts).
+                Kept separate from the free-text Market/Amazon Category
+                below, which alone isn't reliable enough to gate which
+                competitors/specs/reviews an analysis pulls in. */}
+            <div className="space-y-1">
+              <label className="font-semibold text-text-primary block">Tool Type *</label>
+              <select
+                value={toolType}
+                onChange={(e) => {
+                  setToolType(e.target.value as ToolType);
+                  if (errors.toolType) setErrors(prev => { const n = { ...prev }; delete n.toolType; return n; });
+                }}
+                className={`w-full px-3 py-2 border rounded-lg bg-surface-1 outline-none text-text-primary focus:border-accent ${
+                  errors.toolType ? "border-danger" : "border-border"
+                }`}
+              >
+                <option value="" disabled>Select exact tool type…</option>
+                {Object.entries(TOOL_TYPE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              {errors.toolType && <p className="text-[10px] text-danger">{errors.toolType}</p>}
+            </div>
+
             {/* Category */}
             <div className="space-y-1">
               <label className="font-semibold text-text-primary block">Market / Amazon Category</label>

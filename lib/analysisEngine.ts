@@ -13,6 +13,7 @@ import { buildOverviewParagraph } from "./build-overview-paragraph";
 import { identifyProduct, needsUserInput, IdentityCard } from "./product-identification";
 import { getKnownBrandsHint } from "./known-brands-by-category";
 import { competitorMatchesCategory } from "./category-synonyms";
+import type { ToolType } from "./tool-type-taxonomy";
 import { finalizeCitations } from "./citations";
 import { insertProvenance } from "./db/section-provenance";
 import { resolveCacheKey } from "./product-cache-key";
@@ -61,6 +62,14 @@ export interface AnalysisContext {
   // StyleCraft catalog product — needed only for indie-brand relative
   // price scoring (Phase 2).
   lineupTier?: LineupTier;
+  // Required on the analyze/new-project forms going forward — strict
+  // tool-type isolation (see lib/tool-type-taxonomy.ts) needs an
+  // authoritative signal that isn't the AI's own free-text category/
+  // subcategory. Optional here only for backward compatibility with
+  // analyses created before this field existed (identifyProduct falls
+  // back to evidence-based resolution, pausing to ask if that's also
+  // unresolvable — never guesses).
+  toolType?: ToolType;
 }
 
 // Keyed off the VERIFIED category/subcategory from Stage 1's Identity
@@ -1046,6 +1055,25 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await updateAnalysisPhase(analysisId, 0, "phase0_result", card, 0);
         const question = {
           question: `What type of product is ${context.productName}? (e.g., trimmer, shaver, dryer, straightener)`,
+          foundSoFar: card.whatItIs || undefined,
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 0, status: "running", stepResult: card, totalSearches: 0, pendingQuestion: question };
+      }
+
+      // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — the
+      // analyze/new-project forms now require a Tool Type selection, so
+      // this should rarely fire for new analyses; it's a defensive
+      // fallback for analyses created before the field existed, or a
+      // genuinely ambiguous identification (e.g. evidence mentions both
+      // "clipper" and "trimmer") with no user selection to fall back on.
+      // Never guesses — a wrong silent guess here is exactly the
+      // clipper-into-trimmer contamination this field exists to stop.
+      if (!card.toolType) {
+        await updateAnalysisPhase(analysisId, 0, "phase0_result", card, 0);
+        const question = {
+          question: `What exact tool type is ${context.productName}? (clipper, trimmer, shaver, hair dryer, flat iron, curling iron, hot brush, or combo/multi-tool kit) This determines which competitors and data the analysis uses — it's never mixed across types.`,
+          field: "toolType",
           foundSoFar: card.whatItIs || undefined,
         };
         await setPendingQuestion(analysisId, question);

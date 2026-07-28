@@ -1,6 +1,16 @@
 // lib/validations.ts
 import { z } from "zod";
 
+// Strict tool-type isolation (lib/tool-type-taxonomy.ts) — required on
+// every form that seeds an analysis, so a trimmer analysis can never pull
+// in clipper data (or vice versa). Kept as a literal tuple here (rather
+// than importing ToolType) since zod needs the literal values at schema-
+// definition time; lib/tool-type-taxonomy.ts's ToolType type is the
+// single source of truth these must stay in sync with.
+export const TOOL_TYPE_VALUES = [
+  "clipper", "trimmer", "shaver", "dryer", "flat_iron", "curling_iron", "hot_brush", "other_styling", "combo",
+] as const;
+
 // Normalizes and validates any URL input
 export function normalizeUrl(input: string): string | null {
   if (!input || input.trim() === "") return null;
@@ -36,6 +46,7 @@ export const ProjectSchema = z.object({
   productName:     z.string().min(2).max(100),
   description:     z.string().min(10).max(2000),
   category:        z.string().max(100).optional(),
+  toolType:        z.enum(TOOL_TYPE_VALUES),
   companyContext:  z.string().max(1000).optional(),
   motorTech:       z.string().max(100).optional(),
   keyDiff:         z.string().max(200).optional(),
@@ -54,6 +65,7 @@ export const AnalysisFormSchema = z.object({
   productName: z.string().min(2, "Product name must be at least 2 characters").max(100),
   description: z.string().min(10, "Add at least 10 characters for sharper results").max(2000),
   category: z.string().optional(),
+  toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
   companyContext: z.string().max(1000).optional(),
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
@@ -67,6 +79,7 @@ export const NewProjectSchema = z.object({
   productName: z.string().min(2, "Product name must be at least 2 characters").max(100),
   description: z.string().min(10, "Add at least 10 characters for sharper results").max(2000),
   category: z.string().optional(),
+  toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
   companyContext: z.string().max(1000).optional(),
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),

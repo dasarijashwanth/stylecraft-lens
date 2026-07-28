@@ -11,6 +11,7 @@ import { callOpenAiForJson, hasOpenAIKey } from "./openai";
 import { getAmazonProduct } from "./rainforest";
 import { scrapeProductPage } from "./scrape";
 import { getProject } from "./db/projects";
+import { ToolType, resolveToolType } from "./tool-type-taxonomy";
 
 export type IdentityStatus = "verified" | "custom_unreleased" | "ambiguous";
 
@@ -26,6 +27,50 @@ export interface IdentityCard {
   confidence: "high" | "medium" | "low";
   evidence: { claim: string; url: string; quote: string }[];
   identityStatus: IdentityStatus;
+  // Strict tool-type isolation (clipper/trimmer/shaver/etc. are never
+  // treated as interchangeable downstream) — null only when it couldn't be
+  // determined at all (triggers a pause-and-ask; see resolveIdentityToolType
+  // below), never silently guessed. See lib/tool-type-taxonomy.ts's header
+  // for the contamination bug this exists to close.
+  toolType: ToolType | null;
+  toolTypeConflict?: { aiInferred: ToolType; resolved: ToolType; reason: string };
+}
+
+// Determination order: (1) the user's own required form selection
+// (context.toolType) always wins — they know best what they submitted;
+// (2) otherwise resolve from the AI's own category/subcategory/productName
+// evidence. If the user picked one type but the AI's evidence clearly
+// implies a DIFFERENT concrete type, the user's selection still wins —
+// this is logged as a conflict for visibility rather than silently
+// overridden or silently ignored. Returns toolType: null (never a guess)
+// when there's no user selection and the evidence is either unmatched or
+// genuinely ambiguous (e.g. category text mentions both "clipper" and
+// "trimmer") — the caller pauses and asks rather than picking one.
+function resolveIdentityToolType(
+  card: Pick<IdentityCard, "category" | "subcategory" | "productName">,
+  context: AnalysisContext
+): { toolType: ToolType | null; conflict?: IdentityCard["toolTypeConflict"] } {
+  const evidenceText = `${card.category} ${card.subcategory} ${card.productName}`;
+  const fromEvidence = resolveToolType(evidenceText);
+  const userSelected = context.toolType;
+
+  if (userSelected) {
+    if (fromEvidence && !fromEvidence.ambiguous && fromEvidence.type && fromEvidence.type !== userSelected) {
+      const conflict = {
+        aiInferred: fromEvidence.type,
+        resolved: userSelected,
+        reason: `Identified category/subcategory ("${card.category}" / "${card.subcategory}") implies "${fromEvidence.type}", but the user selected "${userSelected}" at submission — user selection wins.`,
+      };
+      console.warn(`Tool-type conflict: ${conflict.reason}`);
+      return { toolType: userSelected, conflict };
+    }
+    return { toolType: userSelected };
+  }
+
+  if (fromEvidence && !fromEvidence.ambiguous && fromEvidence.type) {
+    return { toolType: fromEvidence.type };
+  }
+  return { toolType: null };
 }
 
 const SYSTEM_PROMPT = `You are identifying a real-world product before any competitive research happens. You have access to web search. Use it.
@@ -79,11 +124,14 @@ function normalizeIdentityCard(raw: any, context: AnalysisContext): IdentityCard
       ? raw.identityStatus
       : "ambiguous";
   const category = (raw?.category || context.category || "").trim();
+  const subcategory = (raw?.subcategory || category).trim();
+  const productName = raw?.productName || context.productName;
+  const { toolType, conflict } = resolveIdentityToolType({ category, subcategory, productName }, context);
   return {
-    productName: raw?.productName || context.productName,
+    productName,
     brand: raw?.brand || null,
     category,
-    subcategory: (raw?.subcategory || category).trim(),
+    subcategory,
     whatItIs: raw?.whatItIs || context.description || "",
     keyAttributes: Array.isArray(raw?.keyAttributes) ? raw.keyAttributes : [],
     targetUser: raw?.targetUser === "pro" || raw?.targetUser === "consumer" || raw?.targetUser === "both" ? raw.targetUser : context.targetMarket,
@@ -91,12 +139,15 @@ function normalizeIdentityCard(raw: any, context: AnalysisContext): IdentityCard
     confidence: raw?.confidence === "high" || raw?.confidence === "medium" ? raw.confidence : "low",
     evidence: Array.isArray(raw?.evidence) ? raw.evidence : [],
     identityStatus: category ? (status === "ambiguous" ? "custom_unreleased" : status) : status,
+    toolType,
+    toolTypeConflict: conflict,
   };
 }
 
 // Used when no AI provider is available, or the AI call/parse fails.
 function fallbackIdentity(context: AnalysisContext): IdentityCard {
   const category = context.category?.trim() || "";
+  const { toolType, conflict } = resolveIdentityToolType({ category, subcategory: category, productName: context.productName }, context);
   return {
     productName: context.productName,
     brand: null,
@@ -109,6 +160,8 @@ function fallbackIdentity(context: AnalysisContext): IdentityCard {
     confidence: category ? "medium" : "low",
     evidence: [],
     identityStatus: category ? "custom_unreleased" : "ambiguous",
+    toolType,
+    toolTypeConflict: conflict,
   };
 }
 

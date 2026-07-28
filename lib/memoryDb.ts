@@ -40,6 +40,7 @@ export interface MockProject {
   productName: string;
   description: string;
   category?: string | null;
+  toolType?: string | null;
   companyContext?: string | null;
   motorTech?: string | null;
   keyDiff?: string | null;
