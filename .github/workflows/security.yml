@@ -1,0 +1,75 @@
+name: Security & Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: Dependency audit (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # --audit-level=high: fails the build on high/critical findings, not
+      # every low-severity advisory — see SECURITY_REPORT.md for the
+      # current accepted-risk list (e.g. a dev-only glob/brace-expansion
+      # transitive DoS advisory with no non-breaking fix available yet).
+      - run: npm install --legacy-peer-deps
+      - run: npm audit --omit=dev --audit-level=high
+
+  typecheck-and-lint:
+    name: Typecheck + lint + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --legacy-peer-deps
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+        env:
+          # Dummy values so the build succeeds without real secrets in CI —
+          # every provider client in this codebase degrades gracefully
+          # (falls back to memoryDb / skips the feature) when unconfigured,
+          # by design (see lib/env.ts) — this is exactly that path,
+          # exercised on purpose, not a workaround.
+          NEXT_PUBLIC_SUPABASE_URL: "https://placeholder.supabase.co"
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: "placeholder"
+
+  offline-verify-scripts:
+    name: Offline verify scripts (scripts/verify-*.ts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --legacy-peer-deps
+      # Only the scripts that make zero live Rainforest/OpenAI/Gemini calls
+      # and need no real Supabase project (pure-logic + memoryDb-backed) —
+      # NOT the verify-*-schema-live.ts scripts, which intentionally target
+      # a real configured Supabase project and have no place running here.
+      - run: |
+          for f in scripts/verify-html-escaping.ts scripts/verify-csv-injection-guard.ts \
+                   scripts/verify-file-magic-bytes.ts scripts/verify-rate-limit.ts \
+                   scripts/verify-price-band.ts scripts/verify-review-tiers.ts; do
+            if [ -f "$f" ]; then echo "=== $f ==="; npx tsx "$f" || exit 1; fi
+          done
