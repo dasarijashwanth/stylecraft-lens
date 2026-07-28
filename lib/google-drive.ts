@@ -17,12 +17,21 @@ async function getDriveInstance() {
   }
 }
 
+// Drive's query language uses '...' for string literals; a project/product
+// name containing an unescaped quote could otherwise break out of the
+// literal and manipulate the query (e.g. matching/reusing an unintended
+// existing folder) — escape per Drive's own query syntax (\' for a literal
+// quote), same idea as any other query-language injection guard.
+function escapeDriveQueryLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
 async function findOrCreateFolder(drive: any, name: string, parentId?: string): Promise<string> {
   const query = [
-    `name='${name}'`,
+    `name='${escapeDriveQueryLiteral(name)}'`,
     `mimeType='application/vnd.google-apps.folder'`,
     `trashed=false`,
-    parentId ? `'${parentId}' in parents` : null,
+    parentId ? `'${escapeDriveQueryLiteral(parentId)}' in parents` : null,
   ].filter(Boolean).join(" and ");
 
   const res = await drive.files.list({ q: query, fields: "files(id, name)" });
