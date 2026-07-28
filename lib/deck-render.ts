@@ -18,6 +18,7 @@ import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { DeckPlaceholderMap, DeckTokenMapping, DeckValue, CompetitorRow } from "./deck-types";
 import { getPresentationOrderSlides, getNotesSlidePart } from "./deck-template-parser";
+import { normalizeSplitTokenRuns } from "./deck-run-merge";
 
 export interface RenderDeckResult {
   buffer: Buffer;
@@ -167,6 +168,20 @@ export async function renderDeck(
   const renderData = buildRenderData(placeholderMap, values);
 
   const zip = new PizZip(templateBuffer);
+
+  // Same split-token repair as upload-time discovery (lib/deck-template-parser.ts)
+  // — must run here too so Docxtemplater's own {{ }} scan agrees with what
+  // parseDeckTemplate found, otherwise a token that discovery only found
+  // thanks to this fix would still fail to substitute at render time.
+  const slidesForNormalize = getPresentationOrderSlides(zip);
+  const partsToNormalize: string[] = [];
+  for (const slide of slidesForNormalize) {
+    partsToNormalize.push(slide.partPath);
+    const notesPart = getNotesSlidePart(zip, slide.partPath);
+    if (notesPart) partsToNormalize.push(notesPart);
+  }
+  normalizeSplitTokenRuns(zip, partsToNormalize);
+
   const doc = new Docxtemplater(zip, {
     delimiters: { start: "{{", end: "}}" },
     paragraphLoop: true,

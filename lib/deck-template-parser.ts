@@ -16,6 +16,7 @@
 // is flagged unmapped for an admin to correct if it's actually an image/table.
 import PizZip from "pizzip";
 import { DeckTokenKind, DeckTokenOccurrence } from "./deck-types";
+import { normalizeSplitTokenRuns } from "./deck-run-merge";
 
 export interface ParsedDeckToken {
   token: string;
@@ -163,6 +164,19 @@ function addOccurrence(
 export async function parseDeckTemplate(fileBuffer: Buffer): Promise<ParsedDeckTemplate> {
   const zip = new PizZip(fileBuffer);
   const slides = getPresentationOrderSlides(zip);
+
+  // Repair any {{token}} PowerPoint split across multiple XML runs BEFORE
+  // scanning — see lib/deck-run-merge.ts's header for why this is necessary
+  // (without it, a split token is invisible to the regex scan below and
+  // never gets discovered at all).
+  const partsToNormalize: string[] = [];
+  for (const slide of slides) {
+    partsToNormalize.push(slide.partPath);
+    const notesPart = getNotesSlidePart(zip, slide.partPath);
+    if (notesPart) partsToNormalize.push(notesPart);
+  }
+  normalizeSplitTokenRuns(zip, partsToNormalize);
+
   const tokenMap = new Map<string, ParsedDeckToken>();
 
   for (const slide of slides) {
