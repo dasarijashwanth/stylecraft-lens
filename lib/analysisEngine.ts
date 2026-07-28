@@ -1363,13 +1363,27 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
     if (record.phase === 3) {
       // ----------------------------------------------------
-      // PHASE 3: STRATEGIC SYNTHESIS + finalize
+      // PHASE 3a: STRATEGIC SYNTHESIS (main AI call only)
       // ----------------------------------------------------
+      // Split from what used to be a single request doing synthesis +
+      // conditional anti-boilerplate retry + citation verification + report
+      // save, all sequentially — each of the first two is independently
+      // capable of running close to the per-call AI timeout on its own (see
+      // Phase 1's own comment on OpenAI web-search latency variance), so
+      // stacking two of them plus citation fetches routinely blew past
+      // Vercel's 60s cap ("connection dropped" for the user, mid-request,
+      // with no error ever persisted since the function was killed before
+      // it could write one). record.phase stays "3" in the DB response
+      // client-side is never told about this split (see phase 4 below) —
+      // ProgressPanel's existing generic "call /continue again" loop just
+      // keeps polling, so no client change was needed for the resumability
+      // itself, only a small guard against a premature "Complete" flash
+      // (see ProgressPanel.tsx's step.phase !== 4 check).
       if (!phase1Result || !phase2Result || !identityCard) {
         throw new Error("Missing identity/phase 1/2 results — cannot run phase 3");
       }
 
-      let result: any = await withAiFallback(
+      const result: any = await withAiFallback(
         "Phase 3",
         hasGeminiKey ? () => executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
         hasOpenAIKey ? () => executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
@@ -1377,37 +1391,62 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         startTime
       );
       webSearchCount += result.web_searches_performed || 0;
+      result.__phase3Stage = "synthesized";
 
-      // Anti-boilerplate check: if this analysis's positioning text is
-      // near-identical to a recent DIFFERENT-category analysis, it's
-      // almost certainly generic could-apply-to-anything strategy text —
-      // one regeneration attempt with the real competitor facts, same
-      // retry-with-facts pattern already proven in lib/gtm-generate.ts.
-      try {
-        const positioningText = typeof result.positioning_recommendation === "string" ? result.positioning_recommendation : "";
-        if (positioningText && (hasOpenAIKey || hasGeminiKey)) {
-          const recent = await getRecentAnalysesForBoilerplateCheck(context.orgId, analysisId);
-          const boilerplateMatch = recent.find(r =>
-            r.category && r.category.toLowerCase() !== identityCard.category.toLowerCase() &&
-            r.positioningText && textSimilarity(positioningText, r.positioningText) > BOILERPLATE_SIMILARITY_THRESHOLD
-          );
-          if (boilerplateMatch) {
-            const facts = [...(phase1Result?.competitors || []), ...(phase2Result?.competitors || [])]
-              .slice(0, 3)
-              .map((c: any) => `${c.name} at ${c.price || "an unlisted price"}`);
-            const extraInstruction = `The draft was generic. Rewrite strictly about ${identityCard.subcategory} using these specific competitor facts: ${facts.join("; ") || "the competitor data above"}.`;
-            const retried = hasOpenAIKey
-              ? await executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction)
-              : await executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction);
-            if (retried && typeof retried.positioning_recommendation === "string") {
-              result = retried;
+      await updateAnalysisPhase(analysisId, 4, "phase3_result", result, webSearchCount);
+      return { analysisId, phase: 4, status: "running", stepResult: null, totalSearches: webSearchCount };
+    }
+
+    if (record.phase === 4) {
+      if (!phase1Result || !phase2Result || !identityCard) {
+        throw new Error("Missing identity/phase 1/2 results — cannot finish phase 3");
+      }
+      const stage = record.phase3_result?.__phase3Stage;
+      let result: any = record.phase3_result;
+      delete result.__phase3Stage;
+
+      if (stage === "synthesized") {
+        // ----------------------------------------------------
+        // PHASE 3b: ANTI-BOILERPLATE CHECK (at most one more AI call)
+        // ----------------------------------------------------
+        // If this analysis's positioning text is near-identical to a recent
+        // DIFFERENT-category analysis, it's almost certainly generic
+        // could-apply-to-anything strategy text — one regeneration attempt
+        // with the real competitor facts, same retry-with-facts pattern
+        // already proven in lib/gtm-generate.ts.
+        try {
+          const positioningText = typeof result.positioning_recommendation === "string" ? result.positioning_recommendation : "";
+          if (positioningText && (hasOpenAIKey || hasGeminiKey)) {
+            const recent = await getRecentAnalysesForBoilerplateCheck(context.orgId, analysisId);
+            const boilerplateMatch = recent.find(r =>
+              r.category && r.category.toLowerCase() !== identityCard.category.toLowerCase() &&
+              r.positioningText && textSimilarity(positioningText, r.positioningText) > BOILERPLATE_SIMILARITY_THRESHOLD
+            );
+            if (boilerplateMatch) {
+              const facts = [...(phase1Result?.competitors || []), ...(phase2Result?.competitors || [])]
+                .slice(0, 3)
+                .map((c: any) => `${c.name} at ${c.price || "an unlisted price"}`);
+              const extraInstruction = `The draft was generic. Rewrite strictly about ${identityCard.subcategory} using these specific competitor facts: ${facts.join("; ") || "the competitor data above"}.`;
+              const retried = hasOpenAIKey
+                ? await executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction)
+                : await executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction);
+              if (retried && typeof retried.positioning_recommendation === "string") {
+                result = retried;
+              }
             }
           }
+        } catch (err) {
+          console.warn("Phase 3 anti-boilerplate check failed (non-fatal, keeping original result):", err);
         }
-      } catch (err) {
-        console.warn("Phase 3 anti-boilerplate check failed (non-fatal, keeping original result):", err);
+
+        result.__phase3Stage = "boilerplateChecked";
+        await updateAnalysisPhase(analysisId, 4, "phase3_result", result, webSearchCount);
+        return { analysisId, phase: 4, status: "running", stepResult: null, totalSearches: webSearchCount };
       }
 
+      // ----------------------------------------------------
+      // PHASE 3c: CITATIONS + MARKET-SIZE CHECK + finalize
+      // ----------------------------------------------------
       // Universal citation verification: independently fetch every URL the
       // model cited and downgrade any claim whose quote doesn't actually
       // appear on that page — never trust the model's own citation as-is.
@@ -1442,7 +1481,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
       result.analysis_label = `Analysis of ${identityCard.productName} (${identityCard.subcategory}) — competitors verified ${new Date().toISOString()}`;
 
-      await updateAnalysisPhase(analysisId, 4, "phase3_result", result, webSearchCount);
+      await updateAnalysisPhase(analysisId, 4, "phase3_result", result, 0);
 
       // Save CompetitorAnalyses to DB/Memory for link references
       await saveCompetitorAnalyses(analysisId, context.orgId, phase1Result, phase2Result, identityCard);
@@ -1473,10 +1512,11 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         console.error("Auto report saving failed:", saveErr);
       }
 
-      return { analysisId, phase: 5, status: "complete", stepResult: result, totalSearches: webSearchCount, reportId };
+      return { analysisId, phase: 5, status: "complete", stepResult: result, totalSearches: 0, reportId };
     }
 
-    // Already past phase 4 without being marked complete/failed — nothing left to run.
+    // Already past phase 4 (completeAnalysis sets phase 5) without being
+    // marked complete/failed — shouldn't normally happen, nothing left to run.
     return { analysisId, phase: record.phase, status: record.status, stepResult: null, totalSearches: 0 };
   } catch (error: any) {
     console.error(`Analysis step crashed at phase ${record.phase}:`, error);

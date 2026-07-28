@@ -232,7 +232,12 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
             continue;
           }
 
-          const runningIdx = analysis.phase; // 0, 1, 2, or 3 — the phase about to run
+          // 0, 1, 2, or 3 — the phase about to run. DB phase 4 is Phase 3's
+          // own internal checkpoint (see lib/analysisEngine.ts) — still
+          // conceptually "phase 3 running" from the UI's point of view, so a
+          // page reload mid-checkpoint still highlights the right row instead
+          // of highlighting nothing.
+          const runningIdx = analysis.phase === 4 ? 3 : analysis.phase;
           setPhases((prev) =>
             prev.map((p, i) => (i === runningIdx ? { ...p, status: "running", message: "Running…" } : p))
           );
@@ -284,10 +289,18 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
             results.reportId = step.reportId;
           }
 
-          const completedIdx = step.phase === 5 ? 3 : step.phase - 1;
-          setPhases((prev) =>
-            prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
-          );
+          // phase 4 is Phase 3's own internal checkpoint (lib/analysisEngine.ts
+          // splits the synthesis/anti-boilerplate-check/citation-verification
+          // work that used to be one request into up to three, to stay under
+          // Vercel's 60s cap) — status is still "running" at that point, so
+          // the Synthesizing row should keep spinning, not flip to Complete
+          // a beat early.
+          if (step.phase !== 4) {
+            const completedIdx = step.phase === 5 ? 3 : step.phase - 1;
+            setPhases((prev) =>
+              prev.map((p, i) => (i === completedIdx ? { ...p, status: "complete", message: "Complete" } : p))
+            );
+          }
 
           analysis = updated;
         }
