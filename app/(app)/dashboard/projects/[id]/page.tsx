@@ -59,6 +59,11 @@ export default function ProjectDetailPage() {
   const [pipelineState, setPipelineState] = useState<any>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Defaults true (matches lib/db/feature-flags.ts's own default-enabled
+  // behavior) so the TDS section doesn't flash in on the first render while
+  // the real flag value is still loading — a false default would incorrectly
+  // hide it for that first frame instead.
+  const [tdsEnabled, setTdsEnabled] = useState(true);
   const { open: openContactSupport } = useContactSupport();
 
   const fetchProjectDetails = async () => {
@@ -104,6 +109,13 @@ export default function ProjectDetailPage() {
       .then(data => setPipelineState(data.state ?? null))
       .catch(() => {});
   }, [id]);
+
+  useEffect(() => {
+    fetch("/api/features")
+      .then(r => r.json())
+      .then(data => { if (typeof data.tds_enabled === "boolean") setTdsEnabled(data.tds_enabled); })
+      .catch(() => {});
+  }, []);
 
   const handleDeleteProject = async () => {
     setDeleting(true);
@@ -248,7 +260,7 @@ export default function ProjectDetailPage() {
               of whether a report is linked; Sales Kit still needs one for
               its "Active Report" cross-references, but TDS/GTM download
               and Save-to-Drive buttons work off the project alone. */}
-          <ProjectOutputsBar project={project} report={selectedReport} />
+          <ProjectOutputsBar project={project} report={selectedReport} tdsEnabled={tdsEnabled} />
 
           {/* Report selector and download bar — only meaningful once a
               report is linked; the tab bar itself (below) is NOT gated on
@@ -370,9 +382,9 @@ export default function ProjectDetailPage() {
               Retry button) on every page load, not just live in the same
               session where it failed. */}
           {pipelineState && pipelineState.status !== "complete" && (
-            <ProjectGenerationProgress projectId={id} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
+            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
-          <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />
+          {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
           <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
         </div>
       </div>
@@ -1755,7 +1767,7 @@ function ContentFormTab({ data, editing, localData, setLocalData }: any) {
 // ────────────────────────────────────────────────────────────────────────────
 // PROJECT OUTPUTS BAR COMPONENT (Sales Kit, TDS, Drive)
 // ────────────────────────────────────────────────────────────────────────────
-function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
+function ProjectOutputsBar({ project, report, tdsEnabled }: { project: any; report: any; tdsEnabled: boolean }) {
   const [generating, setGenerating] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
@@ -1943,30 +1955,32 @@ function ProjectOutputsBar({ project, report }: { project: any; report: any }) {
         {/* Technical Data Sheet Card — a live snapshot, not a regeneratable
             document; the editable field grid lives in TdsKnowledgeSection
             below. No View/Regenerate here, same pattern as the GTM card. */}
-        <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
-          <div className="space-y-0.5">
-            <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
-              <span>📄 Technical Data Sheet (TDS)</span>
-            </h4>
-            <p className="text-[10px] text-text-muted">Live snapshot of real specs — capture it below, no AI regeneration</p>
+        {tdsEnabled && (
+          <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">
+            <div className="space-y-0.5">
+              <h4 className="font-bold text-text-primary text-xs flex items-center gap-1.5">
+                <span>📄 Technical Data Sheet (TDS)</span>
+              </h4>
+              <p className="text-[10px] text-text-muted">Live snapshot of real specs — capture it below, no AI regeneration</p>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => downloadPdf("tds", project.id)}
+                disabled={!hasTds || downloadingPdf === "tds"}
+                className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{downloadingPdf === "tds" ? "Rendering…" : "Download PDF"}</span>
+              </button>
+              {hasTds ? (
+                <SaveToDriveButton docType="tds" id={project.id} initialDriveUrl={driveUrls["tds"]} />
+              ) : (
+                <span className="text-[10px] text-text-muted italic">No snapshot captured yet</span>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <button
-              type="button"
-              onClick={() => downloadPdf("tds", project.id)}
-              disabled={!hasTds || downloadingPdf === "tds"}
-              className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>{downloadingPdf === "tds" ? "Rendering…" : "Download PDF"}</span>
-            </button>
-            {hasTds ? (
-              <SaveToDriveButton docType="tds" id={project.id} initialDriveUrl={driveUrls["tds"]} />
-            ) : (
-              <span className="text-[10px] text-text-muted italic">No snapshot captured yet</span>
-            )}
-          </div>
-        </div>
+        )}
 
         {/* Go-To-Market Card */}
         <div className="p-3 bg-surface-1 border border-border rounded-lg flex flex-col gap-2">

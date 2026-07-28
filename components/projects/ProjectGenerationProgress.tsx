@@ -13,9 +13,20 @@ import { CheckCircle, Loader2, AlertCircle } from "lucide-react";
 // because pipeline/continue always re-reads the current phase and only
 // ever advances it by one.
 
-const PHASE_LABELS = [
+const PHASE_LABELS_WITH_TDS = [
   "Capturing live product data",
   "Generating Technical Data Sheet",
+  "Generating Go-To-Market sheet",
+  "Generating Project Deck",
+];
+
+// TDS disabled (lib/feature-flags.ts) — the "tds" phase slot still exists
+// server-side (lib/project-generation-engine.ts skips its work but still
+// writes phase:"tds", see that file's own comment), so PHASE_INDEX below
+// still needs a "tds" entry — it's just collapsed out of what's SHOWN,
+// remapped onto the same 3 visible steps.
+const PHASE_LABELS_NO_TDS = [
+  "Capturing live product data",
   "Generating Go-To-Market sheet",
   "Generating Project Deck",
 ];
@@ -28,6 +39,7 @@ interface PhaseState {
 
 interface Props {
   projectId: string;
+  tdsEnabled: boolean;
   onDone: () => void;
 }
 
@@ -65,9 +77,12 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-const PHASE_INDEX: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3, deck: 4 };
+const PHASE_INDEX_WITH_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3, deck: 4 };
+const PHASE_INDEX_NO_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 1, gtm: 2, deck: 3 };
 
-export function ProjectGenerationProgress({ projectId, onDone }: Props) {
+export function ProjectGenerationProgress({ projectId, tdsEnabled, onDone }: Props) {
+  const PHASE_LABELS = tdsEnabled ? PHASE_LABELS_WITH_TDS : PHASE_LABELS_NO_TDS;
+  const PHASE_INDEX = tdsEnabled ? PHASE_INDEX_WITH_TDS : PHASE_INDEX_NO_TDS;
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" }))
   );

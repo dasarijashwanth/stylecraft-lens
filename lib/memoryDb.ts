@@ -283,7 +283,14 @@ export interface MockFaq {
   answer: string;
   sortOrder: number;
   enabled: boolean;
+  feature?: string | null;
   createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockFeatureFlag {
+  flagName: string;
+  enabled: boolean;
   updatedAt: Date;
 }
 
@@ -402,6 +409,9 @@ class MemoryDatabase {
   faqs: MockFaq[] = [];
   faqVotes: MockFaqVote[] = [];
   faqSearchMisses: MockFaqSearchMiss[] = [];
+  // Always-seeded (same precedent as motorFamilies/competitorMatchingConfig
+  // above) — real default flag state, not an empty admin table.
+  featureFlags: MockFeatureFlag[] = [{ flagName: "tds_enabled", enabled: true, updatedAt: new Date() }];
   // Real usage data (Contact Support submissions) — same non-seeded,
   // non-persisted-across-restart precedent as faqVotes/faqSearchMisses.
   supportMessages: MockSupportMessage[] = [];
@@ -665,6 +675,7 @@ class MemoryDatabase {
         answer: entry.answer,
         sortOrder,
         enabled: true,
+        feature: entry.feature ?? null,
         createdAt: now,
         updatedAt: now,
       });

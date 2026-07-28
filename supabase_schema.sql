@@ -809,3 +809,27 @@ ALTER TABLE auth_events ENABLE ROW LEVEL SECURITY;
 -- establish. NULL means "not yet selected" (analyses created against a
 -- project from before this column existed) — never a silent guess.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS tool_type VARCHAR(30);
+
+-- 20. FEATURE FLAGS — TDS disabled (config-driven, reversible)
+-- Keyed by flag_name (not a single fixed-id row like
+-- competitor_matching_config) since more flags may follow. Read/write via
+-- lib/db/feature-flags.ts; lib/feature-flags.ts's isTdsEnabled() falls back
+-- to the TDS_ENABLED env var when no row exists at all (a fresh DB that
+-- hasn't run this migration yet still behaves correctly).
+CREATE TABLE IF NOT EXISTS feature_flags (
+    flag_name VARCHAR(50) PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+INSERT INTO feature_flags (flag_name, enabled) VALUES ('tds_enabled', true) ON CONFLICT (flag_name) DO NOTHING;
+ALTER TABLE feature_flags ENABLE ROW LEVEL SECURITY;
+-- Deliberately NO policy (see Section 17 above) — only supabaseAdmin
+-- (service role) ever reads/writes this table.
+
+-- TDS is being disabled app-wide — the 2 TDS-category FAQ entries
+-- (lib/faq-seed-data.ts) auto-hide via this column rather than a one-time
+-- manual `enabled=false` toggle that would need to be remembered and
+-- reversed by hand when the flag is flipped back on. NULL means "not tied
+-- to any feature" (every other FAQ row).
+ALTER TABLE faqs ADD COLUMN IF NOT EXISTS feature VARCHAR(50);
+UPDATE faqs SET feature = 'tds' WHERE category = 'TDS' AND feature IS NULL;

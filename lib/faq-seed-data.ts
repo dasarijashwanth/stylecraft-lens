@@ -16,6 +16,10 @@ export interface FaqSeedEntry {
   category: string;
   question: string;
   answer: string; // light markdown: **bold**, `code`, "- " bullet lists
+  // Ties this entry to a feature flag (lib/feature-flags.ts) — hidden from
+  // /help (and never seeded as enabled) whenever that flag is off. Absent
+  // for every FAQ not tied to an optional feature.
+  feature?: string;
 }
 
 export const FAQ_CATEGORIES: string[] = [
@@ -218,12 +222,14 @@ export const FAQ_SEED_DATA: FaqSeedEntry[] = [
     question: "How is the TDS different from the GTM?",
     answer:
       "The TDS is a **snapshot document**: it's filled from the live product page/listing data captured at project creation, values copied exactly as published. That's why it shows \"Live snapshot captured {time} from {domain}\" and has **no regenerate button** — you can edit fields manually, and admins can \"Re-capture snapshot,\" which creates a new version rather than overwriting.",
+    feature: "tds",
   },
   {
     category: "TDS",
     question: "A TDS field says \"Not listed on product page.\" Why?",
     answer:
       "The captured page genuinely didn't state that value. Check the Details trail to confirm which sources were read; you can fill the field manually and it will flow into exports.",
+    feature: "tds",
   },
 
   // Category 8 — Content Form & Artwork Tabs

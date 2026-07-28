@@ -7,6 +7,7 @@ import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, getDocume
 import { TDS_FIELD_SCHEMA } from "@/lib/tds-field-schema";
 import { reconcileTdsFromGtm } from "@/lib/tds-gtm-reconcile";
 import { isRealAnswer } from "@/lib/field-answer-state";
+import { isTdsEnabled } from "@/lib/feature-flags";
 
 export const maxDuration = 60;
 
@@ -20,6 +21,9 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
+    if (!(await isTdsEnabled())) {
+      return NextResponse.json({ error: "TDS generation is currently disabled" }, { status: 409 });
+    }
     let body: any = {};
     try { body = await req.json(); } catch {}
 

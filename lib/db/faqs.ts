@@ -7,6 +7,7 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockFaq } from "@/lib/memoryDb";
 import { FAQ_CATEGORIES } from "@/lib/faq-seed-data";
+import { isTdsEnabled } from "@/lib/feature-flags";
 
 export interface FaqRow {
   id: string;
@@ -15,9 +16,19 @@ export interface FaqRow {
   answer: string;
   sort_order: number;
   enabled: boolean;
+  // Ties this row to a feature flag (lib/feature-flags.ts) — listFaqs()
+  // hides it whenever that flag is off. null for every FAQ not tied to an
+  // optional feature.
+  feature: string | null;
   created_at: string;
   updated_at: string;
 }
+
+// One entry per feature-gated FAQ category. Add the next one here the same
+// way lib/feature-flags.ts adds a new named flag function.
+const FEATURE_CHECKS: Record<string, () => Promise<boolean>> = {
+  tds: isTdsEnabled,
+};
 
 function categoryRank(category: string): number {
   const idx = FAQ_CATEGORIES.indexOf(category);
@@ -36,18 +47,34 @@ function mockToRow(f: MockFaq): FaqRow {
     answer: f.answer,
     sort_order: f.sortOrder,
     enabled: f.enabled,
+    feature: f.feature ?? null,
     created_at: f.createdAt.toISOString(),
     updated_at: f.updatedAt.toISOString(),
   };
 }
 
+// The public read (used by /help and the contextual "?" deep links) — also
+// filters out any row tied to a currently-disabled feature flag, so a
+// flag-off feature's FAQ content auto-hides instead of needing a one-time
+// manual `enabled=false` toggle that would need to be remembered and
+// reversed by hand later.
 export async function listFaqs(): Promise<FaqRow[]> {
+  let rows: FaqRow[];
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin.from("faqs").select("*").eq("enabled", true);
     if (error) throw error;
-    return sortByCategoryThenOrder(data || []);
+    rows = data || [];
+  } else {
+    rows = memoryDb.faqs.filter(f => f.enabled).map(mockToRow);
   }
-  return sortByCategoryThenOrder(memoryDb.faqs.filter(f => f.enabled).map(mockToRow));
+
+  const filtered: FaqRow[] = [];
+  for (const row of rows) {
+    const check = row.feature ? FEATURE_CHECKS[row.feature] : null;
+    if (check && !(await check())) continue;
+    filtered.push(row);
+  }
+  return sortByCategoryThenOrder(filtered);
 }
 
 export async function listAllFaqsForAdmin(): Promise<FaqRow[]> {

@@ -21,6 +21,7 @@ import { getProjectReports } from "./db/reports";
 import { getActiveDeckTemplate } from "./db/deck-templates";
 import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
+import { isTdsEnabled } from "./feature-flags";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
@@ -76,6 +77,18 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     }
 
     if (state.phase === "snapshot") {
+      // TDS generation disabled via feature flag (lib/feature-flags.ts) —
+      // the "tds" phase SLOT still exists (never removed from the enum:
+      // scripts/backfill-gtm.ts seeds phase:"tds" directly, and
+      // ProjectGenerationProgress.tsx's PHASE_INDEX keys off it), only its
+      // work is skipped — same idiom the "gtm" branch below already uses
+      // for a missing active deck template.
+      if (!(await isTdsEnabled())) {
+        logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "tds", outcome: "ok", errorMessage: "TDS disabled via feature flag", elapsedMs: Date.now() - stepStart });
+        await updateGenerationState(projectId, { phase: "tds", status: "running" });
+        return { state: { ...state, phase: "tds", status: "running" }, phaseCompleted: "tds" };
+      }
+
       // No snapshot (no anchor was given, or capture didn't find one) is no
       // longer a hard failure — generateTdsFields already accepts a null
       // raw_data and produces a document sourced only from the project
