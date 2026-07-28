@@ -27,7 +27,18 @@ const ENV_DEFAULTS: Record<string, string | undefined> = {
 export async function getFeatureFlag(flagName: string): Promise<boolean> {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin.from("feature_flags").select("*").eq("flag_name", flagName).maybeSingle();
-    if (error) throw error;
+    if (error) {
+      // 42P01 = "relation does not exist" — the user hasn't run Section 20
+      // of supabase_schema.sql yet. This must NEVER hard-fail the caller
+      // (confirmed live: before this fallback, it broke EVERY project's
+      // generation pipeline, not just TDS, since the "snapshot" phase
+      // checks isTdsEnabled() unconditionally) — fall back to the env var
+      // default exactly like the "no row" case below. Any OTHER error
+      // (permissions, connectivity) still throws — this only tolerates the
+      // specific "table doesn't exist yet" condition.
+      if (error.code === "42P01") return ENV_DEFAULTS[flagName] !== "false";
+      throw error;
+    }
     if (data) return data.enabled;
   } else {
     const row = memoryDb.featureFlags.find(f => f.flagName === flagName);
