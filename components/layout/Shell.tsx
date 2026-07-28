@@ -51,6 +51,19 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     }
   }, [loading, isSignedIn, user, router]);
 
+  // No error-monitoring service (Sentry etc.) is wired up yet — this is the
+  // cheap, always-available substitute so an unhandled rejection is at
+  // least visible in the browser console/any log-collection tooling
+  // instead of silently vanishing. Promote to a real reportError(err) call
+  // once a monitoring DSN exists.
+  useEffect(() => {
+    function onUnhandledRejection(event: PromiseRejectionEvent) {
+      console.error("[unhandled promise rejection]", event.reason);
+    }
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  }, []);
+
   // Fetch search index once when search opens
   useEffect(() => {
     if (searchOpen) {
