@@ -59,7 +59,7 @@ export interface MockAnalysis {
   orgId: string;
   userId: string;
   projectId: string | null;
-  status: "PENDING" | "RUNNING" | "COMPLETE" | "FAILED";
+  status: "PENDING" | "RUNNING" | "COMPLETE" | "FAILED" | "CANCELLED";
   phase: number;
   context?: any;
   phase0Result?: any;

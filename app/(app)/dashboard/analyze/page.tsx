@@ -537,6 +537,10 @@ export default function AnalyzePage() {
             toast.error(msg || "Analysis failed");
             setViewState("form");
           }}
+          onCancelled={() => {
+            toast("Analysis cancelled");
+            setViewState("form");
+          }}
         />
       )}
 

@@ -915,7 +915,7 @@ async function persistLegacyRegistryProvenance(competitors: any[], registry: Res
 export interface AnalysisStepResult {
   analysisId: string;
   phase: number;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "cancelled";
   stepResult: any;
   totalSearches: number;
   reportId?: string;
@@ -987,7 +987,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
     throw new Error("Analysis not found");
   }
 
-  if (record.status === "complete" || record.status === "failed") {
+  // "cancelled" (POST /api/analyses/:id/cancel) is a terminal state exactly
+  // like complete/failed — this guard is what stops a stray/in-flight
+  // /continue call (one already sent before the user clicked Cancel) from
+  // running a further phase after cancellation, since the client itself
+  // only stops ASKING for more, it can't reach into and kill work already
+  // in progress.
+  if (record.status === "complete" || record.status === "failed" || record.status === "cancelled") {
     return {
       analysisId,
       phase: record.phase,

@@ -282,6 +282,42 @@ export async function failAnalysis(analysisId: string, errorMessage: string) {
   }
 }
 
+// User-initiated stop (ProgressPanel's Cancel button) — a real terminal
+// status, not a failure, so it reads honestly if the analysis is ever
+// revisited. The Prisma AnalysisStatus enum (prisma/schema.prisma) has no
+// CANCELLED value and isn't part of this app's schema-migration convention
+// (Prisma is a local dev-bypass-only path, never the real production
+// store — see lib/auth.ts's own comments) — mapped to FAILED with a
+// distinguishing errorMessage there instead of a real migration.
+export async function cancelAnalysis(analysisId: string) {
+  const message = "Cancelled by user";
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin
+      .from("analyses")
+      .update({ status: "cancelled", error_message: message })
+      .eq("id", analysisId);
+
+    if (error) throw error;
+  } else {
+    try {
+      await prisma.analysis.update({
+        where: { id: analysisId },
+        data: {
+          status: "FAILED",
+          errorMessage: message,
+        }
+      });
+    } catch (e) {
+      console.warn("Prisma failed in cancelAnalysis. Falling back to memoryDb.");
+      const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+      if (mockAnalysis) {
+        mockAnalysis.status = "CANCELLED";
+        mockAnalysis.errorMessage = message;
+      }
+    }
+  }
+}
+
 export async function getAnalysis(analysisId: string) {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin

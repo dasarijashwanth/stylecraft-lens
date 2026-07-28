@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle, Loader2, AlertCircle, HelpCircle } from "lucide-react";
+import { CheckCircle, Loader2, AlertCircle, HelpCircle, XCircle } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 
 interface PhaseState {
@@ -66,6 +66,10 @@ interface Props {
   productName: string;
   onComplete: (results: any) => void;
   onError: (msg: string) => void;
+  // User clicked "Cancel" — distinct from onError so the parent can show a
+  // neutral "cancelled" message instead of a red error, then let them
+  // start a fresh analysis immediately.
+  onCancelled: () => void;
 }
 
 // A hard Vercel function kill (the route ran past its own maxDuration)
@@ -113,7 +117,7 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-export function ProgressPanel({ analysisId, productName, onComplete, onError }: Props) {
+export function ProgressPanel({ analysisId, productName, onComplete, onError, onCancelled }: Props) {
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({
       status: "waiting",
@@ -129,6 +133,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
   const [answerText, setAnswerText] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [failedMessage, setFailedMessage] = useState<string | null>(null);
+  const [canceling, setCanceling] = useState(false);
   const [runToken, setRunToken] = useState(0);
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
@@ -319,6 +324,26 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
     setRunToken((t) => t + 1);
   }
 
+  // Unmounting this component (the parent flips viewState away from
+  // "running" inside onCancelled) already stops the polling loop via the
+  // effect's own cleanup (`cancelled = true`) — no AbortController needed.
+  // resumeRef.current?.() unblocks a pending-question await first, so a
+  // cancel click during a pause-and-ask doesn't leave that promise dangling.
+  // The server-side cancel call is best-effort: even if it fails, the client
+  // stops immediately, and any stray in-flight /continue still gets caught by
+  // the "cancelled" terminal-status guard in lib/analysisEngine.ts.
+  async function handleCancel() {
+    if (canceling) return;
+    setCanceling(true);
+    resumeRef.current?.();
+    try {
+      await fetchJson(`/api/analyses/${analysisId}/cancel`, { method: "POST" });
+    } catch {
+      // Best-effort — see comment above.
+    }
+    onCancelled();
+  }
+
   async function submitAnswer() {
     if (!answerText.trim() || submittingAnswer) return;
     setSubmittingAnswer(true);
@@ -357,18 +382,31 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError }: 
           <span className="mx-1.5">·</span>
           <span className="elapsed">{formatTime(elapsedSeconds)}</span>
         </div>
-        {pendingQuestion ? (
-          <div className="status-running flex items-center gap-1.5 text-[11px] text-warning font-semibold">
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>Waiting for your input…</span>
-          </div>
-        ) : (
-          <div className="status-running flex items-center gap-1.5 text-[11px] text-accent font-semibold">
-            {isRunning && <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-accent" />}
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            <span>Analyzing…</span>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {pendingQuestion ? (
+            <div className="status-running flex items-center gap-1.5 text-[11px] text-warning font-semibold">
+              <HelpCircle className="w-3.5 h-3.5" />
+              <span>Waiting for your input…</span>
+            </div>
+          ) : (
+            <div className="status-running flex items-center gap-1.5 text-[11px] text-accent font-semibold">
+              {isRunning && <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-accent" />}
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Analyzing…</span>
+            </div>
+          )}
+          {!failedMessage && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={canceling}
+              className="flex items-center gap-1 px-2 py-1 border border-border hover:bg-danger-bg hover:border-danger/30 hover:text-danger text-text-muted text-[10px] font-semibold rounded-md transition-colors disabled:opacity-50"
+            >
+              <XCircle className="w-3 h-3" />
+              {canceling ? "Cancelling…" : "Cancel"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Overall progress bar — derived from completed phase count.
