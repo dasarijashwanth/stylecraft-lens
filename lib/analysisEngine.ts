@@ -12,7 +12,7 @@ import { getMarketData } from "./market-data";
 import { buildOverviewParagraph } from "./build-overview-paragraph";
 import { identifyProduct, needsUserInput, IdentityCard } from "./product-identification";
 import { getKnownBrandsHint } from "./known-brands-by-category";
-import { competitorMatchesCategory } from "./category-synonyms";
+import { assertToolType, buildToolTypePromptGuard } from "./tool-type-taxonomy";
 import type { ToolType } from "./tool-type-taxonomy";
 import { finalizeCitations } from "./citations";
 import { insertProvenance } from "./db/section-provenance";
@@ -72,17 +72,25 @@ export interface AnalysisContext {
   toolType?: ToolType;
 }
 
-// Keyed off the VERIFIED category/subcategory from Stage 1's Identity
-// Card only — NEVER off `context.industry`. This app's `industry` field
-// only ever has two values ("grooming-barbering"/"haircare-styling"),
-// both of which contain "grooming"/"styling", so keying this off industry
-// (as a previous version did) meant every analysis routed to the
-// clipper/dryer fallback branches below regardless of the actual product.
+// Keyed off the VERIFIED, STRICT identity.toolType (lib/tool-type-taxonomy.ts)
+// only — never off `context.industry` (this app's `industry` field only
+// ever has two values, both containing "grooming"/"styling", so keying
+// fallback data off it routed every analysis to the same branch regardless
+// of the actual product) and never off the free-text category/subcategory
+// strings either (the previous version's single combined "clipper" OR
+// "trimmer" OR "barber" OR "grooming" branch always returned the SAME
+// 100%-clipper-named static pool for a trimmer analysis — the single most
+// direct, deterministic leak point found when a real trimmer analysis was
+// reported showing clipper competitors/specs; this branch is now split per
+// tool type, each with its own correctly-typed data, and callers below
+// additionally run every fallback candidate through assertToolType before
+// splicing it in — see applyPriceBandGate's top-up loop).
 function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "legacy" | "emerging") {
-  const text = `${identity.category || ""} ${identity.subcategory || ""}`.toLowerCase();
+  const toolType = identity.toolType;
 
-  // If Hair styling / Dryers / Flat irons
-  if (text.includes("dryer") || text.includes("blow") || text.includes("styler") || text.includes("iron") || text.includes("straighten") || text.includes("haircare")) {
+  // Dryer / styling family — unchanged from before, just now gated on the
+  // strict toolType instead of a free-text substring check.
+  if (toolType === "dryer" || toolType === "flat_iron" || toolType === "curling_iron" || toolType === "hot_brush" || toolType === "other_styling") {
     return defaultTier === "legacy"
       ? [
           {
@@ -230,13 +238,11 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
         ];
   }
 
-  // Hair clippers and trimmers ONLY — "razor"/"shaver" deliberately excluded:
-  // this app has no dedicated shaver mock dataset, and the data below is
-  // 100% clipper-specific. Bundling shaver in here (as a previous version
-  // did) meant an electric-shaver analysis with no live AI available got
-  // confidently-wrong clipper brand names instead of falling through to
-  // the honest generic-placeholder branch below.
-  if (text.includes("clipper") || text.includes("trimmer") || text.includes("barber") || text.includes("grooming")) {
+  // Clippers ONLY — trimmers get their own branch below with genuinely
+  // trimmer-specific products, never these. Shavers get no dedicated
+  // dataset (this app has none) and fall through to the honest empty
+  // return at the bottom rather than borrowing clipper data.
+  if (toolType === "clipper") {
     return defaultTier === "legacy"
       ? [
           {
@@ -398,6 +404,159 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
         ];
   }
 
+  // Trimmers ONLY — genuinely trimmer-specific products (T-blade detailers/
+  // outliners, not clippers). This is the branch that was previously
+  // missing entirely — a trimmer analysis fell into the clipper branch
+  // above, which is exactly the contamination this file's toolType
+  // gating exists to stop.
+  if (toolType === "trimmer") {
+    return defaultTier === "legacy"
+      ? [
+          {
+            name: "Wahl Professional 5-Star Cordless Detailer",
+            brand: "Wahl",
+            asin: "B00A6HB1M4",
+            price: "$99.99",
+            rating: "4.6",
+            reviewCount: "18,210",
+            sales: "2,000+ bought in past month",
+            bsr: "#1,840 in Beauty & Personal Care",
+            initials: "WA",
+            top_positive_review_themes: ["Ultra-close zero-gap T-blade", "Great for clean edges/lineups", "Long-lasting charge"],
+            top_negative_review_themes: ["Blade needs frequent oiling", "Plastic housing feels light", "Short guard set included"],
+            confirmed_technical_specs: { motor_type: "Rotary Motor", rpm: "8,200 RPM", run_time: "90 min", charging_time: "150 min", blade_material: "Fine Zero-Gap T-Blade Steel", body_material: "Heavy-duty Plastic" }
+          },
+          {
+            name: "Andis GTX-EXO Cordless Trimmer",
+            brand: "Andis",
+            asin: "B07QK6Q4YV",
+            price: "$139.99",
+            rating: "4.7",
+            reviewCount: "9,340",
+            sales: "1,000+ bought in past month",
+            bsr: "#2,910 in Beauty & Personal Care",
+            initials: "AN",
+            top_positive_review_themes: ["Very high RPM for fast lining", "Precise deep-tooth T-blade", "Comfortable slim grip"],
+            top_negative_review_themes: ["Runs warm on long sessions", "Premium price tier", "Charging stand sold separately"],
+            confirmed_technical_specs: { motor_type: "Magnetic Motor", rpm: "10,000 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "Deep-Tooth Carbon Steel T-Blade", body_material: "Textured Grip Composite" }
+          },
+          {
+            name: "BaBylissPRO SnapFX Trimmer",
+            brand: "BaBylissPRO",
+            asin: "B01N7Z6H0F",
+            price: "$149.99",
+            rating: "4.6",
+            reviewCount: "6,120",
+            sales: "800+ bought in past month",
+            bsr: "#3,420 in Beauty & Personal Care",
+            initials: "BB",
+            top_positive_review_themes: ["Snap-in/out replaceable blade", "All-metal durable housing", "Sharp fine-tooth cutting"],
+            top_negative_review_themes: ["Heavier than plastic competitors", "Metal body gets cold", "Loud high-pitch motor whine"],
+            confirmed_technical_specs: { motor_type: "Ferrari Designed Brushless", rpm: "7,800 RPM", run_time: "90 min", charging_time: "150 min", blade_material: "Deep Tooth DLC T-Blade", body_material: "All-Metal" }
+          },
+          {
+            name: "Gamma+ Absolute Zero Cordless Trimmer",
+            brand: "Gamma+",
+            asin: "B08G4KXH1T",
+            price: "$119.95",
+            rating: "4.5",
+            reviewCount: "2,410",
+            sales: "500+ bought in past month",
+            bsr: "#9,120 in Beauty & Personal Care",
+            initials: "GA",
+            top_positive_review_themes: ["Zero-gap blade out of the box", "Strong torque for a trimmer", "Sleek modern design"],
+            top_negative_review_themes: ["Battery indicator inaccurate", "Blade guard clips loosely", "Limited color options"],
+            confirmed_technical_specs: { motor_type: "Magnetic Motor", rpm: "9,000 RPM", run_time: "100 min", charging_time: "120 min", blade_material: "Zero-Gap DLC T-Blade", body_material: "Polycarbonate" }
+          },
+          {
+            name: "StyleCraft Shorty Pro Li Trimmer",
+            brand: "StyleCraft",
+            asin: "B08XJQ4W3K",
+            price: "$99.95",
+            rating: "4.6",
+            reviewCount: "1,240",
+            sales: "400+ bought in past month",
+            bsr: "#6,210 in Beauty & Personal Care",
+            initials: "SC",
+            top_positive_review_themes: ["Compact lightweight body", "Quiet brushless operation", "Custom body skin choices"],
+            top_negative_review_themes: ["Small guard comb sizes", "Charging cradle takes desk space", "Limited torque on thick hair"],
+            confirmed_technical_specs: { motor_type: "Digital Brushless", rpm: "7,200 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "DLC Diamond Carbon T-Blade", body_material: "Metal Front Panel" }
+          }
+        ]
+      : [
+          {
+            name: "SUPRENT Fangs Professional Trimmer",
+            brand: "SUPRENT",
+            asin: "B0CPQ2X8YN",
+            price: "$49.99",
+            rating: "4.3",
+            reviewCount: "980",
+            sales: "500+ bought in past month",
+            bsr: "#28,410 in Beauty & Personal Care",
+            initials: "SU",
+            top_positive_review_themes: ["Very affordable entry trimmer", "Decent lineup precision", "Compact for travel"],
+            top_negative_review_themes: ["Battery drains fast", "Cheap plastic guards", "Blade dulls quickly"],
+            confirmed_technical_specs: { motor_type: "Rotary Motor", rpm: "7,000 RPM", run_time: "90 min", charging_time: "120 min", blade_material: "Titanium Coated Steel T-Blade", body_material: "Composite Plastic" }
+          },
+          {
+            name: "Supreme Trimmer Dark Wolf Detailer",
+            brand: "Supreme Trimmer",
+            asin: "B0D24Q9XPL",
+            price: "$69.95",
+            rating: "4.3",
+            reviewCount: "410",
+            sales: "200+ bought in past month",
+            bsr: "#44,210 in Beauty & Personal Care",
+            initials: "ST",
+            top_positive_review_themes: ["Good value for the RPM", "Sharp out-of-box blade", "Nice aesthetic finish"],
+            top_negative_review_themes: ["Blade gets warm on long use", "Light body feels less durable", "Weak battery indicator"],
+            confirmed_technical_specs: { motor_type: "Magnetic Motor", rpm: "8,000 RPM", run_time: "100 min", charging_time: "90 min", blade_material: "DLC T-Blade", body_material: "ABS Plastic" }
+          },
+          {
+            name: "Caliber .223 Trimmer",
+            brand: "Caliber",
+            asin: "B0BLDH3Y2M",
+            price: "$89.00",
+            rating: "4.4",
+            reviewCount: "310",
+            sales: "150+ bought in past month",
+            bsr: "#38,910 in Beauty & Personal Care",
+            initials: "CA",
+            top_positive_review_themes: ["Crisp magnetic-motor lining", "Very clean edge work", "Premium weight balance"],
+            top_negative_review_themes: ["Loud magnetic click on start", "Runs warm", "Flimsy blade guard"],
+            confirmed_technical_specs: { motor_type: "Magnetic Motor", rpm: "8,500 RPM", run_time: "110 min", charging_time: "100 min", blade_material: "Japanese Steel T-Blade", body_material: "Polycarbonate" }
+          },
+          {
+            name: "Limural Professional Detail Trimmer",
+            brand: "Limural",
+            asin: "B08V5S3K4G",
+            price: "$29.99",
+            rating: "4.3",
+            reviewCount: "4,120",
+            sales: "1,000+ bought in past month",
+            bsr: "#1,910 in Beauty & Personal Care",
+            initials: "LI",
+            top_positive_review_themes: ["Amazing value kit price", "Fine for light home use", "Long charge runtime"],
+            top_negative_review_themes: ["Low torque on thick hair", "Blade pulls at fast speed", "Basic plastic housing"],
+            confirmed_technical_specs: { motor_type: "Standard Rotary", rpm: "6,500 RPM", run_time: "180 min", charging_time: "150 min", blade_material: "Stainless Steel T-Blade", body_material: "Stainless Steel" }
+          },
+          {
+            name: "Kemei Professional Detail Trimmer",
+            brand: "Kemei",
+            asin: "B07X5B3Z3G",
+            price: "$24.99",
+            rating: "4.2",
+            reviewCount: "3,210",
+            sales: "800+ bought in past month",
+            bsr: "#2,410 in Beauty & Personal Care",
+            initials: "KM",
+            top_positive_review_themes: ["Cheap backup option", "Familiar ergonomic look", "Decent battery indicator"],
+            top_negative_review_themes: ["Weak plastic housing parts", "Blade dulls fast", "No official replacement blades"],
+            confirmed_technical_specs: { motor_type: "Rotary Motor", rpm: "5,500 RPM", run_time: "100 min", charging_time: "150 min", blade_material: "Carbon Steel T-Blade", body_material: "Plastic Chrome Plate" }
+          }
+        ];
+  }
+
   // No dedicated curated mock data for this category. This used to
   // fabricate entirely fake companies here ("Apex Global", "Vanguard
   // Corp", etc. — the exact fake-brand names reported as a bug) with
@@ -444,7 +603,15 @@ export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaul
   for (const rawIncoming of incomingList) {
     if (cleaned.length >= POOL_CAP) break;
     if (!rawIncoming || !rawIncoming.name) continue;
-    if (!competitorMatchesCategory(`${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`, identity.category, identity.subcategory)) continue;
+    const candidateText = `${rawIncoming.name || ""} ${rawIncoming.top_feature_summary || ""}`;
+    // No identity.toolType (legacy analysis pre-dating this field) —
+    // nothing strict to validate against, don't block. Otherwise this is
+    // THE gate that stops a clipper from ever surviving into a trimmer
+    // analysis (or vice versa), even if the AI itself proposed one.
+    if (identity.toolType && !assertToolType(candidateText, identity.toolType).ok) {
+      console.warn(`[tool-type] rejected candidate "${rawIncoming.name}" — mismatched tool type for ${identity.toolType}`);
+      continue;
+    }
     if (isNamedAfterOwnProduct(rawIncoming.name || "")) continue;
 
     let asin = rawIncoming.asin || "";
@@ -578,6 +745,16 @@ export function applyPriceBandGate(
       if (usedNames.has((fb.name || "").toLowerCase())) continue;
       const fbPrice = parsePriceToNumber(fb.price);
       if (fbPrice == null || !isWithinBand(fbPrice, widestBand)) continue;
+      // Defense-in-depth: getCategoryFallbackCompetitors is already keyed
+      // strictly on identity.toolType (its own header comment), so this
+      // should never actually fire — but this loop is the exact spot the
+      // original clipper-into-trimmer contamination bug was found (it
+      // checked only price-band membership, never category), so it gets
+      // its own explicit re-check rather than trusting the pool blindly.
+      if (identity.toolType && !assertToolType(fb.name || "", identity.toolType).ok) {
+        console.warn(`[tool-type] rejected fallback candidate "${fb.name}" — mismatched tool type for ${identity.toolType}`);
+        continue;
+      }
 
       usedNames.add((fb.name || "").toLowerCase());
       const outOfBand = !isWithinBand(fbPrice, primaryBand);
@@ -731,6 +908,16 @@ export function selectByCompositeScore(
       if (usedNames.has((fb.name || "").toLowerCase())) continue;
       const fbPrice = parsePriceToNumber(fb.price);
       if (fbPrice == null || !isWithinBand(fbPrice, widestBand)) continue;
+      // Defense-in-depth: getCategoryFallbackCompetitors is already keyed
+      // strictly on identity.toolType (its own header comment), so this
+      // should never actually fire — but this loop is the exact spot the
+      // original clipper-into-trimmer contamination bug was found (it
+      // checked only price-band membership, never category), so it gets
+      // its own explicit re-check rather than trusting the pool blindly.
+      if (identity.toolType && !assertToolType(fb.name || "", identity.toolType).ok) {
+        console.warn(`[tool-type] rejected fallback candidate "${fb.name}" — mismatched tool type for ${identity.toolType}`);
+        continue;
+      }
 
       usedNames.add((fb.name || "").toLowerCase());
       const outOfBand = !isWithinBand(fbPrice, primaryBand);
@@ -795,7 +982,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 // their price/rating/ASIN explicitly cleared (never left showing a stale
 // or fabricated value as if it were current) and point at a live Amazon
 // search instead of a fabricated /dp/{asin} link.
-async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[]> {
+async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolType?: ToolType | null): Promise<any[]> {
   if (!hasRainforestKey) return competitors;
 
   return mapWithConcurrency(competitors, 3, async (c) => {
@@ -808,10 +995,33 @@ async function enrichCompetitorsWithRainforest(competitors: any[]): Promise<any[
 
       let product = await getAmazonProduct(c.asin);
 
+      // A syntactically-valid, real ASIN can still be the WRONG product —
+      // the direct lookup has no cross-check against what the AI actually
+      // claimed this competitor was, so a stale/hallucinated/sibling-SKU
+      // ASIN would otherwise silently overwrite price/rating/specs/images
+      // with a different tool type's real data while the displayed name
+      // stayed unchanged (an invisible mismatch). Discard it exactly like
+      // a failed lookup rather than trusting a wrong-type product.
+      if (product && requiredToolType && !assertToolType(product.title, requiredToolType).ok) {
+        console.warn(`[tool-type] discarded direct-ASIN Rainforest match for "${c.name}" — "${product.title}" doesn't match required type ${requiredToolType}`);
+        product = null;
+      }
+
       if (!product) {
         const match = await resolveAsinBySearch(c.name, c.brand);
         if (match) {
-          product = await getAmazonProduct(match.asin);
+          const candidateProduct = await getAmazonProduct(match.asin);
+          // Same tool-type cross-check on the fallback title-search match
+          // — its own acceptance threshold (brand-substring + >=0.6 title
+          // token-overlap similarity) comfortably passes a sibling product
+          // whose title differs only in the type word (e.g. "clipper" vs
+          // "trimmer"), so tool-type agreement is required IN ADDITION to
+          // that similarity score, not instead of it.
+          if (candidateProduct && requiredToolType && !assertToolType(candidateProduct.title, requiredToolType).ok) {
+            console.warn(`[tool-type] discarded fallback title-search match for "${c.name}" — "${candidateProduct.title}" doesn't match required type ${requiredToolType}`);
+          } else {
+            product = candidateProduct;
+          }
         }
       }
 
@@ -1215,7 +1425,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
           let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard);
           if (hasRainforestKey) {
-            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors);
+            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, identityCard.toolType);
           }
 
           // Never duplicate a brand slot already filled by the curated pass.
@@ -1257,7 +1467,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
         result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
         if (hasRainforestKey) {
-          result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+          result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
         }
         result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx);
         result.matching_weights = scoringCtx.weights;
@@ -1359,7 +1569,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         result.competitors = result.competitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
       }
       if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors);
+        result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
       }
 
       // Build each surviving candidate's brand's own price lineup (Part 4) —
@@ -2012,7 +2222,10 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
       if (seenAsins.has(r.asin)) continue;
       const titleLower = r.title.toLowerCase();
       if (Array.from(seenTitleFragments).some(f => f && titleLower.includes(f))) continue;
-      if (!competitorMatchesCategory(r.title, identity.category, identity.subcategory)) continue;
+      if (identity.toolType && !assertToolType(r.title, identity.toolType).ok) {
+        console.warn(`[tool-type] rejected live-search result "${r.title}" — mismatched tool type for ${identity.toolType}`);
+        continue;
+      }
 
       seenAsins.add(r.asin);
       seenTitleFragments.add(titleLower.slice(0, 24));
@@ -2168,6 +2381,7 @@ function generateMockPhase3(context: AnalysisContext, identity: IdentityCard, ph
     targetMarket: context.targetMarket,
     category: identity.category,
     subcategory: identity.subcategory,
+    toolType: identity.toolType,
     marketData: mData,
     competitors: allCompetitors,
   });

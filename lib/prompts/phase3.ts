@@ -39,6 +39,7 @@ export async function buildPhase3Prompt(
     targetMarket: ctx.targetMarket,
     category: identity.category,
     subcategory: identity.subcategory,
+    toolType: identity.toolType,
     marketData,
     competitors: allCompetitors,
   });

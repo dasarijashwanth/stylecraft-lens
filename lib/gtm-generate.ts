@@ -264,7 +264,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // quality guard runs, so a web-sourced answer still gets checked for
   // depth/genericness like any other written-field answer. Internal fields
   // are excluded from the eligible schema, same reasoning as the AI call.
-  await applyWebSearchFallback(grounded, aiEligibleSchema, productName, pipelineStart, PIPELINE_TIME_BUDGET_MS);
+  await applyWebSearchFallback(grounded, aiEligibleSchema, productName, pipelineStart, PIPELINE_TIME_BUDGET_MS, sources.project?.toolType as any);
 
   // Tier 6 (computed derivation, e.g. good_better_best/hair_type) runs
   // strictly after the web-search tier — these are pure/free to compute
@@ -327,7 +327,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // field kind — a single regenerated "grounded" field deserves the same
   // second-chance tiers the full 77-field sweep already gives it above.
   const guarded = { [fieldId]: grounded };
-  await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS);
+  await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, sources.project?.toolType as any);
   applyTier6Inference(guarded, [schemaField], {
     pricingAnalysis: sources.activeReport?.pricing_analysis || null,
     hairTypeSourceText: buildHairTypeSourceText(sources),

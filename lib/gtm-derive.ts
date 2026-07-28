@@ -32,6 +32,7 @@ export interface ProjectRecord {
   productName: string;
   description?: string | null;
   category?: string | null;
+  toolType?: string | null;
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;

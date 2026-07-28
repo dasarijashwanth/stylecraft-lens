@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
         productName: project.productName,
         description: project.description,
         category: project.category,
+        toolType: (project as any).toolType,
         motorTech: project.motorTech,
         keyDiff: project.keyDiff,
         pricePoint: project.pricePoint,

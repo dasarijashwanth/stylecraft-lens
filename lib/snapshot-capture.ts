@@ -6,6 +6,7 @@
 import { getAmazonProduct } from "./rainforest";
 import { scrapeProductPage } from "./scrape";
 import { insertSnapshot, SnapshotRow } from "./db/snapshots";
+import { assertToolType, ToolType } from "./tool-type-taxonomy";
 
 export interface SnapshotProjection {
   title?: string;
@@ -35,6 +36,14 @@ export async function captureProductSnapshot(input: {
   projectId: string;
   productUrl?: string | null;
   asin?: string | null;
+  // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — the most
+  // direct way TDS's own motor_type/blade_name/etc. fields could become
+  // wrong-tool-type is a wrong ASIN/URL captured at this exact step, with
+  // no prior verification that the captured product matches the project's
+  // declared type. Optional/best-effort: absent for a project created
+  // before this field existed, in which case nothing is checked (never a
+  // guess at what "should" have been required).
+  requiredToolType?: ToolType | null;
 }): Promise<CaptureResult> {
   const resolvedAsin = input.asin?.trim().toUpperCase() || extractAsinFromUrl(input.productUrl);
   const isAmazonUrl = !!input.productUrl && /amazon\./i.test(input.productUrl);
@@ -46,11 +55,6 @@ export async function captureProductSnapshot(input: {
     input.productUrl && !isAmazonUrl ? scrapeProductPage(input.productUrl) : Promise.resolve(null),
   ]);
 
-  const rawData = {
-    amazon: amazonProduct,
-    site: scraped,
-  };
-
   const projection: SnapshotProjection = {
     title: scraped?.title || amazonProduct?.title,
     // Amazon-sourced fallback lets a pure-ASIN project (no separate site
@@ -60,6 +64,30 @@ export async function captureProductSnapshot(input: {
     price: scraped?.price || amazonProduct?.price,
     image: scraped?.image || amazonProduct?.image || undefined,
     description: scraped?.description || amazonProduct?.description || undefined,
+  };
+
+  // Never silently trusted — a wrong ASIN/URL (typo, hallucinated
+  // suggestion, wrong sibling SKU) would otherwise become this project's
+  // "verified" spec floor with no visibility into the mismatch. The
+  // captured product/page isn't discarded (still the best data available,
+  // and might just be an unrecognized-vocabulary title), only flagged for
+  // a visible warning downstream.
+  let toolTypeMismatch = false;
+  let toolTypeMismatchReason: string | null = null;
+  if (input.requiredToolType && (projection.title || projection.description)) {
+    const check = assertToolType(`${projection.title || ""} ${projection.description || ""}`, input.requiredToolType);
+    if (!check.ok) {
+      toolTypeMismatch = true;
+      toolTypeMismatchReason = `Captured product "${projection.title}" doesn't match this project's declared tool type (${input.requiredToolType}) — reason: ${check.reason}`;
+      console.warn(`[tool-type] ${toolTypeMismatchReason}`);
+    }
+  }
+
+  const rawData = {
+    amazon: amazonProduct,
+    site: scraped,
+    toolTypeMismatch,
+    toolTypeMismatchReason,
   };
 
   const snapshot = await insertSnapshot({

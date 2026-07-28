@@ -58,7 +58,7 @@ function searchResultPayload(items: { asin: string; title: string; price: number
 }
 
 const TARGET_PRICE = 259.95;
-const IDENTITY = { category: "Clippers", subcategory: "Professional Trimmer" };
+const IDENTITY = { category: "Clippers", subcategory: "Professional Trimmer", toolType: "trimmer" as const };
 const CATEGORY_SLUG = "legacy_professional_clippers" as const;
 
 let scenario: "widen" | "time_budget" = "widen";
@@ -142,7 +142,7 @@ async function main() {
 
   console.log("\n[3] applyPriceBandGate — allowStaticFallbackTopup:false never injects the unrelated static dataset");
   const identityForGate: any = {
-    productName: "Test Dryer", brand: null, category: "Hair Dryers", subcategory: "Blow Dryer",
+    productName: "Test Dryer", brand: null, category: "Hair Dryers", subcategory: "Blow Dryer", toolType: "dryer",
     whatItIs: "dryer", keyAttributes: [], targetUser: "pro", priceObserved: null, confidence: "high", evidence: [], identityStatus: "verified",
   };
   // Zero real candidates — a category where getCategoryFallbackCompetitors

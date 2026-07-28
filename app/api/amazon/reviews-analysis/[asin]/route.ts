@@ -5,6 +5,24 @@ import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
+import { getAnalysis } from "@/lib/db/analyses";
+import type { ToolType } from "@/lib/tool-type-taxonomy";
+
+// Best-effort — analysisId is already threaded into this route for
+// provenance; reused here to look up the analysis's strict tool type
+// (lib/tool-type-taxonomy.ts) with zero new client-side plumbing, so a
+// trimmer analysis's Tier C web-review search can reject an article
+// that's actually about the brand's clipper. Returns null (never blocks)
+// if analysisId is absent or the analysis has no resolved toolType yet.
+async function resolveAnalysisToolType(analysisId: string | null): Promise<ToolType | null> {
+  if (!analysisId) return null;
+  try {
+    const analysis = await getAnalysis(analysisId);
+    return (analysis?.phase0_result?.toolType as ToolType) || null;
+  } catch {
+    return null;
+  }
+}
 
 // 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
 // the multi-tier resolver (Amazon -> expert reviews -> forums) sometimes
@@ -81,7 +99,8 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     }
 
     const product = isRealAsin ? await getAmazonProduct(rawAsin) : null;
-    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product", new Date(), product);
+    const requiredToolType = await resolveAnalysisToolType(analysisId);
+    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product", new Date(), product, requiredToolType);
 
     // Don't cache an "AI unavailable" or "sources unavailable" result for
     // 24h — both are transient (AI provider outage / Rainforest auth-credit

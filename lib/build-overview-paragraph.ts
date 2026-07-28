@@ -1,6 +1,7 @@
 // lib/build-overview-paragraph.ts
 
 import { MarketData } from "./market-data";
+import { ToolType } from "./tool-type-taxonomy";
 
 export interface CompetitorSummary {
   name: string;
@@ -16,6 +17,11 @@ export interface ParagraphInput {
   targetMarket: string;
   category: string;
   subcategory: string;
+  // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — gates
+  // getMotorSentence below so a trimmer never gets a sentence whose real,
+  // cited claim is specifically about clippers (or vice versa). Optional
+  // only for backward compatibility with analyses that predate this field.
+  toolType?: ToolType | null;
   // null when no curated or web-verified market data exists for this
   // category — see lib/market-data.ts's getMarketData for why this must
   // never be silently filled with a fabricated number.
@@ -24,32 +30,46 @@ export interface ParagraphInput {
 }
 
 // ── Motor-specific sentences (written by us, not the AI model) ───────────────
+// `{{tool}}`/`{{tools}}` are the ONLY tool-type-specific nouns in these
+// citations — substituted per-type below so a real, cited claim that's
+// specifically about clippers (e.g. a "top three professional clippers"
+// ranking) is never asserted, word-for-word, about a trimmer instead.
 const MOTOR_SENTENCES: Record<string, string> = {
-  "eon": "EON Digital Brushless motors represent StyleCraft's flagship proprietary technology — Modern Barber Supply (2026) ranks StyleCraft among the top three professional clippers for 2026 alongside JRL Onyx, with brushless motors praised for running cooler and delivering consistent power over extended shifts.",
+  "eon": "EON Digital Brushless motors represent StyleCraft's flagship proprietary technology — Modern Barber Supply (2026) ranks StyleCraft among the top three professional {{tools}} for 2026 alongside JRL Onyx, with brushless motors praised for running cooler and delivering consistent power over extended shifts.",
   "brushless": "Brushless motors are the 2026 professional standard — Modern Barber Supply describes them as tools that 'run cooler, last longer, and deliver consistent power,' commanding a 30–50% price premium over brushed rotary alternatives in the professional tier.",
   "vector": "Vector motors — including the IN2 and similar adaptive-torque designs — deliver 11,000+ RPM with automatic resistance sensing; Barber & Co (2026) notes vector motors 'offer higher torque and cutting speed than standard rotary,' and top influencers like 360 Jeezy have endorsed this motor class as essential for high-volume barbers.",
   "rotary": "Rotary motors are the proven workhorse of professional barbering — used by Andis (7,200 SPM eMERGE, launched Feb 2024) and Wahl's V9000/V5000 series — though Modern Barber Supply (2026) positions them as 'proven reliability' against the newer brushless and vector entrants now dominating top-tier recommendations.",
   "magnetic": "Magnetic/pivot motors offer budget-friendly entry into the professional space but carry a performance caveat: Modern Barber Supply (2026) notes they are 'less powerful on thick hair' compared to brushless or rotary alternatives, making them best suited for lighter volume or consumer use.",
   "c4rbn": "The Super C4RBN motor is a high-performance carbon-composite design engineered for professional duty cycles, positioned in StyleCraft's mid-premium Rebel lineup between the entry ACE and flagship Saber/Instinct tiers.",
-  "rechargeable": "Rechargeable consumer motors power the growing home-grooming segment — Accio/Amazon Trends (2025) reports a 20% rise in 'Professional Cordless Hair Clippers & Trimmer Sets' search volume from January to July 2025, with home use accounting for 72.9% of cordless clipper purchases, though professional barbers (65% of whom prioritize motor power, per Professional Barbers Association) distinguish this tier from commercial-grade tools.",
+  "rechargeable": "Rechargeable consumer motors power the growing home-grooming segment — Accio/Amazon Trends (2025) reports a 20% rise in 'Professional Cordless Hair Clippers & Trimmer Sets' search volume from January to July 2025, with home use accounting for 72.9% of cordless {{tool}} purchases, though professional barbers (65% of whom prioritize motor power, per Professional Barbers Association) distinguish this tier from commercial-grade tools.",
   "linear": "Linear motors — used by Panasonic's ER-GP80 at 10,000 CPM — maintain constant speed regardless of battery level or hair thickness, a key differentiator in the premium hair styling tools segment where Grand View Research (2024) reports cordless models held 65.4% revenue share.",
+};
+
+const TOOL_NOUN: Record<string, { tool: string; tools: string }> = {
+  clipper: { tool: "clipper", tools: "clippers" },
+  trimmer: { tool: "trimmer", tools: "trimmers" },
 };
 
 // The keyed sentences above are real, cited clipper/trimmer/barbering
 // research — only relevant (and only accurate) when the identified
-// product actually IS in that category family. Without this gate, a hair
-// dryer that happens to use a "brushless" motor (e.g. Dyson's Supersonic)
-// would get a sentence claiming it ranks "among the top three
-// professional clippers" — wrong category, wrong citation. Anything
-// outside the clipper/trimmer/barbering family gets a generic,
-// category-referencing sentence instead of a hardcoded clipper-market
-// default.
-function getMotorSentence(motorTech: string, category: string, subcategory: string): string {
-  const isClipperFamily = /clipper|trimmer|barber/i.test(`${category} ${subcategory}`);
-  if (isClipperFamily) {
+// product's strict toolType is actually clipper or trimmer. Without this
+// gate, a hair dryer that happens to use a "brushless" motor (e.g. Dyson's
+// Supersonic) would get a sentence claiming it ranks "among the top three
+// professional clippers" — wrong category, wrong citation. Within the
+// clipper/trimmer family, the {{tool}}/{{tools}} placeholders are
+// substituted for the ACTUAL toolType — a trimmer never gets a citation
+// that literally names it a clipper (the exact contamination this file's
+// gate exists to close), even though the underlying motor-tech research is
+// shared/relevant to both tools. Anything outside clipper/trimmer gets a
+// generic, category-referencing sentence instead of a hardcoded default.
+function getMotorSentence(motorTech: string, toolType: ToolType | null | undefined, category: string, subcategory: string): string {
+  if (toolType === "clipper" || toolType === "trimmer") {
     const lower = (motorTech ?? "").toLowerCase();
+    const noun = TOOL_NOUN[toolType];
     for (const [key, sentence] of Object.entries(MOTOR_SENTENCES)) {
-      if (key !== "default" && lower.includes(key)) return sentence;
+      if (key !== "default" && lower.includes(key)) {
+        return sentence.replace(/\{\{tools\}\}/g, noun.tools).replace(/\{\{tool\}\}/g, noun.tool);
+      }
     }
   }
   return `Products in the ${subcategory || category || "this"} category compete in a fast-evolving market where buyers increasingly weigh power, reliability, and consistent performance as top purchase criteria.`;
@@ -114,7 +134,7 @@ function buildPriceSentence(
 
 // ── Main function: build the full overview paragraph ─────────────────────────
 export function buildOverviewParagraph(input: ParagraphInput): string {
-  const { motorTech, pricePoint, marketData, competitors, category, subcategory } = input;
+  const { motorTech, pricePoint, marketData, competitors, category, subcategory, toolType } = input;
 
   // Sentence 1 & 2: market size and segment structure — ONLY when backed
   // by real, curated (or web-verified) data. No fabricated numbers: when
@@ -130,7 +150,7 @@ export function buildOverviewParagraph(input: ParagraphInput): string {
 
   // Sentence 3: Motor-specific context (from our hard-coded research map),
   // gated to the clipper/trimmer/barbering family it's actually about.
-  const s3 = getMotorSentence(motorTech, category, subcategory);
+  const s3 = getMotorSentence(motorTech, toolType, category, subcategory);
 
   // Sentence 4: Price positioning (calculated from real Rainforest data)
   const s4 = buildPriceSentence(pricePoint, competitors);

@@ -28,6 +28,7 @@ export interface TdsProjectRecord {
   productName: string;
   description?: string | null;
   category?: string | null;
+  toolType?: string | null;
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;
@@ -134,7 +135,7 @@ export async function generateTdsFields(
   // web search capability at all). The shared fallback's eligibility check
   // (lib/field-answer-state.ts's isRealAnswer) already treats
   // TDS_NOT_LISTED as "no value" — no separate TDS-specific check needed.
-  await applyWebSearchFallback(grounded, aiEligibleSchema, productTitle, pipelineStart, TDS_PIPELINE_TIME_BUDGET_MS);
+  await applyWebSearchFallback(grounded, aiEligibleSchema, productTitle, pipelineStart, TDS_PIPELINE_TIME_BUDGET_MS, project.toolType as any);
 
   // Terminal step — converts anything still unresolved into an honest
   // "Not determinable — {reason}" ("Awaiting internal input" for

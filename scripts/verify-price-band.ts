@@ -24,12 +24,13 @@ function assert(condition: boolean, message: string) {
   }
 }
 
-function makeIdentity(category: string, subcategory: string, productName = "Test Product"): any {
+function makeIdentity(category: string, subcategory: string, productName = "Test Product", toolType: string = "dryer"): any {
   return {
     productName,
     brand: null,
     category,
     subcategory,
+    toolType,
     whatItIs: subcategory,
     keyAttributes: [],
     targetUser: "both",
@@ -85,13 +86,20 @@ async function main() {
   const rawCandidates = [
     { name: "Dyson Supersonic Hair Dryer", top_feature_summary: "fast drying", asin: "B0189O6FES", amazon_url: "https://www.amazon.com/dp/B0189O6FES", price: "$429.99" },
     { name: "Acme Turbo Dryer 3000 Pro Clone", top_feature_summary: "hair dryer", asin: "BXXXXXXXXX", amazon_url: "https://www.amazon.com/dp/BXXXXXXXXX", price: "$50.00" }, // named after own product — must be rejected
-    { name: "Some Random Blender", top_feature_summary: "kitchen appliance", asin: "B0000000AA", price: "$40.00" }, // wrong category — must be rejected
+    // Wrong tool type (curling iron, not dryer) — must be rejected by
+    // assertToolType (lib/tool-type-taxonomy.ts). Deliberately a candidate
+    // whose own text POSITIVELY resolves to a different known type, not
+    // just unrecognized text — assertToolType's own design only rejects a
+    // known mismatch, never invents a rejection from missing information
+    // (see its own header comment), so a totally off-topic/unrecognized
+    // candidate is a different, less meaningful test case here.
+    { name: "BaByliss Curling Iron Wand", top_feature_summary: "curling iron", asin: "B0000000AA", price: "$40.00" }, // wrong tool type — must be rejected
     { name: "Conair InfinitiPRO Dryer", top_feature_summary: "hair dryer", asin: "B000E0L3C0", amazon_url: "https://www.amazon.com/dp/B000E0L3C0", price: "$39.99" },
   ];
   const filtered = filterCandidatesByCategoryAndIdentity(rawCandidates, "legacy", identity);
   assert(filtered.length === 2, `filter kept exactly the 2 real, correctly-categorized, non-self-named candidates (got ${filtered.length})`);
   assert(filtered.every((c: any) => c.name !== "Acme Turbo Dryer 3000 Pro Clone"), "candidate named after the analyzed product itself was rejected");
-  assert(filtered.every((c: any) => c.name !== "Some Random Blender"), "wrong-category candidate was rejected");
+  assert(filtered.every((c: any) => c.name !== "BaByliss Curling Iron Wand"), "wrong-tool-type candidate was rejected");
   assert(filtered.every((c: any) => "ai_claimed_price" in c), "every surviving candidate preserves its AI-claimed price for the price gate to fall back on");
 
   // ---- Section 3: applyPriceBandGate — synthetic candidates ----

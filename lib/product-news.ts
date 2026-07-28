@@ -15,6 +15,7 @@
 // JSON structure with no way to verify it against real search results.
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { SectionProvenanceData, ProvenanceTier, ProvenanceQuery } from "./section-provenance";
+import { assertToolType, ToolType, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
 
 export interface NewsItem {
   title: string;
@@ -62,16 +63,21 @@ function currentYear(referenceDate: Date): number {
   return referenceDate.getUTCFullYear();
 }
 
-function buildPrompt(productName: string, brand: string | null, referenceDate: Date) {
+function buildPrompt(productName: string, brand: string | null, referenceDate: Date, requiredToolType?: ToolType | null) {
   const year = currentYear(referenceDate);
   const brandLine = brand ? `"${brand}" "${productName}"` : `"${productName}"`;
-  const searchQueries = [`"${productName}" news`, `${brandLine} launch OR recall OR update OR award ${year}`];
+  // Tool-type word appended explicitly (not left to whatever the bare
+  // product name happens to say) — a sibling product from the same
+  // brand/launch event (e.g. a clipper+trimmer combo launch) is a real
+  // risk for a query with no type context at all.
+  const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()}` : "";
+  const searchQueries = [`"${productName}"${toolTypeWord} news`, `${brandLine}${toolTypeWord} launch OR recall OR update OR award ${year}`];
 
-  const systemPrompt = `You are searching for real, recent news about ONE specific product. Search the web for:
+  const systemPrompt = `You are searching for real, recent news about ONE specific product${requiredToolType && requiredToolType !== "combo" ? ` (a ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()})` : ""}. Search the web for:
 - ${searchQueries[0]}
 - ${searchQueries[1]}
 
-Restrict to articles from roughly the last 12 months where you can tell the date. Only report an item if it is genuinely about THIS SPECIFIC PRODUCT (not the brand in general, not a different product in the same category) — say so explicitly if a source is about the category/brand in general rather than this exact product.
+Restrict to articles from roughly the last 12 months where you can tell the date. Only report an item if it is genuinely about THIS SPECIFIC PRODUCT (not the brand in general, not a different product in the same category, and not a different tool type even from the same brand/launch event) — say so explicitly if a source is about the category/brand/a sibling product in general rather than this exact product.
 
 Do not narrate your search process. Write a short plain-text summary (not JSON) covering what you found: for each real item, one sentence stating the headline/topic, the publisher, and the date if known, with an inline citation. If you find nothing specific to this exact product, say so plainly instead of describing general category or brand news.
 
@@ -95,7 +101,7 @@ function derivePublisher(title: string, url: string): string {
   }
 }
 
-export async function findProductNews(productName: string, brand: string | null, referenceDate: Date = new Date()): Promise<ProductNewsResult> {
+export async function findProductNews(productName: string, brand: string | null, referenceDate: Date = new Date(), requiredToolType?: ToolType | null): Promise<ProductNewsResult> {
   const searchedAt = referenceDate.toISOString();
   const t0 = Date.now();
   const NO_KEY_TIER: ProvenanceTier = { tier: "Product news web search", attempted: false, outcome: "skipped", errorMessage: "OpenAI not configured" };
@@ -104,7 +110,7 @@ export async function findProductNews(productName: string, brand: string | null,
     return { items: [], categoryContext: [], searchedAt, aiUnavailable: true, provenance: { tiers: [NO_KEY_TIER], queries: [] } };
   }
 
-  const { systemPrompt, userPrompt, searchQueries } = buildPrompt(productName, brand, referenceDate);
+  const { systemPrompt, userPrompt, searchQueries } = buildPrompt(productName, brand, referenceDate, requiredToolType);
   const baseQueries: ProvenanceQuery[] = searchQueries.map(q => ({ tier: "Product news web search", query: q, verified: true }));
 
   try {
@@ -178,7 +184,7 @@ export async function findProductNews(productName: string, brand: string | null,
       }
     }
 
-    const items: NewsItem[] = Array.from(byUrl.values()).map(({ title, url, spans }) => {
+    const itemsAll: NewsItem[] = Array.from(byUrl.values()).map(({ title, url, spans }) => {
       const summary = spans.join(" ").slice(0, 400);
       const dateMatch = summary.match(DATE_PATTERN);
       return {
@@ -189,6 +195,18 @@ export async function findProductNews(productName: string, brand: string | null,
         date: dateMatch ? dateMatch[1] : null,
       };
     });
+
+    // Deterministic re-check on top of the prompt's own instruction — an
+    // item whose own title/summary positively resolves to a DIFFERENT
+    // known tool type (e.g. a "clipper" article surfacing for a trimmer)
+    // is dropped even if the model's own judgment missed it.
+    const items = requiredToolType
+      ? itemsAll.filter(it => {
+          const ok = assertToolType(`${it.title} ${it.summary}`, requiredToolType).ok;
+          if (!ok) console.warn(`[tool-type] rejected news item "${it.title}" — mismatched tool type for ${requiredToolType}`);
+          return ok;
+        })
+      : itemsAll;
 
     const tier: ProvenanceTier = {
       tier: "Product news web search", attempted: true, outcome: items.length > 0 ? "success" : "empty",

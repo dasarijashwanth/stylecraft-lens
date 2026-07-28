@@ -4,6 +4,22 @@ import { findProductNews, ProductNewsResult } from "@/lib/product-news";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
+import { getAnalysis } from "@/lib/db/analyses";
+import type { ToolType } from "@/lib/tool-type-taxonomy";
+
+// Duplicated deliberately (matches app/api/amazon/reviews-analysis/[asin]/
+// route.ts's own copy) rather than sharing a module — a tiny, DB-touching
+// helper, same precedent lib/legacy-brand-discovery.ts's own header
+// comment sets for small per-file helpers in this codebase.
+async function resolveAnalysisToolType(analysisId: string | null): Promise<ToolType | null> {
+  if (!analysisId) return null;
+  try {
+    const analysis = await getAnalysis(analysisId);
+    return (analysis?.phase0_result?.toolType as ToolType) || null;
+  } catch {
+    return null;
+  }
+}
 
 // 60s is Vercel Hobby's actual ceiling — was 45s, but confirmed live that
 // a real news search can take 30s+ and a hard Vercel kill mid-response
@@ -77,7 +93,8 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
       }
     }
 
-    const result = await findProductNews(productName, brand);
+    const requiredToolType = await resolveAnalysisToolType(analysisId);
+    const result = await findProductNews(productName, brand, new Date(), requiredToolType);
 
     if (!result.aiUnavailable) {
       await setCachedNews(cacheKey, result);

@@ -57,7 +57,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       // This is what makes generation fully automatic for every project,
       // not only ones created with a URL/ASIN.
       if (productUrl || asin) {
-        const { projection } = await captureProductSnapshot({ projectId, productUrl, asin });
+        const { projection } = await captureProductSnapshot({ projectId, productUrl, asin, requiredToolType: (project as any).toolType });
 
         // Auto-fill only fields the user left blank — never overwrite what
         // they typed. Category isn't auto-filled: nothing scraped gives a
@@ -87,6 +87,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         productName: project.productName,
         description: project.description,
         category: project.category,
+        toolType: project.toolType,
         motorTech: project.motorTech,
         keyDiff: project.keyDiff,
         pricePoint: project.pricePoint,
@@ -115,6 +116,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           productName: project.productName,
           description: project.description,
           category: project.category,
+          toolType: project.toolType,
           motorTech: project.motorTech,
           keyDiff: project.keyDiff,
           pricePoint: project.pricePoint,

@@ -6,7 +6,7 @@
 // used everywhere else (lib/price-band.ts, unchanged).
 import { searchAmazonCategory, CategorySearchResult } from "./rainforest";
 import { computePriceBand, isWithinBand } from "./price-band";
-import { competitorMatchesCategory } from "./category-synonyms";
+import { assertToolType, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
 import type { IdentityCard } from "./product-identification";
 import type { LegacyBrandRow } from "./db/legacy-brands";
 import type { CategorySlug } from "./legacy-brand-registry";
@@ -138,7 +138,7 @@ function toCandidate(result: CategorySearchResult, brand: LegacyBrandRow): Curat
   };
 }
 
-export type IdentityForDiscovery = Pick<IdentityCard, "category" | "subcategory">;
+export type IdentityForDiscovery = Pick<IdentityCard, "category" | "subcategory" | "toolType">;
 
 // Loops widenStep 0->2 (the EXACT existing ±30/40/50% legacy bands from
 // lib/price-band.ts, unchanged), searching only brands not yet matched at
@@ -200,20 +200,30 @@ export async function searchCuratedLegacyBrands(
 
     await mapWithConcurrency(unmatched, 3, async (brand) => {
       const alias = pickSearchAlias(brand, isProfessional);
+      // Tool-type word is explicit in the query (not left to whatever the
+      // free-text subcategory happens to say) — "Wahl professional
+      // trimmer" rather than relying on subcategory text alone, which the
+      // original contamination bug showed can be ambiguous/combined
+      // ("Hair Clippers & Trimmers"). Motor-first query still tried first
+      // when known (Part 2.1), each variant now carrying the tool-type
+      // word too.
+      const toolTypeWord = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType].toLowerCase() : "";
       const queries = ourMotorLabel
-        ? [`${alias} ${ourMotorLabel} ${subcategory}`.trim(), `${alias} ${subcategory}`.trim()]
-        : [`${alias} ${subcategory}`.trim()];
+        ? [`${alias} ${ourMotorLabel} ${toolTypeWord} ${subcategory}`.trim(), `${alias} ${toolTypeWord} ${subcategory}`.trim()]
+        : [`${alias} ${toolTypeWord} ${subcategory}`.trim()];
 
       let inBand: CategorySearchResult[] = [];
       let matchedViaMotorQuery = false;
       for (let qi = 0; qi < queries.length; qi++) {
         const results = await searchAmazonCategory(queries[qi], 8);
-        inBand = results.filter(r =>
-          r.price_raw != null &&
-          isWithinBand(r.price_raw, band) &&
-          brandMatchesTitle(r.title, brand.brand_name, brand.aliases) &&
-          competitorMatchesCategory(r.title, identity.category || "", identity.subcategory || undefined)
-        );
+        inBand = results.filter(r => {
+          if (r.price_raw == null || !isWithinBand(r.price_raw, band)) return false;
+          if (!brandMatchesTitle(r.title, brand.brand_name, brand.aliases)) return false;
+          // No identity.toolType (legacy analysis pre-dating this field)
+          // — nothing strict to validate against, don't block.
+          if (identity.toolType && !assertToolType(r.title, identity.toolType).ok) return false;
+          return true;
+        });
         if (inBand.length > 0) {
           matchedViaMotorQuery = !!ourMotorLabel && qi === 0;
           break;

@@ -13,6 +13,7 @@ import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { coerceAiAnswer } from "./ai-json-call";
 import { isRealAnswer } from "./field-answer-state";
+import { assertToolType, buildToolTypePromptGuard, ToolType } from "./tool-type-taxonomy";
 
 export interface WebFallbackField {
   id: string;
@@ -43,14 +44,25 @@ interface WebSearchResult {
 async function runOneWebSearchCall(
   eligible: WebFallbackField[],
   productName: string,
-  timeoutMs: number
+  timeoutMs: number,
+  requiredToolType?: ToolType | null
 ): Promise<WebSearchResult | null> {
   const fieldList = eligible.map(f => `- ${f.id}: ${f.question}`).join("\n");
-  const systemInstruction = `Search the web for verifiable public information about the product "${productName}" to answer the fields below. Use ONLY information you find via search — never guess or use general knowledge about similar products. If nothing reliable is found for a field, return "N/A".
+  // This path has no independent page-fetch/quote-verification step (unlike
+  // lib/amazon-review-analysis.ts / lib/key-features-resolver.ts, which
+  // fetch and check the actual page text) — the JSON-only response mode
+  // this call uses also suppresses real url_citation annotations (see
+  // lib/web-search.ts's own header comment), so there's no structurally
+  // verifiable source URL available here. The explicit tool-type guard
+  // below plus the required source_hint (checked against assertToolType
+  // in applyResult) is the real, code-enforced safeguard this path can
+  // actually support given that constraint.
+  const toolTypeGuard = requiredToolType ? `\n\n${buildToolTypePromptGuard(requiredToolType)}` : "";
+  const systemInstruction = `Search the web for verifiable public information about the product "${productName}" to answer the fields below. Use ONLY information you find via search — never guess or use general knowledge about similar products.${toolTypeGuard} If nothing reliable is found for a field, return "N/A".
 
 Do not narrate your search process — search silently, then respond with ONLY the final JSON object. No preamble, no commentary.
 
-Return ONLY valid JSON, no markdown, keyed by field id: { "<field_id>": { "answer": "..." } }
+Return ONLY valid JSON, no markdown, keyed by field id: { "<field_id>": { "answer": "...", "source_hint": "the site/page name or article title this came from" } }
 
 FIELDS:
 ${fieldList}`;
@@ -111,7 +123,8 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   schema: WebFallbackField[],
   productName: string,
   pipelineStart: number,
-  timeBudgetMs: number
+  timeBudgetMs: number,
+  requiredToolType?: ToolType | null
 ): Promise<void> {
   const eligible = schema.filter(f => !isRealAnswer(fields[f.id]?.answer));
   if (eligible.length === 0 || (!hasOpenAIKey && !hasGeminiKey)) return;
@@ -120,15 +133,27 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   const applyResult = (targets: WebFallbackField[], result: WebSearchResult | null) => {
     if (!result) return;
     for (const f of targets) {
-      const answer = coerceAiAnswer(result.parsed?.[f.id]?.answer);
-      if (answer && answer.toUpperCase() !== "N/A") {
-        fields[f.id] = { ...(fields[f.id] as object), answer, source: "web", sourceDetail: { webSearchQueries: result.queries }, flagged: false } as T;
+      const raw = result.parsed?.[f.id];
+      const answer = coerceAiAnswer(raw?.answer);
+      if (!answer || answer.toUpperCase() === "N/A") continue;
+
+      // No independent page fetch on this path (see runOneWebSearchCall's
+      // own comment) — the model's self-reported source_hint is the only
+      // signal available, checked against a known mismatch the same way
+      // every other tier does. A missing/empty hint isn't itself rejected
+      // (nothing concrete to contradict), only a hint that positively
+      // resolves to a DIFFERENT tool type.
+      if (requiredToolType && raw?.source_hint && !assertToolType(String(raw.source_hint), requiredToolType).ok) {
+        console.warn(`[tool-type] rejected web-fallback answer for field "${f.id}" — source_hint "${raw.source_hint}" doesn't match required type ${requiredToolType}`);
+        continue;
       }
+
+      fields[f.id] = { ...(fields[f.id] as object), answer, source: "web", sourceDetail: { webSearchQueries: result.queries }, flagged: false } as T;
     }
   };
 
   if (eligible.length <= CHUNK_THRESHOLD) {
-    const result = await runOneWebSearchCall(eligible, productName, SINGLE_CALL_TIMEOUT_MS);
+    const result = await runOneWebSearchCall(eligible, productName, SINGLE_CALL_TIMEOUT_MS, requiredToolType);
     applyResult(eligible, result);
     return;
   }
@@ -143,7 +168,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   await Promise.all(
     chunks.map(async chunk => {
       if (Date.now() - pipelineStart > timeBudgetMs) return;
-      const result = await runOneWebSearchCall(chunk, productName, CHUNK_CALL_TIMEOUT_MS);
+      const result = await runOneWebSearchCall(chunk, productName, CHUNK_CALL_TIMEOUT_MS, requiredToolType);
       applyResult(chunk, result);
     })
   );

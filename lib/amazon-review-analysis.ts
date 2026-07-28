@@ -32,10 +32,11 @@ import {
   getAmazonReviewsByStars,
   getRecentReviews,
 } from "./rainforest";
-import { searchForUrls } from "./web-search";
+import { searchForUrls, SearchHit } from "./web-search";
 import { fetchPageText, quoteAppearsInText } from "./citations";
 import { logCall } from "./obs";
 import { SectionProvenanceData, ProvenanceTier, ProvenanceQuery, fromTierResult } from "./section-provenance";
+import { assertToolType, ToolType } from "./tool-type-taxonomy";
 
 export type ReviewSourceType = "customer_reviews" | "amazon_listing" | "expert_review" | "forum";
 
@@ -290,7 +291,7 @@ async function fetchAmazonReviewSets(asin: string, referenceDate: Date): Promise
 // timeout — bumped alongside the text-window increase above.
 const WEB_REVIEW_TIMEOUT_MS = 35_000;
 
-async function resolveWebReviewThemes(productName: string): Promise<{
+async function resolveWebReviewThemes(productName: string, requiredToolType?: ToolType | null): Promise<{
   strengths: ReviewTheme[];
   weaknesses: ReviewTheme[];
   expertReviewCount: number;
@@ -300,10 +301,24 @@ async function resolveWebReviewThemes(productName: string): Promise<{
   const expertQuery = `"${productName}" review pros and cons`;
   const forumQuery = `"${productName}" reddit`;
   const t0 = Date.now();
-  const [expertHits, forumHits] = await Promise.all([
+  const [expertHitsRaw, forumHitsRaw] = await Promise.all([
     searchForUrls(expertQuery, 3),
     searchForUrls(forumQuery, 2),
   ]);
+  // Reject a hit whose OWN search-result title positively resolves to a
+  // DIFFERENT known tool type before ever fetching/paying for its full
+  // page text — e.g. an article titled "Best Clippers of 2026" for a
+  // trimmer analysis. Unrecognized-but-on-topic titles (no type word at
+  // all) are never rejected — assertToolType only catches a known
+  // mismatch, never invents one from missing information.
+  const rejectWrongType = (h: SearchHit) => {
+    if (!requiredToolType) return true;
+    const ok = assertToolType(h.title, requiredToolType).ok;
+    if (!ok) console.warn(`[tool-type] rejected review-web-search hit "${h.title}" — mismatched tool type for ${requiredToolType}`);
+    return ok;
+  };
+  const expertHits = expertHitsRaw.filter(rejectWrongType);
+  const forumHits = forumHitsRaw.filter(rejectWrongType);
   const elapsedMs = Date.now() - t0;
   logCall("review-tier", { op: "web-search", query: expertQuery, outcome: expertHits.length ? "ok" : "empty", itemCount: expertHits.length, elapsedMs });
   logCall("review-tier", { op: "web-search", query: forumQuery, outcome: forumHits.length ? "ok" : "empty", itemCount: forumHits.length, elapsedMs });
@@ -378,7 +393,8 @@ export async function analyzeReviews(
   asin: string,
   productTitle: string,
   referenceDate: Date = new Date(),
-  product?: RainforestProduct | null
+  product?: RainforestProduct | null,
+  requiredToolType?: ToolType | null
 ): Promise<ReviewAnalysis> {
   const asinValid = /^[A-Z0-9]{10}$/i.test(asin || "");
 
@@ -497,7 +513,7 @@ export async function analyzeReviews(
 
   if (strengths.length + weaknesses.length === 0) {
     tierCAttempted = true;
-    const web = await resolveWebReviewThemes(productTitle);
+    const web = await resolveWebReviewThemes(productTitle, requiredToolType);
     strengths = [...strengths, ...web.strengths];
     weaknesses = [...weaknesses, ...web.weaknesses];
     expertReviewCount = web.expertReviewCount;

@@ -37,13 +37,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: "This project has no product URL or ASIN to capture — add one first" }, { status: 400 });
     }
 
-    const { snapshot, projection } = await captureProductSnapshot({ projectId: params.id, productUrl, asin });
+    const { snapshot, projection } = await captureProductSnapshot({ projectId: params.id, productUrl, asin, requiredToolType: projectAny.toolType });
 
     const productTitle = projection.title || project.productName;
     const fields = await generateTdsFields(productTitle, snapshot.raw_data, {
       productName: project.productName,
       description: project.description,
       category: project.category,
+      toolType: projectAny.toolType,
       motorTech: project.motorTech,
       keyDiff: project.keyDiff,
       pricePoint: project.pricePoint,

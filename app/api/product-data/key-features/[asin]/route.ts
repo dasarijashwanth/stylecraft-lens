@@ -4,6 +4,22 @@ import { resolveKeyFeatures, KeyFeaturesResult } from "@/lib/key-features-resolv
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
+import { getAnalysis } from "@/lib/db/analyses";
+import type { ToolType } from "@/lib/tool-type-taxonomy";
+
+// Duplicated deliberately (matches the reviews-analysis/product-news route's
+// own copies) — a tiny, DB-touching helper, same precedent
+// lib/legacy-brand-discovery.ts's own header comment sets for small
+// per-file helpers in this codebase.
+async function resolveAnalysisToolType(analysisId: string | null): Promise<ToolType | null> {
+  if (!analysisId) return null;
+  try {
+    const analysis = await getAnalysis(analysisId);
+    return (analysis?.phase0_result?.toolType as ToolType) || null;
+  } catch {
+    return null;
+  }
+}
 
 // Multi-tier feature resolution (Amazon -> brand site -> retailers ->
 // expert reviews) can genuinely take 30-40s when Amazon has nothing and
@@ -73,7 +89,8 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
       }
     }
 
-    const result = await resolveKeyFeatures(productName, isRealAsin ? rawAsin : null);
+    const requiredToolType = await resolveAnalysisToolType(analysisId);
+    const result = await resolveKeyFeatures(productName, isRealAsin ? rawAsin : null, requiredToolType);
     await setCachedFeatures(cacheKey, result);
 
     if (result.provenance) {
