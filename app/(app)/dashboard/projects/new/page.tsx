@@ -30,25 +30,35 @@ export default function NewProjectPage() {
   const [productUrl, setProductUrl] = useState("");
   const [asin, setAsin] = useState("");
 
-  // Suggests the Project Name field from the most recent analysis that
-  // hasn't been linked to a project yet — lets a user go straight from
-  // finishing an analysis to creating its project without retyping the
-  // product name. Only applied if the field is still empty when the fetch
-  // resolves, so it never clobbers something the user already typed.
+  // Suggests the whole form from the most recent analysis that hasn't been
+  // linked to a project yet — lets a user go straight from finishing an
+  // analysis to creating its project without retyping anything they
+  // already gave it. analysis.context is the exact form the analyze page
+  // submitted (see AnalysisFormSchema/lib/validations.ts), so its field
+  // names map 1:1 onto this form's own state. Every field is only set if
+  // still empty when the fetch resolves, so this never clobbers anything
+  // the user already typed while the request was in flight.
   useEffect(() => {
     fetch("/api/analyses")
       .then(r => r.json())
       .then(data => {
         const analyses = data.analyses || [];
         const recentUnlinked = analyses.find((a: any) => !a.project_id && a.context?.productName);
-        if (recentUnlinked) {
-          const suggested = recentUnlinked.context.productName;
-          setName(prev => {
-            if (prev.trim()) return prev;
-            toast(`Suggested project name from your recent analysis: "${suggested}"`);
-            return suggested;
-          });
-        }
+        if (!recentUnlinked) return;
+        const ctx = recentUnlinked.context;
+
+        setName(prev => prev.trim() ? prev : ctx.productName);
+        setProductName(prev => prev.trim() ? prev : ctx.productName);
+        setDescription(prev => prev.trim() ? prev : (ctx.description || ""));
+        if (ctx.industry) setIndustry(prev => prev === "grooming-barbering" ? ctx.industry : prev);
+        if (ctx.targetMarket) setTargetMarket(prev => prev === "both" ? ctx.targetMarket : prev);
+        setCategory(prev => prev.trim() ? prev : (ctx.category || ""));
+        setPricePoint(prev => prev.trim() ? prev : (ctx.pricePoint || ""));
+        setCompanyContext(prev => prev.trim() ? prev : (ctx.companyContext || ""));
+        setMotorTech(prev => prev.trim() ? prev : (ctx.motorTech || ""));
+        setKeyDiff(prev => prev.trim() ? prev : (ctx.keyDiff || ""));
+
+        toast(`Suggested from your recent analysis: "${ctx.productName}"`);
       })
       .catch(() => {});
   }, []);
