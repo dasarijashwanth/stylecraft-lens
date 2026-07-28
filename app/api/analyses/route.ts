@@ -3,6 +3,7 @@ import { getAuthSession } from "@/lib/auth";
 import { AnalysisFormSchema } from "@/lib/validations";
 import { createAnalysis, getUserAnalyses } from "@/lib/db/analyses";
 import { getProject } from "@/lib/db/projects";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function GET(request: Request) {
   try {
@@ -27,6 +28,17 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await getAuthSession();
+
+    // Protects real OpenAI/Gemini/Rainforest spend — each analysis runs a
+    // full multi-phase AI+Amazon-data pipeline across its lifetime.
+    const rateLimit = await checkRateLimit({ eventType: "analysis_create", userId: session.userId, maxAttempts: 10, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json(
+        { error: "RATE_LIMITED", message: `Too many analyses started — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` },
+        { status: 429 }
+      );
+    }
+
     const body = await request.json();
 
     const validation = AnalysisFormSchema.safeParse(body);

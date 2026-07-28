@@ -11,12 +11,18 @@ import { cookies } from "next/headers";
 // Next.js is pinned at 14.2.3 here, where cookies() is synchronous — this
 // changes to an async API in Next 15+; update this helper if this app is
 // ever upgraded.
+// Same reasoning as lib/supabase-middleware.ts's identical constant:
+// explicit Secure in production, never forced in local dev (a Secure
+// cookie is silently refused by browsers over plain http://localhost).
+const isProduction = process.env.VERCEL_ENV === "production" || (process.env.NODE_ENV === "production" && !process.env.VERCEL_ENV);
+
 export function createSupabaseServerClient() {
   const cookieStore = cookies();
   return createServerClient(
     (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/rest\/v1\/?$/, ""),
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
     {
+      cookieOptions: { secure: isProduction, sameSite: "lax" },
       cookies: {
         getAll() {
           return cookieStore.getAll();

@@ -4,6 +4,7 @@ import { NewProjectSchema } from "@/lib/validations";
 import { createProject, getUserProjects } from "@/lib/db/projects";
 import { startGenerationState } from "@/lib/db/generation-state";
 import { logCall } from "@/lib/obs";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function GET(request: Request) {
   try {
@@ -21,6 +22,18 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await getAuthSession();
+
+    // Every project auto-starts a full snapshot -> TDS -> GTM -> deck
+    // generation pipeline (real AI + scraping work) — protects that spend
+    // the same way analysis creation is rate-limited above.
+    const rateLimit = await checkRateLimit({ eventType: "generation_start", userId: session.userId, maxAttempts: 15, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json(
+        { error: "RATE_LIMITED", message: `Too many projects created — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` },
+        { status: 429 }
+      );
+    }
+
     const body = await request.json();
 
     const validation = NewProjectSchema.safeParse(body);

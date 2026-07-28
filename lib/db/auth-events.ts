@@ -1,8 +1,11 @@
 // lib/db/auth-events.ts
 // Dual-path (Supabase/memoryDb) CRUD over auth_events — the security audit
-// log AND the login-rate-limit backing store (see app/api/auth/login/route.ts
-// and app/api/auth/forgot-password/route.ts). Mirrors lib/db/support-messages.ts's
-// exact style.
+// log AND the rate-limit backing store for anything keyed by identity+time
+// (login attempts, password resets, and — via lib/rate-limit.ts — expensive
+// actions like starting an analysis or a project's generation pipeline).
+// The schema doesn't actually care what kind of event it's counting;
+// "auth_events" is the historical name from when only login/password
+// events used it. Mirrors lib/db/support-messages.ts's exact style.
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockAuthEvent } from "@/lib/memoryDb";
 
@@ -12,7 +15,9 @@ export type AuthEventType =
   | "password_change"
   | "password_reset_requested"
   | "permission_denied"
-  | "admin_change";
+  | "admin_change"
+  | "analysis_create"
+  | "generation_start";
 
 export interface AuthEventInput {
   eventType: AuthEventType;

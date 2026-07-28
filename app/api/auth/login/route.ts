@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { logAuthEvent, countRecentAuthEvents } from "@/lib/db/auth-events";
 import { getClientIp } from "@/lib/request-ip";
+import { apiError } from "@/lib/api-error";
 
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
@@ -45,6 +46,6 @@ export async function POST(request: NextRequest) {
     await logAuthEvent({ eventType: "login_success", email: normalizedEmail, userId: data.user.id, ipAddress: ip, userAgent });
     return NextResponse.json({ ok: true });
   } catch (err: any) {
-    return NextResponse.json({ error: "Failed to sign in — try again" }, { status: 500 });
+    return apiError(err, "Failed to sign in — try again");
   }
 }
