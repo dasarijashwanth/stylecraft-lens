@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -29,6 +29,29 @@ export default function NewProjectPage() {
   // only; this is what actually identifies the product.
   const [productUrl, setProductUrl] = useState("");
   const [asin, setAsin] = useState("");
+
+  // Suggests the Project Name field from the most recent analysis that
+  // hasn't been linked to a project yet — lets a user go straight from
+  // finishing an analysis to creating its project without retyping the
+  // product name. Only applied if the field is still empty when the fetch
+  // resolves, so it never clobbers something the user already typed.
+  useEffect(() => {
+    fetch("/api/analyses")
+      .then(r => r.json())
+      .then(data => {
+        const analyses = data.analyses || [];
+        const recentUnlinked = analyses.find((a: any) => !a.project_id && a.context?.productName);
+        if (recentUnlinked) {
+          const suggested = recentUnlinked.context.productName;
+          setName(prev => {
+            if (prev.trim()) return prev;
+            toast(`Suggested project name from your recent analysis: "${suggested}"`);
+            return suggested;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const validate = (): boolean => {
     const errs: { [key: string]: string } = {};
