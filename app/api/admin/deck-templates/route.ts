@@ -4,6 +4,13 @@ import { createDeckTemplate, listDeckTemplates } from "@/lib/db/deck-templates";
 import { parseDeckTemplate } from "@/lib/deck-template-parser";
 import { buildDefaultPlaceholderMap } from "@/lib/deck-field-registry";
 
+// Cheap first line of defense against a zip-bomb .pptx (a tiny file that
+// decompresses to gigabytes and exhausts the function's memory when
+// PizZip parses it) — real branded templates run 10-20MB; this leaves
+// generous headroom while still bounding worst-case blowup. Admin-only
+// upload narrows the real risk further (a trusted role, not the public).
+const MAX_TEMPLATE_SIZE_BYTES = 50 * 1024 * 1024;
+
 export const maxDuration = 30;
 
 function requireAdmin(role: string) {
@@ -37,6 +44,9 @@ export async function POST(req: NextRequest) {
     const file = formData.get("file") as File | null;
     const name = (formData.get("name") as string) || file?.name || "Untitled template";
     if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    if (file.size > MAX_TEMPLATE_SIZE_BYTES) {
+      return NextResponse.json({ error: `Template file too large (max ${MAX_TEMPLATE_SIZE_BYTES / 1024 / 1024}MB)` }, { status: 400 });
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const parsed = await parseDeckTemplate(buffer);

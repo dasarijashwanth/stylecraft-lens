@@ -4,6 +4,7 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { createSupportMessage, countRecentSupportMessages, updateEmailStatus, updateAckEmailStatus } from "@/lib/db/support-messages";
 import { sendSupportAdminEmail, sendSupportAckEmail, SUPPORT_INBOX_EMAIL, TOPIC_LABELS } from "@/lib/support-email";
+import { detectImageType } from "@/lib/file-magic-bytes";
 
 const STORAGE_BUCKET = "support-screenshots";
 const SCREENSHOT_PATH_RE = /^\d+-\d+\.(png|jpg)$/;
@@ -60,8 +61,24 @@ export async function POST(req: NextRequest) {
 
     let screenshotUrl: string | null = null;
     if (screenshotPath && isSupabaseConfigured) {
-      const { data } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(screenshotPath);
-      screenshotUrl = data.publicUrl;
+      // The browser uploaded these bytes directly to Storage via a signed
+      // URL (bypassing Vercel's request-body limit — see
+      // /api/support/screenshot-upload-url), so this server never saw the
+      // actual content at upload time. Verify it's a real PNG/JPEG by file
+      // signature now, before ever linking it into an email/admin view —
+      // a spoofed Content-Type there would otherwise go completely
+      // unchecked. Degrades gracefully: an invalid file just means no
+      // screenshot on this submission, never a failed submit.
+      const { data: downloaded, error: downloadError } = await supabaseAdmin.storage.from(STORAGE_BUCKET).download(screenshotPath);
+      if (!downloadError && downloaded) {
+        const buffer = Buffer.from(await downloaded.arrayBuffer());
+        if (detectImageType(buffer)) {
+          const { data } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(screenshotPath);
+          screenshotUrl = data.publicUrl;
+        } else {
+          await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([screenshotPath]);
+        }
+      }
     }
 
     // Only known keys — never store an arbitrary client-supplied blob in JSONB.

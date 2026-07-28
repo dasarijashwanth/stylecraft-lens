@@ -5,6 +5,7 @@ import { buildFullProjectContext } from "@/lib/project-context";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "@/lib/gemini";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
+import { detectImageType } from "@/lib/file-magic-bytes";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -42,6 +43,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
+
+    // Real content-type check by file signature, not the client-declared
+    // file.type (trivially spoofed — e.g. malicious.html renamed to
+    // photo.png with a faked Content-Type). SVG is deliberately not
+    // accepted at all: it can embed <script>/event-handler XSS and
+    // sanitizing it properly needs a real SVG sanitizer, disproportionate
+    // for this feature's actual need (raster brand/packaging images).
+    const detectedType = detectImageType(buffer);
+    if (!detectedType) {
+      return NextResponse.json({ error: "File must be a real PNG, JPEG, or WEBP image" }, { status: 400 });
+    }
+    const verifiedContentType = `image/${detectedType}`;
+
     let fileUrl = "";
 
     if (isSupabaseConfigured) {
@@ -49,7 +63,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const fileName = `${params.id}/${purpose}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
         const { error: uploadError } = await supabaseAdmin.storage
           .from("artwork")
-          .upload(fileName, buffer, { contentType: file.type, upsert: true });
+          .upload(fileName, buffer, { contentType: verifiedContentType, upsert: true });
 
         if (!uploadError) {
           const { data: urlData } = supabaseAdmin.storage.from("artwork").getPublicUrl(fileName);

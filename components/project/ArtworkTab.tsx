@@ -86,7 +86,7 @@ export function ArtworkTab({ projectId }: { projectId: string }) {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp,image/svg+xml"
+          accept="image/jpeg,image/png,image/webp"
           onChange={handleUpload}
           className="hidden"
         />

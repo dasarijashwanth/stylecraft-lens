@@ -8,6 +8,13 @@ import { createDeckTemplateFromStoragePath } from "@/lib/db/deck-templates";
 export const maxDuration = 30;
 
 const STORAGE_BUCKET = "deck-templates";
+// Matches exactly the shape .../upload-url/route.ts generates
+// (`${Date.now()}-${sanitized filename}`) — rejects anything else,
+// including a path containing "..", before ever calling storage.download.
+const TEMPLATE_PATH_RE = /^\d+-[a-zA-Z0-9._-]+$/;
+// Same reasoning as app/api/admin/deck-templates/route.ts's direct-upload
+// cap — bounds a zip-bomb .pptx's worst-case decompression blowup.
+const MAX_TEMPLATE_SIZE_BYTES = 50 * 1024 * 1024;
 
 function requireAdmin(role: string) {
   if (role !== "OWNER" && role !== "ADMIN") {
@@ -26,11 +33,17 @@ export async function POST(req: NextRequest) {
     requireAdmin(session.role);
 
     const { path, name, fileName } = await req.json();
-    if (!path) return NextResponse.json({ error: "Missing storage path" }, { status: 400 });
+    if (!path || !TEMPLATE_PATH_RE.test(path)) {
+      return NextResponse.json({ error: "Invalid storage path" }, { status: 400 });
+    }
 
     const { data, error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).download(path);
     if (error) throw error;
     const buffer = Buffer.from(await data.arrayBuffer());
+    if (buffer.length > MAX_TEMPLATE_SIZE_BYTES) {
+      await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([path]);
+      return NextResponse.json({ error: `Template file too large (max ${MAX_TEMPLATE_SIZE_BYTES / 1024 / 1024}MB)` }, { status: 400 });
+    }
 
     const parsed = await parseDeckTemplate(buffer);
     const placeholderMap = buildDefaultPlaceholderMap(parsed);
