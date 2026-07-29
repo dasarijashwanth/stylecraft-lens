@@ -395,16 +395,20 @@ export default function NewProjectPage() {
             </div>
           </div>
 
-          {/* Company Context */}
+          {/* Positioning Context — product facts, not company/brand
+              description (feeds AI positioning advice for THIS product). */}
           <div className="space-y-1">
-            <label className="font-semibold text-text-primary block">Company Context</label>
+            <label className="font-semibold text-text-primary block">Positioning Context</label>
             <textarea
               rows={2}
               value={companyContext}
               onChange={(e) => setCompanyContext(e.target.value)}
-              placeholder="e.g. Launching under a premium barber sub-brand. We are expanding from styling sprays into hardware tools."
+              placeholder="e.g. Currently #1,200 BSR in Beauty & Personal Care, priced mid-tier vs. competitors, popular with barbershop owners age 30-50..."
               className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
             />
+            <p className="text-[10px] text-text-muted">
+              Product-specific facts that sharpen positioning — current BSR, standout reviews, who actually buys it. Not a company/brand description.
+            </p>
           </div>
         </div>
 

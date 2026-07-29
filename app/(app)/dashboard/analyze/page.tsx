@@ -73,7 +73,10 @@ export default function AnalyzePage() {
       setDescription("");
       setCategory("");
       setToolType("");
-      setCompanyContext("StylecraftUS® is an innovative hair tools brand established in the USA, known for professional-grade barber clippers, trimmers, and beauty tools. Collections include Saber, Instinct, Rebel, Reign, Rogue, and Ace lines. Featured in Good Housekeeping, Rolling Stone, GMA, and NY Times.");
+      // Positioning Context asks for THIS product's own positioning facts
+      // (BSR, price tier, target customer), never a company/brand
+      // description — nothing meaningful to prefill here.
+      setCompanyContext("");
       setMotorTech("");
       setKeyDiff("");
       setPricePoint("");
@@ -89,7 +92,10 @@ export default function AnalyzePage() {
     setDescription(product.description);
     setCategory(product.amazonCategory);
     setToolType(deriveToolTypeFromCatalogProduct(product) || "");
-    setCompanyContext("StylecraftUS® is an innovative hair tools brand established in the USA, known for professional-grade barber clippers, trimmers, and beauty tools. Collections include Saber, Instinct, Rebel, Reign, Rogue, and Ace lines. Featured in Good Housekeeping, Rolling Stone, GMA, and NY Times.");
+    // Same reasoning as the "custom" branch above — the StyleCraft catalog
+    // has no real BSR/target-customer data per product, so there's nothing
+    // genuine to prefill; leave it for the user to fill in per-product.
+    setCompanyContext("");
     setMotorTech(product.motorType);
     setKeyDiff(product.keyFeatures[0] || "");
     setPricePoint(`$${product.price}`);
@@ -513,18 +519,22 @@ export default function AnalyzePage() {
             </div>
           </div>
 
-          {/* Card 2: Company Context */}
+          {/* Card 2: Positioning Context — product facts, not company/brand
+              description (feeds AI positioning advice for THIS product). */}
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
-            <h2 className="text-sm font-bold text-text-primary">Company context</h2>
+            <h2 className="text-sm font-bold text-text-primary">Positioning context</h2>
             <div className="space-y-1">
-              <label className="font-semibold text-text-primary block">Company context</label>
+              <label className="font-semibold text-text-primary block">Positioning context</label>
               <textarea
                 rows={2}
                 value={companyContext}
                 onChange={(e) => setCompanyContext(e.target.value)}
-                placeholder="Describe your brand positioning, current distribution channels, or strategic business goals..."
+                placeholder="e.g. Currently #1,200 BSR in Beauty & Personal Care, priced mid-tier vs. competitors, popular with barbershop owners age 30-50..."
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
               />
+              <p className="text-[10px] text-text-muted">
+                Product-specific facts that sharpen positioning — current BSR, standout reviews, who actually buys it. Not a company/brand description.
+              </p>
             </div>
           </div>
 

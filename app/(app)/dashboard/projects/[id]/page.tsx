@@ -32,7 +32,6 @@ import {
 import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
-import { ArtworkTab } from "@/components/project/ArtworkTab";
 import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-field-schema";
@@ -44,8 +43,8 @@ import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
 
-type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "artwork" | "project-deck";
-type ReportTab = Exclude<Tab, "artwork" | "project-deck">;
+type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck";
+type ReportTab = Exclude<Tab, "project-deck">;
 
 export default function ProjectDetailPage() {
   const router = useRouter();
@@ -229,8 +228,8 @@ export default function ProjectDetailPage() {
 
             {(project.motorTech || project.keyDiff || project.companyContext) && (
               <div className="pt-3 border-t border-border/60 space-y-3">
-                <span className="text-[10px] text-text-muted uppercase font-bold block font-mono">Hardware & Brand specs</span>
-                
+                <span className="text-[10px] text-text-muted uppercase font-bold block font-mono">Hardware & Positioning specs</span>
+
                 {project.motorTech && (
                   <div className="flex justify-between py-1 border-b border-border/40">
                     <span className="text-text-secondary">Motor type</span>
@@ -245,7 +244,7 @@ export default function ProjectDetailPage() {
                 )}
                 {project.companyContext && (
                   <div className="space-y-1 pt-1">
-                    <span className="text-[9px] text-text-muted uppercase font-bold block">Company Context</span>
+                    <span className="text-[9px] text-text-muted uppercase font-bold block">Positioning Context</span>
                     <p className="text-text-secondary italic leading-relaxed">{project.companyContext}</p>
                   </div>
                 )}
@@ -264,9 +263,9 @@ export default function ProjectDetailPage() {
 
           {/* Report selector and download bar — only meaningful once a
               report is linked; the tab bar itself (below) is NOT gated on
-              this, since Artwork and Project Deck don't depend on a report
-              at all — a project with zero linked reports must still be able
-              to reach them. */}
+              this, since Project Deck doesn't depend on a report at all —
+              a project with zero linked reports must still be able to
+              reach it. */}
           {reports.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-surface-2 border border-border rounded-xl">
               <div className="flex items-center gap-3">
@@ -303,10 +302,10 @@ export default function ProjectDetailPage() {
           )}
 
           <div className="space-y-4">
-            {/* 6-Tab Navigation — always visible; Artwork/Project Deck don't
+            {/* 5-Tab Navigation — always visible; Project Deck doesn't
                 depend on a linked report */}
             <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
-              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "artwork", "project-deck"] as Tab[]).map(tab => (
+              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "project-deck"] as Tab[]).map(tab => (
                 <button
                   key={tab}
                   className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors whitespace-nowrap ${
@@ -336,9 +335,7 @@ export default function ProjectDetailPage() {
 
             {/* Tab Content Canvas */}
             <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
-              {activeTab === "artwork" ? (
-                <ArtworkTab projectId={id} />
-              ) : activeTab === "project-deck" ? (
+              {activeTab === "project-deck" ? (
                 <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : selectedReport ? (
                 <ReportTabContent
@@ -349,7 +346,7 @@ export default function ProjectDetailPage() {
                 />
               ) : (
                 /* Empty state — scoped to just this canvas, not the whole
-                   page, so the tab bar and Artwork/Project Deck stay reachable. */
+                   page, so the tab bar and Project Deck stay reachable. */
                 <div className="flex flex-col items-center justify-center p-8 text-center space-y-3">
                   <div className="w-10 h-10 rounded-full bg-surface-3 border border-border flex items-center justify-center text-base">📊</div>
                   <div className="space-y-1">
@@ -433,25 +430,22 @@ const TAB_LABELS: Record<Tab, string> = {
   "pricing":              "Pricing",
   "go-to-market":         "Go To Market",
   "content-form":         "Content Form",
-  "artwork":              "Artwork",
   "project-deck":         "Project Deck",
 };
 
 // Maps each tab to the FAQ category its contextual "?" icon deep-links to
-// (see lib/faq-seed-data.ts's FAQ_CATEGORIES) — Content Form and Artwork
-// share one combined category, matching the FAQ spec's category list.
+// (see lib/faq-seed-data.ts's FAQ_CATEGORIES).
 const TAB_FAQ_CATEGORY: Record<Tab, string> = {
   "competitive-analysis": "Competitive Analysis Tab",
   "pricing":              "Pricing Tab",
   "go-to-market":         "Go To Market Tab",
-  "content-form":         "Content Form & Artwork Tabs",
-  "artwork":              "Content Form & Artwork Tabs",
+  "content-form":         "Content Form Tab",
   "project-deck":         "Project Deck Tab",
 };
 
 // ─── Tab Content Container ──────────────────────────────────────────────────
 // Only ever called for the 4 report-driven tabs now — the parent renders
-// Artwork/Project Deck directly (neither depends on `report`).
+// Project Deck directly (it doesn't depend on `report`).
 function ReportTabContent({
   report,
   activeTab,

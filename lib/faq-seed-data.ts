@@ -30,7 +30,7 @@ export const FAQ_CATEGORIES: string[] = [
   "Pricing Tab",
   "Go To Market Tab",
   "TDS",
-  "Content Form & Artwork Tabs",
+  "Content Form Tab",
   "Project Deck Tab",
   "Notifications & Timestamps",
   "Settings (Admin)",
@@ -232,18 +232,12 @@ export const FAQ_SEED_DATA: FaqSeedEntry[] = [
     feature: "tds",
   },
 
-  // Category 8 — Content Form & Artwork Tabs
+  // Category 8 — Content Form Tab
   {
-    category: "Content Form & Artwork Tabs",
+    category: "Content Form Tab",
     question: "What goes in the Content Form tab?",
     answer:
       "The Final Copy set: positioning, tone, core message, taglines (Sexy/Techie), romance copy, consumer-facing feature bullets (Long / Condensed / Top 3), how-to-use and care copy, social hook and caption, keywords, messaging risks, e-commerce titles and character-limited descriptions (229/115/200 — live counters enforce the limits), and in-store box copy.",
-  },
-  {
-    category: "Content Form & Artwork Tabs",
-    question: "What is the Artwork tab for?",
-    answer:
-      "Packaging and creative assets for the project — dieline references, box copy, the 6 feature icons used on the final box, and uploaded artwork files, kept alongside the product data they must match.",
   },
 
   // Category 9 — Project Deck Tab

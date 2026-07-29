@@ -77,7 +77,7 @@ Price: ${ctx.pricePoint || "Contact for pricing"}
 Target market: ${ctx.targetMarket}
 Industry: ${ctx.industry}
 Key differentiator: ${ctx.keyDiff}
-Company: ${ctx.companyContext}
+Positioning context (BSR, price tier, target customer, etc.): ${ctx.companyContext}
 
 Top competitors (with prices):
 ${(ctx.competitorPrices || []).slice(0, 5).map((c: any) => `- ${c.name}: ${c.price ?? "—"}`).join("\n")}
