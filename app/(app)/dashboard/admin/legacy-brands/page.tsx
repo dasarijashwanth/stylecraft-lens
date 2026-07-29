@@ -81,7 +81,7 @@ export default function LegacyBrandsAdminPage() {
 
   function startEditingDomains(brand: Brand) {
     setEditingDomainsFor(brand.id);
-    setDomainsDraft(brand.official_domains.join(", "));
+    setDomainsDraft((brand.official_domains || []).join(", "));
   }
 
   async function saveDomains(categoryId: string, brandId: string) {
@@ -277,7 +277,7 @@ export default function LegacyBrandsAdminPage() {
                         </div>
                       ) : (
                         <button type="button" onClick={() => startEditingDomains(brand)} className="flex items-center gap-1 mt-0.5 text-[10px] text-text-muted hover:text-accent transition-colors">
-                          <span>{brand.official_domains.length > 0 ? `sites: ${brand.official_domains.join(", ")}` : "no official site configured"}</span>
+                          <span>{(brand.official_domains || []).length > 0 ? `sites: ${(brand.official_domains || []).join(", ")}` : "no official site configured"}</span>
                           <Pencil className="w-2.5 h-2.5" />
                         </button>
                       )}

@@ -61,11 +61,23 @@ export async function getCategoryBySlug(slug: string): Promise<BrandCategoryRow 
   return row ? mockCategoryToRow(row) : null;
 }
 
+// Normalizes a raw Supabase row before it reaches any caller — guards
+// against official_domains being absent entirely (confirmed happening live:
+// the Section 22 ALTER TABLE hadn't been run against production yet, so
+// select("*") silently omitted the column from every row instead of
+// erroring, and downstream code calling .length/.join() on the missing
+// field crashed the admin page's render). Never trust a nullable array
+// column to actually be an array — same discipline this codebase already
+// applies elsewhere (e.g. lib/memoryDb.ts's mockBrandToRow).
+function normalizeBrandRow(row: any): LegacyBrandRow {
+  return { ...row, aliases: row.aliases || [], official_domains: row.official_domains || [] };
+}
+
 export async function listBrandsForCategory(categoryId: string): Promise<LegacyBrandRow[]> {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin.from("legacy_brands").select("*").eq("category_id", categoryId).order("sort_order");
     if (error) throw error;
-    return data || [];
+    return (data || []).map(normalizeBrandRow);
   }
   return memoryDb.legacyBrands
     .filter(b => b.categoryId === categoryId)
@@ -100,7 +112,7 @@ export async function addBrand(categoryId: string, input: { brandName: string; a
       .select()
       .single();
     if (error) throw error;
-    return data;
+    return normalizeBrandRow(data);
   }
 
   const now = new Date();
@@ -134,7 +146,7 @@ export async function updateBrand(
     if (patch.sortOrder !== undefined) dbPatch.sort_order = patch.sortOrder;
     const { data, error } = await supabaseAdmin.from("legacy_brands").update(dbPatch).eq("id", brandId).select().single();
     if (error) throw error;
-    return data;
+    return normalizeBrandRow(data);
   }
 
   const row = memoryDb.legacyBrands.find(b => b.id === brandId);
