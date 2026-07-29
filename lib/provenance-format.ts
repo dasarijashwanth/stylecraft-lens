@@ -17,6 +17,25 @@ export function formatRetrievedAt(iso: string | null | undefined): string {
   return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+// A review's own date (lib/rainforest.ts's AmazonReview.date, always a
+// canonical "YYYY-MM-DD" string or null by the time it reaches here) —
+// never a timestamp with time-of-day, never a raw source phrase. Returns
+// null (never a placeholder string) on missing/unparseable input, so a
+// caller can render nothing rather than "time unknown" for a genuinely
+// dateless quote.
+export function formatReviewDate(date: string | null | undefined): string | null {
+  if (!date) return null;
+  // A plain "YYYY-MM-DD" string must be parsed as a LOCAL calendar date,
+  // not UTC midnight — `new Date("2026-07-24")` parses as
+  // 2026-07-24T00:00:00.000Z, which renders as Jul 23 in any negative-UTC-
+  // offset timezone. Construct the Date from its Y/M/D components
+  // directly so the displayed date never shifts by a day.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const d = ymd ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])) : new Date(date);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 export function domainOf(url: string | null | undefined): string {
   if (!url) return "";
   try {

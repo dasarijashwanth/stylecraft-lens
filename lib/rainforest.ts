@@ -116,8 +116,45 @@ export interface AmazonReview {
   title: string;
   body: string;
   rating: number | null;
+  // Always a canonical ISO date-only string ("2026-06-12") or null — never
+  // a raw timestamp with time-of-day, and never the "Reviewed in {country}
+  // on {date}" phrase Rainforest's `date.raw` carries. See
+  // parseRainforestReviewDate below — this is the single point where a
+  // review's date is normalized, so nothing downstream ever has to guess
+  // at format.
   date: string | null;
   verifiedPurchase: boolean;
+}
+
+// Rainforest returns review dates as `{ utc: "2026-07-24T00:00:00.000Z",
+// raw: "Reviewed in the United States on July 24, 2026" }`. Every review
+// date in this app is normalized through here at ingestion time, so
+// nothing downstream (the AI prompt, the UI, exports) ever sees an ISO
+// timestamp or the raw "Reviewed in..." phrase. Tolerant of that phrase
+// appearing more than once in a single string (a duplicated/concatenated
+// value) — the regex only ever captures the first match.
+const REVIEWED_IN_RE = /reviewed in\s+(?:the\s+)?([a-z .,'-]+?)\s+on\s+([a-z]+\.?\s+\d{1,2},?\s*\d{4})/i;
+
+export function parseRainforestReviewDate(raw: { utc?: string | null; raw?: string | null } | null | undefined): { date: string | null; country: string | null } {
+  if (!raw) return { date: null, country: null };
+
+  if (raw.utc) {
+    const d = new Date(raw.utc);
+    if (!isNaN(d.getTime())) return { date: d.toISOString().slice(0, 10), country: null };
+  }
+
+  if (raw.raw) {
+    const m = REVIEWED_IN_RE.exec(raw.raw);
+    if (m) {
+      const d = new Date(m[2]);
+      if (!isNaN(d.getTime())) return { date: d.toISOString().slice(0, 10), country: m[1].trim() || null };
+    }
+    // Not the "Reviewed in..." phrase — maybe it's already a plain date.
+    const d = new Date(raw.raw);
+    if (!isNaN(d.getTime()) && /\d{4}/.test(raw.raw)) return { date: d.toISOString().slice(0, 10), country: null };
+  }
+
+  return { date: null, country: null };
 }
 
 // Tri-state result for review fetches — distinguishes "the request itself
@@ -352,7 +389,7 @@ async function fetchAmazonProduct(cleanAsin: string): Promise<RainforestProduct 
             title: r.title || "",
             body: r.body || "",
             rating: r.rating ?? null,
-            date: r.date?.utc || r.date?.raw || null,
+            date: parseRainforestReviewDate(r.date).date,
             verified_purchase: !!r.verified_purchase,
           }))
         : [],
@@ -658,7 +695,7 @@ async function fetchReviewsPage(cleanAsin: string, page: number, reviewStars?: s
       title: r.title || "",
       body: r.body || "",
       rating: r.rating ?? null,
-      date: r.date?.utc || r.date?.raw || null,
+      date: parseRainforestReviewDate(r.date).date,
       verifiedPurchase: !!r.verified_purchase,
     })).filter((r: AmazonReview) => r.body.trim().length > 0);
 

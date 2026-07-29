@@ -43,6 +43,12 @@ export type ReviewSourceType = "customer_reviews" | "amazon_listing" | "expert_r
 export interface ReviewEvidence {
   quote: string;
   date: string | null;
+  // Set only when the quote's original language wasn't the app's display
+  // language (lib/amazon-review-analysis.ts's checkQuoteQuality) — quote
+  // itself stays the real verbatim original text; translation is shown
+  // alongside it, never in place of it.
+  translated?: boolean;
+  translation?: string | null;
 }
 
 export interface ReviewTheme {
@@ -130,10 +136,29 @@ function normalizeWhitespace(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function quoteAppearsInReviews(quote: string, reviews: AmazonReview[]): boolean {
+// Amazon-style review pages/snippets often carry a "Reviewed in {country}
+// on {date}" boilerplate line right next to the review body, and the AI
+// occasionally echoes it (sometimes duplicated) into a quoted fragment —
+// the stored quote must contain ONLY the reviewer's own words. Strips that
+// phrase plus any raw ISO timestamp, tolerant of either appearing more
+// than once in the same string.
+const REVIEWED_IN_BOILERPLATE_RE = /reviewed in\s+(?:the\s+)?[a-z .,'-]+?\s+on\s+[a-z]+\.?\s+\d{1,2},?\s*\d{4}/gi;
+const ISO_TIMESTAMP_RE = /\d{4}-\d{2}-\d{2}T[\d:.]+Z/g;
+
+function stripDateArtifacts(text: string): string {
+  return text.replace(REVIEWED_IN_BOILERPLATE_RE, "").replace(ISO_TIMESTAMP_RE, "").replace(/\s{2,}/g, " ").trim();
+}
+
+// Finds the actual source review a quote came from — used instead of a
+// plain boolean check so the evidence's `date` can be taken directly from
+// OUR OWN normalized AmazonReview.date, never from whatever the AI echoed
+// into its own `date` field (which was the root cause of raw ISO
+// timestamps and raw/duplicated "Reviewed in..." strings reaching the UI —
+// that field receives no other validation, unlike quote text).
+function findMatchingReview(quote: string, reviews: AmazonReview[]): AmazonReview | null {
   const needle = normalizeWhitespace(quote);
-  if (needle.length < 8) return false; // too short to be a meaningful citation
-  return reviews.some(r => normalizeWhitespace(`${r.title} ${r.body}`).includes(needle));
+  if (needle.length < 8) return null; // too short to be a meaningful citation
+  return reviews.find(r => normalizeWhitespace(`${r.title} ${r.body}`).includes(needle)) ?? null;
 }
 
 // Shared by the Rainforest-reviews tier (A) and the product-listing
@@ -150,11 +175,13 @@ export function verifyThemes(
   const out: ReviewTheme[] = [];
   for (const t of themes) {
     if (!t?.theme || !Array.isArray(t.evidence)) continue;
-    const verifiedEvidence = t.evidence.filter((e: any) => e?.quote && quoteAppearsInReviews(e.quote, sourceReviews));
+    const verifiedEvidence = (t.evidence as any[])
+      .map(e => (e?.quote ? { cleanQuote: stripDateArtifacts(e.quote), match: findMatchingReview(stripDateArtifacts(e.quote), sourceReviews) } : null))
+      .filter((e): e is { cleanQuote: string; match: AmazonReview } => !!e?.match);
     if (verifiedEvidence.length >= MIN_EVIDENCE_PER_THEME) {
       out.push({
         theme: t.theme,
-        evidence: verifiedEvidence.map((e: any) => ({ quote: e.quote, date: e.date ?? null })),
+        evidence: verifiedEvidence.map(e => ({ quote: e.cleanQuote, date: e.match.date ?? null })),
         sourceType,
       });
     } else if (rejected) {
@@ -294,6 +321,79 @@ async function fetchAmazonReviewSets(asin: string, referenceDate: Date, includeS
 // timeout — bumped alongside the text-window increase above.
 const WEB_REVIEW_TIMEOUT_MS = 35_000;
 
+// FIX 3 (quote quality): ONE batched AI call per analyzeReviews invocation
+// — never one call per quote — that does two things at once: (1) flags a
+// non-English quote and supplies a bracketed translation, sorting
+// English-language evidence first within each theme (CompetitorCard.tsx
+// only ever displays the first 2, so this is how "prefer the display
+// language when enough real evidence exists" actually takes effect); (2)
+// catches a quote whose own sentiment directly contradicts the section
+// it's filed under (a genuine weight complaint filed as evidence for a
+// "Premium build" STRENGTH) and drops it — a theme that falls below
+// MIN_EVIDENCE_PER_THEME after dropping is dropped entirely, same rule
+// verifyThemes already applies at selection time. Fails open: no OpenAI
+// key, an empty input, or any call error leaves strengths/weaknesses
+// completely untouched — this is a quality refinement, never a blocker.
+async function checkQuoteQuality(strengths: ReviewTheme[], weaknesses: ReviewTheme[]): Promise<{ strengths: ReviewTheme[]; weaknesses: ReviewTheme[] }> {
+  type Loc = { section: "strengths" | "weaknesses"; themeIdx: number; evidenceIdx: number };
+  const locs: Loc[] = [];
+  const quotes: string[] = [];
+  strengths.forEach((t, ti) => t.evidence.forEach((e, ei) => { locs.push({ section: "strengths", themeIdx: ti, evidenceIdx: ei }); quotes.push(e.quote); }));
+  weaknesses.forEach((t, ti) => t.evidence.forEach((e, ei) => { locs.push({ section: "weaknesses", themeIdx: ti, evidenceIdx: ei }); quotes.push(e.quote); }));
+
+  if (quotes.length === 0 || !hasOpenAIKey) return { strengths, weaknesses };
+
+  const systemPrompt = `For each numbered review quote below, report whether it's already in English, an English translation (only if not English, else null), and the sentiment the REVIEWER is expressing in their own words. Judge sentiment from the quote's own words only — no outside knowledge.
+
+Return ONLY valid JSON, no markdown, one entry per quote in order:
+{ "items": [{ "index": 0, "isEnglish": true, "translation": null, "sentiment": "positive" }] }
+"sentiment" must be exactly "positive", "negative", or "neutral".`;
+  const userPrompt = quotes.map((q, i) => `[${i}] "${q}"`).join("\n");
+
+  let raw: { items?: { index: number; isEnglish?: boolean; translation?: string | null; sentiment?: string }[] } | null = null;
+  try {
+    raw = await callOpenAiForJson(systemPrompt, userPrompt, "review quote quality check", { timeoutMs: 12_000, effort: "low" });
+  } catch {
+    raw = null;
+  }
+  if (!raw || !Array.isArray(raw.items)) return { strengths, weaknesses };
+
+  const byIndex = new Map(raw.items.map(it => [it.index, it]));
+  const strengthsCopy = strengths.map(t => ({ ...t, evidence: t.evidence.map(e => ({ ...e })) }));
+  const weaknessesCopy = weaknesses.map(t => ({ ...t, evidence: t.evidence.map(e => ({ ...e })) }));
+  const dropSlots = new Set<string>();
+
+  locs.forEach((loc, i) => {
+    const verdict = byIndex.get(i);
+    if (!verdict) return;
+    const target = (loc.section === "strengths" ? strengthsCopy : weaknessesCopy)[loc.themeIdx];
+    const evidence = target?.evidence[loc.evidenceIdx];
+    if (!evidence) return;
+
+    const expectedPositive = loc.section === "strengths";
+    const contradicts = (expectedPositive && verdict.sentiment === "negative") || (!expectedPositive && verdict.sentiment === "positive");
+    if (contradicts) {
+      dropSlots.add(`${loc.section}:${loc.themeIdx}:${loc.evidenceIdx}`);
+      return;
+    }
+    if (verdict.isEnglish === false && verdict.translation) {
+      evidence.translated = true;
+      evidence.translation = verdict.translation;
+    }
+  });
+
+  const finalize = (themes: ReviewTheme[], section: "strengths" | "weaknesses"): ReviewTheme[] =>
+    themes
+      .map((t, ti) => {
+        const kept = t.evidence.filter((_, ei) => !dropSlots.has(`${section}:${ti}:${ei}`));
+        const sorted = [...kept].sort((a, b) => (a.translated ? 1 : 0) - (b.translated ? 1 : 0));
+        return { ...t, evidence: sorted };
+      })
+      .filter(t => t.evidence.length >= MIN_EVIDENCE_PER_THEME);
+
+  return { strengths: finalize(strengthsCopy, "strengths"), weaknesses: finalize(weaknessesCopy, "weaknesses") };
+}
+
 async function resolveWebReviewThemes(productName: string, requiredToolType?: ToolType | null): Promise<{
   strengths: ReviewTheme[];
   weaknesses: ReviewTheme[];
@@ -365,9 +465,11 @@ Return ONLY valid JSON: { "strengths": [{ "theme": "...", "evidence": [{ "quote"
       const out: ReviewTheme[] = [];
       for (const t of themes) {
         if (!t?.theme || !Array.isArray(t.evidence)) continue;
-        const verifiedEvidence = t.evidence.filter((e: any) => e?.quote && quoteAppearsInText(e.quote, [text]));
+        const verifiedEvidence = (t.evidence as any[])
+          .map(e => (e?.quote ? stripDateArtifacts(e.quote) : null))
+          .filter((q): q is string => !!q && quoteAppearsInText(q, [text]));
         if (verifiedEvidence.length >= MIN_EVIDENCE_PER_THEME) {
-          out.push({ theme: t.theme, evidence: verifiedEvidence.map((e: any) => ({ quote: e.quote, date: null })), sourceType, sourceUrl: url });
+          out.push({ theme: t.theme, evidence: verifiedEvidence.map(q => ({ quote: q, date: null })), sourceType, sourceUrl: url });
         }
       }
       return out;
@@ -536,6 +638,12 @@ export async function analyzeReviews(
     forumCount = web.forumCount;
     tierCQueries = web.queries;
   }
+
+  // FIX 3: sentiment-agreement + translation check, once per analysis —
+  // may drop a mismatched quote (or an entire theme that falls below the
+  // minimum afterward), so this must run before the totals/gates below are
+  // computed from the final strengths/weaknesses.
+  ({ strengths, weaknesses } = await checkQuoteQuality(strengths, weaknesses));
 
   const tierExpert: TierResult = {
     tier: "Expert reviews",

@@ -10,7 +10,8 @@ import { CitationMarker, SourcesFootnoteList, useCitationNumbering } from "./Cit
 import { enqueue } from "@/lib/fetch-queue";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { SectionSourceLine, SourceUnavailableCaption } from "./SectionSourceLine";
-import { assertProvenance, domainOf } from "@/lib/provenance-format";
+import { assertProvenance, domainOf, formatReviewDate } from "@/lib/provenance-format";
+import type { ReviewEvidence } from "@/lib/amazon-review-analysis";
 
 interface Competitor {
   name:               string;
@@ -227,6 +228,34 @@ function reviewThemeSourceLabel(theme: { sourceType: string; sourceUrl?: string 
   if (theme.sourceType === "expert_review") return `expert review${theme.sourceUrl ? ` (${domainOf(theme.sourceUrl)})` : ""}`;
   if (theme.sourceType === "forum") return `forum${theme.sourceUrl ? ` (${domainOf(theme.sourceUrl)})` : ""}`;
   return theme.sourceType;
+}
+
+const QUOTE_DISPLAY_MAX_CHARS = 120;
+
+// Display-only truncation at a word boundary — never touches the stored
+// verbatim quote used for citation/verification, only what's rendered.
+function truncateAtWord(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
+// One shared renderer for a single evidence quote — used by Strengths,
+// Weaknesses, and Recent Buyer Sentiment so all three stay in sync: clean
+// "Mon D, YYYY" dates (never an ISO timestamp or a raw source phrase, see
+// lib/rainforest.ts's parseRainforestReviewDate), no date at all when none
+// is known, a bracketed translation for a non-English quote, and a
+// word-boundary-truncated display string that never alters the real quote.
+function EvidenceQuote({ evidence }: { evidence: ReviewEvidence }) {
+  const displayDate = formatReviewDate(evidence.date);
+  return (
+    <p className="pl-2 text-[10px] text-text-muted italic">
+      &ldquo;{truncateAtWord(evidence.quote, QUOTE_DISPLAY_MAX_CHARS)}&rdquo;
+      {evidence.translated && evidence.translation && <> [&ldquo;{truncateAtWord(evidence.translation, QUOTE_DISPLAY_MAX_CHARS)}&rdquo;]</>}
+      {displayDate && ` — ${displayDate}`}
+    </p>
+  );
 }
 
 function ListingStatsCaption({ stats }: { stats: ListingStats }) {
@@ -678,9 +707,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
                       <CitationMarker source={sourceFor(strengthsCitations, s.sourceUrl, reviewSourceLabel(s.sourceType) || s.evidence[0]?.quote?.slice(0, 40) || "Source", s.evidence[0]?.quote || "", reviewAnalysis.data.retrievedAt)} />
                       <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(s)}]</span>
                     </p>
-                    {s.evidence.slice(0, 2).map((e, i) => (
-                      <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
-                    ))}
+                    {s.evidence.slice(0, 2).map((e, i) => <EvidenceQuote key={i} evidence={e} />)}
                   </div>
                 ))}
                 <p className="text-[9px] text-text-muted pt-1">
@@ -745,9 +772,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
                         <CitationMarker source={sourceFor(weaknessesCitations, w.sourceUrl, reviewSourceLabel(w.sourceType) || w.evidence[0]?.quote?.slice(0, 40) || "Source", w.evidence[0]?.quote || "", reviewAnalysis.data.retrievedAt)} />
                         <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(w)}]</span>
                       </p>
-                      {w.evidence.slice(0, 2).map((e, i) => (
-                        <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
-                      ))}
+                      {w.evidence.slice(0, 2).map((e, i) => <EvidenceQuote key={i} evidence={e} />)}
                     </div>
                   ))}
                 </div>
@@ -775,9 +800,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
                               {t.theme}
                               <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(t)}]</span>
                             </p>
-                            {t.evidence.slice(0, 2).map((e, i) => (
-                              <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
-                            ))}
+                            {t.evidence.slice(0, 2).map((e, i) => <EvidenceQuote key={i} evidence={e} />)}
                           </div>
                         ))}
                       </>
