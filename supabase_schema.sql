@@ -860,12 +860,18 @@ ALTER TABLE motor_tech_search_misses ENABLE ROW LEVEL SECURITY;
 -- today's behavior.
 ALTER TABLE legacy_brands ADD COLUMN IF NOT EXISTS official_domains TEXT[] DEFAULT '{}'::text[];
 
--- 23. FEATURE FLAGS — Recent Buyer Sentiment & News Updates disabled
--- (config-driven, reversible, same precedent as Section 20's TDS flag).
--- Reuses the existing feature_flags table — no new table/column needed.
+-- 23. FEATURE FLAGS — Recent Buyer Sentiment & News Updates disabled BY
+-- DEFAULT (config-driven, reversible — same mechanism as Section 20's TDS
+-- flag, but these two default OFF since the whole point is to remove the
+-- sections, not just make them toggleable). Reuses the existing
+-- feature_flags table — no new table/column needed. If you already ran an
+-- earlier version of this section that inserted these rows as `true`, run
+-- this once by hand to correct them (ON CONFLICT DO NOTHING won't touch an
+-- existing row):
+--   UPDATE feature_flags SET enabled = false WHERE flag_name IN ('buyer_sentiment_enabled', 'news_updates_enabled');
 INSERT INTO feature_flags (flag_name, enabled) VALUES
-    ('buyer_sentiment_enabled', true),
-    ('news_updates_enabled', true)
+    ('buyer_sentiment_enabled', false),
+    ('news_updates_enabled', false)
 ON CONFLICT (flag_name) DO NOTHING;
 
 -- The one existing FAQ entry mentioning Buyer Sentiment was split in

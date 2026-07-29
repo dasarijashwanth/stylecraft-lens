@@ -1314,6 +1314,100 @@ export async function resolveDiscoveryTargetPrice(context: AnalysisContext, iden
   return null;
 }
 
+interface Phase2ResolvedContext {
+  targetPriceRaw: number;
+  registryBrandTokens: Set<string> | null;
+  brandHintOverride: string[] | undefined;
+  motorFamilies: any;
+  ourMotor: any;
+  ourMotorLabel: string | null;
+  weights: any;
+  ourSpecs: any;
+  ourLineupPercentile: number;
+}
+
+type Phase2ContextResult =
+  | { ok: true; ctx: Phase2ResolvedContext }
+  | { ok: false; pendingQuestion: { question: string; field: string; placeholder: string } };
+
+// Shared by Phase 2a (AI discovery) and Phase 2b (Rainforest enrichment +
+// indie lineups + scoring — see the split in runAnalysisStep below). Every
+// value here is a cheap Supabase read or pure computation (same "cheap
+// re-read, not a second pause opportunity" precedent this phase already
+// established for re-resolving Phase 1's own price/motor context), so
+// re-running this once per sub-step is simpler and safer than threading
+// intermediate state through the phase2_result JSONB checkpoint.
+async function resolvePhase2Context(context: AnalysisContext, identityCard: IdentityCard): Promise<Phase2ContextResult> {
+  const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identityCard);
+  if (targetPriceRaw == null) {
+    return {
+      ok: false,
+      pendingQuestion: {
+        question: `What price are you targeting for ${context.productName}? (e.g. $259.95)`,
+        field: "pricePoint",
+        placeholder: "e.g. $259.95",
+      },
+    };
+  }
+
+  // Same registry category as Phase 1 (re-resolved fresh — cheap, and
+  // consistent with the "cheap re-read" precedent above). When a registry
+  // match exists, its brand names+aliases become the exclude-hint in place
+  // of the static getKnownBrandsHint list, AND registry brands are hard-
+  // filtered out of the results below — a real guarantee, not just a
+  // prompt-level request the model could ignore.
+  const registry = await resolveLegacyBrandsForIdentity(identityCard);
+  const registryBrandTokens = registry
+    ? new Set(registry.brands.flatMap(b => [b.brand_name, ...b.aliases].map(normalizeBrandToken)))
+    : null;
+  const brandHintOverride = registry ? registry.brands.flatMap(b => [b.brand_name, ...b.aliases]) : undefined;
+
+  // Same motor resolution as Phase 1 (cheap re-read — already resolved
+  // once, or already in context.motorTech from that phase's own pause).
+  const motorFamilies = await listMotorFamilies();
+  const motorRequired = isMotorizedCategory(identityCard);
+  const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
+  if (motorRequired && !ourMotor) {
+    return {
+      ok: false,
+      pendingQuestion: {
+        question: `What motor technology does ${context.productName} use? (e.g. "brushless rotary", "magnetic/vector", "pivot")`,
+        field: "motorType",
+        placeholder: "e.g. brushless rotary",
+      },
+    };
+  }
+  const ourMotorLabel = formatMotorLabel(ourMotor);
+  const weights = await getMatchingWeights();
+  const ourSpecs = context.projectId
+    ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
+    : extractOurSpecsFromTds(null);
+
+  // Relative pricing (Part 4) needs to know where OUR product sits in OUR
+  // OWN lineup — resolved lazily here (indie-only), not in Phase 1, since a
+  // legacy-only analysis never needs this. Real StyleCraft catalog match
+  // first; a one-field pause-and-ask ("flagship/mid/entry?") only when the
+  // product isn't a recognized catalog entry.
+  let ourLineupPercentile: number | null = null;
+  const lineupPosition = resolveOurLineupTier(context.productName);
+  if (lineupPosition) {
+    ourLineupPercentile = lineupPosition.percentile;
+  } else if (context.lineupTier) {
+    ourLineupPercentile = percentileForManualTier(context.lineupTier);
+  } else {
+    return {
+      ok: false,
+      pendingQuestion: {
+        question: `Is ${context.productName} your premium/flagship model, a mid-tier model, or an entry-level model?`,
+        field: "lineupTier",
+        placeholder: "flagship, mid, or entry",
+      },
+    };
+  }
+
+  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
+}
+
 export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepResult> {
   const startTime = Date.now();
   const record: any = await getAnalysis(analysisId);
@@ -1671,88 +1765,60 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // ----------------------------------------------------
       // PHASE 2: EMERGING-COMPETITOR DISCOVERY
       // ----------------------------------------------------
+      // Split into 2a (AI discovery) / 2b (Rainforest enrichment + indie
+      // brand lineups + composite scoring) for the same reason Phase 3 was
+      // split (commit e487c60): the AI discovery call alone is documented
+      // elsewhere in this file as taking 20-46s on a normal run (see Phase
+      // 1's own OpenAI web-search latency comment), and
+      // enrichCompetitorsWithRainforest + buildIndieBrandLineups then stack
+      // TWO more un-timeboxed rounds of Rainforest calls sequentially after
+      // it — routinely exceeding Vercel's 60s cap ("Connection dropped" /
+      // "Server took too long to respond" for the user, mid-request,
+      // confirmed happening repeatedly in production). record.phase stays
+      // "2" across both sub-steps (an internal __phase2Stage marker inside
+      // phase2_result distinguishes them, mirroring phase 3/4's own
+      // __phase3Stage pattern) — no client change needed, since
+      // ProgressPanel's generic "call /continue again while status is
+      // running" loop already tolerates the same phase number recurring
+      // (it already does this for phase 4's own 3b/3c split).
       if (!identityCard) throw new Error("Missing product identity — cannot run competitor discovery");
 
-      // Already resolved once during Phase 1 (and, if it required a pause,
-      // the user's answer is now in context.pricePoint) — re-resolving here
-      // is just a cheap re-read, not a second pause opportunity.
-      const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identityCard);
-      if (targetPriceRaw == null) {
-        const question = {
-          question: `What price are you targeting for ${context.productName}? (e.g. $259.95)`,
-          field: "pricePoint",
-          placeholder: "e.g. $259.95",
-        };
-        await setPendingQuestion(analysisId, question);
-        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      const resolved = await resolvePhase2Context(context, identityCard);
+      if (!resolved.ok) {
+        await setPendingQuestion(analysisId, resolved.pendingQuestion);
+        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: resolved.pendingQuestion };
+      }
+      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
+
+      if (record.phase2_result?.__phase2Stage !== "discovered") {
+        // ----------------------------------------------------
+        // PHASE 2a: EMERGING-COMPETITOR AI DISCOVERY
+        // ----------------------------------------------------
+        const result: any = await withAiFallback(
+          "Phase 2",
+          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
+          () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
+          startTime
+        );
+
+        result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
+        if (registryBrandTokens) {
+          result.competitors = result.competitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
+        }
+        webSearchCount += result.web_searches_performed || 0;
+        result.__phase2Stage = "discovered";
+
+        await updateAnalysisPhase(analysisId, 2, "phase2_result", result, webSearchCount);
+        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: webSearchCount };
       }
 
-      // Same registry category as Phase 1 (re-resolved fresh — cheap, and
-      // consistent with resolveDiscoveryTargetPrice's "cheap re-read, not a
-      // second pause opportunity" precedent above). When a registry match
-      // exists, its brand names+aliases become the exclude-hint in place of
-      // the static getKnownBrandsHint list, AND registry brands are hard-
-      // filtered out of the results below — a real guarantee, not just a
-      // prompt-level request the model could ignore.
-      const registry = await resolveLegacyBrandsForIdentity(identityCard);
-      const registryBrandTokens = registry
-        ? new Set(registry.brands.flatMap(b => [b.brand_name, ...b.aliases].map(normalizeBrandToken)))
-        : null;
-      const brandHintOverride = registry ? registry.brands.flatMap(b => [b.brand_name, ...b.aliases]) : undefined;
+      // ----------------------------------------------------
+      // PHASE 2b: RAINFOREST ENRICHMENT + INDIE LINEUPS + SCORING
+      // ----------------------------------------------------
+      const result: any = record.phase2_result;
+      delete result.__phase2Stage;
 
-      // Same motor resolution as Phase 1 (cheap re-read — already resolved
-      // once, or already in context.motorTech from that phase's own pause).
-      const motorFamilies = await listMotorFamilies();
-      const motorRequired = isMotorizedCategory(identityCard);
-      const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
-      if (motorRequired && !ourMotor) {
-        const question = {
-          question: `What motor technology does ${context.productName} use? (e.g. "brushless rotary", "magnetic/vector", "pivot")`,
-          field: "motorType",
-          placeholder: "e.g. brushless rotary",
-        };
-        await setPendingQuestion(analysisId, question);
-        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
-      }
-      const ourMotorLabel = formatMotorLabel(ourMotor);
-      const weights = await getMatchingWeights();
-      const ourSpecs = context.projectId
-        ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
-        : extractOurSpecsFromTds(null);
-
-      // Relative pricing (Part 4) needs to know where OUR product sits in
-      // OUR OWN lineup — resolved lazily here (indie-only), not in Phase 1,
-      // since a legacy-only analysis never needs this. Real StyleCraft
-      // catalog match first; a one-field pause-and-ask ("flagship/mid/
-      // entry?") only when the product isn't a recognized catalog entry.
-      let ourLineupPercentile: number | null = null;
-      const lineupPosition = resolveOurLineupTier(context.productName);
-      if (lineupPosition) {
-        ourLineupPercentile = lineupPosition.percentile;
-      } else if (context.lineupTier) {
-        ourLineupPercentile = percentileForManualTier(context.lineupTier);
-      } else {
-        const question = {
-          question: `Is ${context.productName} your premium/flagship model, a mid-tier model, or an entry-level model?`,
-          field: "lineupTier",
-          placeholder: "flagship, mid, or entry",
-        };
-        await setPendingQuestion(analysisId, question);
-        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
-      }
-
-      const result: any = await withAiFallback(
-        "Phase 2",
-        hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
-        hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
-        () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
-        startTime
-      );
-
-      result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
-      if (registryBrandTokens) {
-        result.competitors = result.competitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
-      }
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
       }
@@ -1780,7 +1846,6 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       if (hasRainforestKey) {
         await persistPricingProvenance(result.competitors, analysisId);
       }
-      webSearchCount += result.web_searches_performed || 0;
 
       await updateAnalysisPhase(analysisId, 3, "phase2_result", result, webSearchCount);
       return { analysisId, phase: 3, status: "running", stepResult: result, totalSearches: webSearchCount };

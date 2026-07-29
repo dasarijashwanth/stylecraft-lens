@@ -26,6 +26,25 @@ const ENV_DEFAULTS: Record<string, string | undefined> = {
   news_updates_enabled: process.env.NEWS_UPDATES_ENABLED,
 };
 
+// Per-flag fallback used ONLY when no DB row exists for this flag at all
+// (a fresh table, or Section 20/23 not yet run) AND no env override is set.
+// Most flags default to enabled (safe/backward-compatible — the feature
+// already existed before the flag did). buyer_sentiment_enabled/
+// news_updates_enabled are the exception: their whole point was to REMOVE
+// those sections, so they must default to disabled, not just be "toggle-
+// able but still on until someone flips them."
+const DEFAULT_ENABLED: Record<string, boolean> = {
+  tds_enabled: true,
+  buyer_sentiment_enabled: false,
+  news_updates_enabled: false,
+};
+
+function fallbackEnabled(flagName: string): boolean {
+  const envOverride = ENV_DEFAULTS[flagName];
+  if (envOverride != null) return envOverride !== "false";
+  return DEFAULT_ENABLED[flagName] ?? true;
+}
+
 export async function getFeatureFlag(flagName: string): Promise<boolean> {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin.from("feature_flags").select("*").eq("flag_name", flagName).maybeSingle();
@@ -34,11 +53,11 @@ export async function getFeatureFlag(flagName: string): Promise<boolean> {
       // of supabase_schema.sql yet. This must NEVER hard-fail the caller
       // (confirmed live: before this fallback, it broke EVERY project's
       // generation pipeline, not just TDS, since the "snapshot" phase
-      // checks isTdsEnabled() unconditionally) — fall back to the env var
-      // default exactly like the "no row" case below. Any OTHER error
-      // (permissions, connectivity) still throws — this only tolerates the
-      // specific "table doesn't exist yet" condition.
-      if (error.code === "42P01") return ENV_DEFAULTS[flagName] !== "false";
+      // checks isTdsEnabled() unconditionally) — fall back to the same
+      // default as the "no row" case below. Any OTHER error (permissions,
+      // connectivity) still throws — this only tolerates the specific
+      // "table doesn't exist yet" condition.
+      if (error.code === "42P01") return fallbackEnabled(flagName);
       throw error;
     }
     if (data) return data.enabled;
@@ -47,9 +66,8 @@ export async function getFeatureFlag(flagName: string): Promise<boolean> {
     if (row) return row.enabled;
   }
 
-  // No row anywhere — fall back to the env var default (defaults to
-  // enabled unless explicitly set to "false").
-  return ENV_DEFAULTS[flagName] !== "false";
+  // No row anywhere — fall back to this flag's own default.
+  return fallbackEnabled(flagName);
 }
 
 export async function setFeatureFlag(flagName: string, enabled: boolean): Promise<void> {

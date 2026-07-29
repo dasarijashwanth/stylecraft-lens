@@ -76,13 +76,13 @@ async function main() {
   const dbFeatureFlags = await import("../lib/db/feature-flags");
   const reviewAnalysis = await import("../lib/amazon-review-analysis");
 
-  console.log("\n[1] Flags default to enabled with no special setup");
-  assert(await featureFlags.isBuyerSentimentEnabled() === true, "isBuyerSentimentEnabled() defaults to true");
-  assert(await featureFlags.isNewsUpdatesEnabled() === true, "isNewsUpdatesEnabled() defaults to true");
-  await dbFeatureFlags.setFeatureFlag("buyer_sentiment_enabled", false);
-  assert(await featureFlags.isBuyerSentimentEnabled() === false, "isBuyerSentimentEnabled() reflects a disable immediately");
+  console.log("\n[1] Flags default to DISABLED (removed by default) with no special setup, toggleable either way");
+  assert(await featureFlags.isBuyerSentimentEnabled() === false, "isBuyerSentimentEnabled() defaults to false — off by default, not just toggleable");
+  assert(await featureFlags.isNewsUpdatesEnabled() === false, "isNewsUpdatesEnabled() defaults to false — off by default, not just toggleable");
   await dbFeatureFlags.setFeatureFlag("buyer_sentiment_enabled", true);
-  assert(await featureFlags.isBuyerSentimentEnabled() === true, "isBuyerSentimentEnabled() reflects a re-enable immediately (no regeneration needed)");
+  assert(await featureFlags.isBuyerSentimentEnabled() === true, "isBuyerSentimentEnabled() reflects an enable immediately");
+  await dbFeatureFlags.setFeatureFlag("buyer_sentiment_enabled", false);
+  assert(await featureFlags.isBuyerSentimentEnabled() === false, "isBuyerSentimentEnabled() reflects a re-disable immediately (no regeneration needed)");
 
   const FAKE_ASIN = "B0FAKETEST";
 

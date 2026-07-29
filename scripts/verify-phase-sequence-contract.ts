@@ -75,7 +75,8 @@ async function main() {
     const expectedSequence: { phase: number; status: string }[] = [
       { phase: 1, status: "running" },   // Phase 0 (identification) -> Phase 1
       { phase: 2, status: "running" },   // Phase 1 (legacy) -> Phase 2
-      { phase: 3, status: "running" },   // Phase 2 (emerging) -> Phase 3
+      { phase: 2, status: "running" },   // Phase 2a (emerging AI discovery) -> Phase 2b
+      { phase: 3, status: "running" },   // Phase 2b (Rainforest enrichment/lineups/scoring) -> Phase 3
       { phase: 4, status: "running" },   // Phase 3a (synthesis) -> Phase 3b
       { phase: 4, status: "running" },   // Phase 3b (anti-boilerplate) -> Phase 3c
       { phase: 5, status: "complete" },  // Phase 3c (citations/finalize) -> complete
@@ -92,7 +93,7 @@ async function main() {
 
     assert(
       JSON.stringify(actualSequence) === JSON.stringify(expectedSequence),
-      `phase sequence is exactly [1,2,3,4,4,5] with the right statuses (got ${JSON.stringify(actualSequence)})`
+      `phase sequence is exactly [1,2,2,3,4,4,5] with the right statuses (got ${JSON.stringify(actualSequence)})`
     );
 
     const finalRecord = await getAnalysis(analysisId);

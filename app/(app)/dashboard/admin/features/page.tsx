@@ -21,12 +21,12 @@ const FLAG_LABELS: Record<string, { title: string; description: string }> = {
   buyer_sentiment_enabled: {
     title: "Recent Buyer Sentiment",
     description:
-      "Turn off to hide the last-90-days sentiment trend/theme block on competitor cards (Weaknesses stays fully visible) and stop fetching/analyzing recent reviews for it. Existing sentiment data is preserved and reappears immediately if you turn this back on.",
+      "Off by default — the last-90-days sentiment trend/theme block on competitor cards is hidden and the extra review fetch is skipped (Weaknesses stays fully visible either way). Turn on to show it again; existing sentiment data is preserved and reappears immediately, no regeneration needed.",
   },
   news_updates_enabled: {
     title: "News Updates",
     description:
-      "Turn off to hide the News Updates section on competitor cards and stop searching for product news. Existing cached news data is preserved and reappears immediately if you turn this back on.",
+      "Off by default — the News Updates section on competitor cards is hidden and the product-news search is skipped entirely. Turn on to show it again; existing cached news data is preserved and reappears immediately, no regeneration needed.",
   },
 };
 

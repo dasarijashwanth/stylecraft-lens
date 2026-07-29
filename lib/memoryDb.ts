@@ -426,8 +426,8 @@ class MemoryDatabase {
   // above) — real default flag state, not an empty admin table.
   featureFlags: MockFeatureFlag[] = [
     { flagName: "tds_enabled", enabled: true, updatedAt: new Date() },
-    { flagName: "buyer_sentiment_enabled", enabled: true, updatedAt: new Date() },
-    { flagName: "news_updates_enabled", enabled: true, updatedAt: new Date() },
+    { flagName: "buyer_sentiment_enabled", enabled: false, updatedAt: new Date() },
+    { flagName: "news_updates_enabled", enabled: false, updatedAt: new Date() },
   ];
   // Real usage data (Contact Support submissions) — same non-seeded,
   // non-persisted-across-restart precedent as faqVotes/faqSearchMisses.
