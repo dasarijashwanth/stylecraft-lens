@@ -18,6 +18,16 @@ const FLAG_LABELS: Record<string, { title: string; description: string }> = {
     description:
       "Turn off to hide the TDS tab/section, buttons, and FAQ entries everywhere, and stop generating it for new projects. GTM generation is unaffected — its spec fields already fall back to the product snapshot/Amazon data directly. Existing TDS documents are preserved and reappear immediately if you turn this back on.",
   },
+  buyer_sentiment_enabled: {
+    title: "Recent Buyer Sentiment",
+    description:
+      "Turn off to hide the last-90-days sentiment trend/theme block on competitor cards (Weaknesses stays fully visible) and stop fetching/analyzing recent reviews for it. Existing sentiment data is preserved and reappears immediately if you turn this back on.",
+  },
+  news_updates_enabled: {
+    title: "News Updates",
+    description:
+      "Turn off to hide the News Updates section on competitor cards and stop searching for product news. Existing cached news data is preserved and reappears immediately if you turn this back on.",
+  },
 };
 
 export default function AdminFeaturesPage() {

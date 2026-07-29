@@ -22,6 +22,8 @@ export interface FeatureFlagRow {
 // consulted again for that flag.
 const ENV_DEFAULTS: Record<string, string | undefined> = {
   tds_enabled: process.env.TDS_ENABLED,
+  buyer_sentiment_enabled: process.env.BUYER_SENTIMENT_ENABLED,
+  news_updates_enabled: process.env.NEWS_UPDATES_ENABLED,
 };
 
 export async function getFeatureFlag(flagName: string): Promise<boolean> {

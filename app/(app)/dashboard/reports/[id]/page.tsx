@@ -50,6 +50,21 @@ export default function ReportDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [pricingSourceOpen, setPricingSourceOpen] = useState(false);
 
+  // Fetched once and threaded into every CompetitorCard — lib/feature-
+  // flags.ts's isBuyerSentimentEnabled()/isNewsUpdatesEnabled(). Default
+  // true (fail-open) until the fetch resolves.
+  const [buyerSentimentEnabled, setBuyerSentimentEnabled] = useState(true);
+  const [newsUpdatesEnabled, setNewsUpdatesEnabled] = useState(true);
+  useEffect(() => {
+    fetch("/api/features")
+      .then(res => res.json())
+      .then(data => {
+        if (typeof data.buyer_sentiment_enabled === "boolean") setBuyerSentimentEnabled(data.buyer_sentiment_enabled);
+        if (typeof data.news_updates_enabled === "boolean") setNewsUpdatesEnabled(data.news_updates_enabled);
+      })
+      .catch(() => {});
+  }, []);
+
   const fetchReport = async () => {
     try {
       setLoading(true);
@@ -133,7 +148,19 @@ export default function ReportDetailPage() {
     setExporting(true);
     toast.loading("Compiling print layouts…", { id: "pdf-export" });
     try {
-      await downloadReportPDF(report);
+      // Filter out "news"-tagged provenance rows from the export only —
+      // never mutates the displayed `report` state — when News Updates is
+      // disabled. Old saved reports may carry these rows from before the
+      // flag existed; hiding them at export time (not deleting them) means
+      // flipping the flag back on restores the appendix with no re-save.
+      const exportReport = newsUpdatesEnabled ? report : {
+        ...report,
+        competitive_analysis: {
+          ...report.competitive_analysis,
+          section_provenance: (report.competitive_analysis?.section_provenance || []).filter((r: any) => r.section !== "news"),
+        },
+      };
+      await downloadReportPDF(exportReport);
       
       // Update status to EXPORTED
       const res = await fetch(`/api/reports/${id}`, {
@@ -390,10 +417,10 @@ export default function ReportDetailPage() {
               <h3 className="text-sm font-bold text-text-primary">Discovered Competitor Mappings (10 total)</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(ca.large_brand_competitors || []).map((c: any, i: number) => (
-                  <CompetitorCard key={`large_${i}`} competitor={{ ...c, tier: "legacy" }} />
+                  <CompetitorCard key={`large_${i}`} competitor={{ ...c, tier: "legacy" }} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} />
                 ))}
                 {(ca.indie_emerging_competitors || []).map((c: any, i: number) => (
-                  <CompetitorCard key={`indie_${i}`} competitor={{ ...c, tier: "emerging" }} />
+                  <CompetitorCard key={`indie_${i}`} competitor={{ ...c, tier: "emerging" }} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} />
                 ))}
               </div>
             </div>

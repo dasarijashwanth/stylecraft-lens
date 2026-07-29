@@ -7,7 +7,7 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockFaq } from "@/lib/memoryDb";
 import { FAQ_CATEGORIES } from "@/lib/faq-seed-data";
-import { isTdsEnabled } from "@/lib/feature-flags";
+import { isTdsEnabled, isBuyerSentimentEnabled, isNewsUpdatesEnabled } from "@/lib/feature-flags";
 
 export interface FaqRow {
   id: string;
@@ -28,6 +28,8 @@ export interface FaqRow {
 // way lib/feature-flags.ts adds a new named flag function.
 const FEATURE_CHECKS: Record<string, () => Promise<boolean>> = {
   tds: isTdsEnabled,
+  buyer_sentiment: isBuyerSentimentEnabled,
+  news_updates: isNewsUpdatesEnabled,
 };
 
 function categoryRank(category: string): number {

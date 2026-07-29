@@ -211,20 +211,20 @@ function formatReviewBlock(reviews: AmazonReview[]) {
     .join("\n\n");
 }
 
-function buildPrompt(asin: string, productTitle: string, positive: AmazonReview[], negative: AmazonReview[], recent: AmazonReview[]) {
+function buildPrompt(asin: string, productTitle: string, positive: AmazonReview[], negative: AmazonReview[], recent: AmazonReview[], includeSentiment: boolean) {
   const systemPrompt = `You are analyzing real Amazon customer reviews for ASIN ${asin} (${productTitle}). Using ONLY the review texts provided below in each labeled section — no outside knowledge, no assumptions, no web search:
 
 1. STRENGTHS: recurring positive themes from the POSITIVE REVIEWS section. Each strength must cite at least 2 supporting reviews (a short verbatim quote fragment + that review's date).
-2. WEAKNESSES: recurring complaints from the NEGATIVE REVIEWS section. Same citation rule.
-3. RECENT DOMINANT THEMES: recurring themes (positive or negative) specifically from the RECENT REVIEWS (last 90 days) section. Same citation rule — at least 2 supporting reviews per theme.
+2. WEAKNESSES: recurring complaints from the NEGATIVE REVIEWS section. Same citation rule.${includeSentiment ? `
+3. RECENT DOMINANT THEMES: recurring themes (positive or negative) specifically from the RECENT REVIEWS (last 90 days) section. Same citation rule — at least 2 supporting reviews per theme.` : ""}
 
 If a section's reviews do not support a claim, do not make it — return an empty array for that section rather than reaching into a different section's reviews. Every quote you cite must be an exact substring of the review text it's attributed to — do not paraphrase inside the quote field.
 
 Return ONLY valid JSON, no markdown:
 {
   "strengths": [{ "theme": "...", "evidence": [{ "quote": "...", "date": "..." }, { "quote": "...", "date": "..." }] }],
-  "weaknesses": [{ "theme": "...", "evidence": [{ "quote": "...", "date": "..." }, { "quote": "...", "date": "..." }] }],
-  "recentDominantThemes": [{ "theme": "...", "evidence": [{ "quote": "...", "date": "..." }, { "quote": "...", "date": "..." }] }]
+  "weaknesses": [{ "theme": "...", "evidence": [{ "quote": "...", "date": "..." }, { "quote": "...", "date": "..." }] }]${includeSentiment ? `,
+  "recentDominantThemes": [{ "theme": "...", "evidence": [{ "quote": "...", "date": "..." }, { "quote": "...", "date": "..." }] }]` : ""}
 }`;
 
   const userPrompt = `Product: ${productTitle} (ASIN ${asin})
@@ -233,10 +233,10 @@ POSITIVE REVIEWS (4-5 star):
 ${positive.length ? formatReviewBlock(positive) : "(none fetched)"}
 
 NEGATIVE REVIEWS (1-2 star):
-${negative.length ? formatReviewBlock(negative) : "(none fetched)"}
+${negative.length ? formatReviewBlock(negative) : "(none fetched)"}${includeSentiment ? `
 
 RECENT REVIEWS (last 90 days, any rating):
-${recent.length ? formatReviewBlock(recent) : "(none fetched)"}`;
+${recent.length ? formatReviewBlock(recent) : "(none fetched)"}` : ""}`;
 
   return { systemPrompt, userPrompt };
 }
@@ -267,17 +267,20 @@ async function callAi(systemPrompt: string, userPrompt: string): Promise<any> {
 // endpoint is down entirely) doesn't block the others; analyzeReviews works
 // with whatever combination came back, and can tell an error apart from a
 // genuine empty result.
-async function fetchAmazonReviewSets(asin: string, referenceDate: Date): Promise<{
+async function fetchAmazonReviewSets(asin: string, referenceDate: Date, includeSentiment: boolean): Promise<{
   all: ReviewSetResult;
   positive: ReviewSetResult;
   negative: ReviewSetResult;
   recent: ReviewSetResult;
 }> {
+  // The last-90-days pass exists only to feed Recent Buyer Sentiment — when
+  // that's disabled, skip this Rainforest call entirely (real cost/time
+  // savings) rather than fetching it and merely hiding the result.
   const [all, positive, negative, recent] = await Promise.all([
     getAmazonReviews(asin),
     getAmazonReviewsByStars(asin, "four_star,five_star"),
     getAmazonReviewsByStars(asin, "one_star,two_star"),
-    getRecentReviews(asin, referenceDate),
+    includeSentiment ? getRecentReviews(asin, referenceDate) : Promise.resolve({ status: "empty", reviews: [] } as ReviewSetResult),
   ]);
   return { all, positive, negative, recent };
 }
@@ -389,17 +392,34 @@ Return ONLY valid JSON: { "strengths": [{ "theme": "...", "evidence": [{ "quote"
   return { strengths, weaknesses, expertReviewCount, forumCount, queries };
 }
 
+// Masks recentSentiment in a RESPONSE only — never mutates the object
+// passed in (so the caller's cached/stored copy stays untouched). Used by
+// the reviews-analysis route on both the cache-hit and fresh-compute paths
+// so old cached rows (with real sentiment from before the flag existed)
+// reappear immediately when the flag is flipped back on, with zero
+// regeneration.
+export function maskSentimentForResponse<T extends { recentSentiment: RecentSentiment | null }>(analysis: T, sentimentEnabled: boolean): T {
+  if (sentimentEnabled) return analysis;
+  return { ...analysis, recentSentiment: null };
+}
+
 export async function analyzeReviews(
   asin: string,
   productTitle: string,
   referenceDate: Date = new Date(),
   product?: RainforestProduct | null,
-  requiredToolType?: ToolType | null
+  requiredToolType?: ToolType | null,
+  opts?: { includeSentiment?: boolean }
 ): Promise<ReviewAnalysis> {
   const asinValid = /^[A-Z0-9]{10}$/i.test(asin || "");
+  const includeSentiment = opts?.includeSentiment !== false;
+
+  if (!includeSentiment) {
+    logCall("review-tier", { op: "sentiment-skip", outcome: "ok", errorMessage: "disabled via feature flag", elapsedMs: 0 });
+  }
 
   // ---- Tier A: Rainforest full reviews endpoint (multi-pass) ----
-  const { all, positive, negative, recent } = await fetchAmazonReviewSets(asin, referenceDate);
+  const { all, positive, negative, recent } = await fetchAmazonReviewSets(asin, referenceDate, includeSentiment);
   const amazonOutcome: ReviewSetResult = combineFetchResults([all, positive, negative, recent]);
   const combined = dedupeReviews([...all.reviews, ...positive.reviews, ...negative.reviews, ...recent.reviews]);
   const dateRange = computeDateRange(combined);
@@ -418,21 +438,7 @@ export async function analyzeReviews(
   const tierARejected = { count: 0, reasons: [] as string[] };
 
   if (amazonSufficient) {
-    // Prior-period average — everything NOT in the last-90-days set — lets
-    // the trend badge below be a real, code-computed comparison rather
-    // than an AI guess at whether sentiment is "improving".
-    const recentKeys = new Set(recent.reviews.map(r => `${r.date}|${normalizeWhitespace(r.title)}`));
-    const priorReviews = combined.filter(r => !recentKeys.has(`${r.date}|${normalizeWhitespace(r.title)}`));
-    const recentAvg = avgRating(recent.reviews);
-    const priorAvg = avgRating(priorReviews);
-
-    let trend: RecentSentiment["trend"] = "unknown";
-    if (recentAvg !== null && priorAvg !== null) {
-      const delta = recentAvg - priorAvg;
-      trend = Math.abs(delta) < RATING_TREND_EPSILON ? "stable" : delta > 0 ? "improving" : "declining";
-    }
-
-    const { systemPrompt, userPrompt } = buildPrompt(asin, productTitle, positive.reviews, negative.reviews, recent.reviews);
+    const { systemPrompt, userPrompt } = buildPrompt(asin, productTitle, positive.reviews, negative.reviews, recent.reviews, includeSentiment);
     const raw = await callAi(systemPrompt, userPrompt);
 
     if (!raw) {
@@ -440,15 +446,25 @@ export async function analyzeReviews(
     } else {
       strengths = verifyThemes(raw.strengths, positive.reviews.length ? positive.reviews : combined, "customer_reviews", tierARejected);
       weaknesses = verifyThemes(raw.weaknesses, negative.reviews.length ? negative.reviews : combined, "customer_reviews", tierARejected);
-      const dominantThemes = verifyThemes(raw.recentDominantThemes, recent.reviews.length ? recent.reviews : combined, "customer_reviews", tierARejected);
 
-      recentSentiment = recent.reviews.length > 0 ? {
-        reviewCount: recent.reviews.length,
-        avgRating: recentAvg,
-        priorAvgRating: priorAvg,
-        trend,
-        dominantThemes,
-      } : null;
+      if (includeSentiment && recent.reviews.length > 0) {
+        // Prior-period average — everything NOT in the last-90-days set —
+        // lets the trend badge below be a real, code-computed comparison
+        // rather than an AI guess at whether sentiment is "improving".
+        const recentKeys = new Set(recent.reviews.map(r => `${r.date}|${normalizeWhitespace(r.title)}`));
+        const priorReviews = combined.filter(r => !recentKeys.has(`${r.date}|${normalizeWhitespace(r.title)}`));
+        const recentAvg = avgRating(recent.reviews);
+        const priorAvg = avgRating(priorReviews);
+
+        let trend: RecentSentiment["trend"] = "unknown";
+        if (recentAvg !== null && priorAvg !== null) {
+          const delta = recentAvg - priorAvg;
+          trend = Math.abs(delta) < RATING_TREND_EPSILON ? "stable" : delta > 0 ? "improving" : "declining";
+        }
+
+        const dominantThemes = verifyThemes(raw.recentDominantThemes, recent.reviews.length ? recent.reviews : combined, "customer_reviews", tierARejected);
+        recentSentiment = { reviewCount: recent.reviews.length, avgRating: recentAvg, priorAvgRating: priorAvg, trend, dominantThemes };
+      }
     }
     tierAOutcome = (strengths.length + weaknesses.length) > 0 ? "success" : "empty";
   }
@@ -485,7 +501,7 @@ export async function analyzeReviews(
     if (tierBReviews.length > 0) {
       const positiveTB = tierBReviews.filter(r => (r.rating ?? 0) >= 4);
       const negativeTB = tierBReviews.filter(r => (r.rating ?? 0) <= 2);
-      const { systemPrompt, userPrompt } = buildPrompt(product.asin, productTitle, positiveTB, negativeTB, []);
+      const { systemPrompt, userPrompt } = buildPrompt(product.asin, productTitle, positiveTB, negativeTB, [], false);
       const raw = await callAi(systemPrompt, userPrompt);
       if (!raw) {
         anyAiUnavailable = true;

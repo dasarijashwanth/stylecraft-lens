@@ -5,6 +5,8 @@ import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
+import { isNewsUpdatesEnabled } from "@/lib/feature-flags";
+import { logCall } from "@/lib/obs";
 import type { ToolType } from "@/lib/tool-type-taxonomy";
 
 // Duplicated deliberately (matches app/api/amazon/reviews-analysis/[asin]/
@@ -85,6 +87,16 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     // middleware.ts already blocks anonymous /api/** requests; this is
     // defense-in-depth consistency with the rest of the codebase.
     await getAuthSession();
+
+    // Defense-in-depth: components/analyze/CompetitorCard.tsx already
+    // doesn't call this route at all when the flag is off — this guard
+    // only matters for a direct/stale request, and skips the real cost
+    // (findProductNews's OpenAI web_search call) entirely rather than
+    // fetching and hiding the result.
+    if (!(await isNewsUpdatesEnabled())) {
+      logCall("review-tier", { op: "news-skip", outcome: "ok", errorMessage: "disabled via feature flag", elapsedMs: 0 });
+      return NextResponse.json({ error: "News Updates is currently disabled", disabled: true }, { status: 404 });
+    }
 
     if (!forceRefresh) {
       const cached = await getCachedNews(cacheKey);

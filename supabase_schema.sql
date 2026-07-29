@@ -859,3 +859,17 @@ ALTER TABLE motor_tech_search_misses ENABLE ROW LEVEL SECURITY;
 -- skips the brand-site pass and falls through to Amazon only, same as
 -- today's behavior.
 ALTER TABLE legacy_brands ADD COLUMN IF NOT EXISTS official_domains TEXT[] DEFAULT '{}'::text[];
+
+-- 23. FEATURE FLAGS — Recent Buyer Sentiment & News Updates disabled
+-- (config-driven, reversible, same precedent as Section 20's TDS flag).
+-- Reuses the existing feature_flags table — no new table/column needed.
+INSERT INTO feature_flags (flag_name, enabled) VALUES
+    ('buyer_sentiment_enabled', true),
+    ('news_updates_enabled', true)
+ON CONFLICT (flag_name) DO NOTHING;
+
+-- The one existing FAQ entry mentioning Buyer Sentiment was split in
+-- lib/faq-seed-data.ts into an untagged Strengths/Weaknesses entry and a
+-- new entry tagged feature='buyer_sentiment' directly in the seed data
+-- (unlike Section 20's TDS backfill, there's no pre-existing row to
+-- retrofit here — re-run scripts/seed-faqs.ts to pick up the new entry).

@@ -135,9 +135,16 @@ export const FAQ_SEED_DATA: FaqSeedEntry[] = [
   },
   {
     category: "Competitive Analysis Tab",
-    question: "What do Strengths / Weaknesses & Buyer Sentiment analyze?",
+    question: "What do Strengths / Weaknesses analyze?",
     answer:
-      "Real reviews only: Amazon reviews (or the listing's top reviews + rating breakdown), retailer reviews, and expert/forum reviews found on the web. Every theme is backed by verified quotes with dates. \"Recent sentiment\" covers roughly the last 90 days.",
+      "Real reviews only: Amazon reviews (or the listing's top reviews + rating breakdown), retailer reviews, and expert/forum reviews found on the web. Every theme is backed by verified quotes with dates.",
+  },
+  {
+    category: "Competitive Analysis Tab",
+    question: "What does Recent Buyer Sentiment show?",
+    answer:
+      "A last-90-days trend on top of Strengths/Weaknesses' own review sources — same verified-quote rule. It shows whether recent reviews are trending better or worse than the prior period and the dominant themes behind that trend.",
+    feature: "buyer_sentiment",
   },
   {
     category: "Competitive Analysis Tab",

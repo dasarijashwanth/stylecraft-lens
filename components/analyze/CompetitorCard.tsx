@@ -105,6 +105,12 @@ interface CompetitorCardProps {
   // alongside competitor.differentiator_match so a "matches" line names
   // the actual feature, not just an unlabeled checkmark.
   keyDiff?: string | null;
+  // Feature flags (lib/feature-flags.ts), fetched once by the parent page
+  // via GET /api/features and threaded down — default true (fail-open,
+  // matching this codebase's flag convention) so an omitted prop never
+  // hides either section.
+  buyerSentimentEnabled?: boolean;
+  newsUpdatesEnabled?: boolean;
 }
 
 type FeaturesState =
@@ -267,7 +273,7 @@ async function safeJson(res: Response): Promise<any> {
   }
 }
 
-export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff }: CompetitorCardProps) {
+export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true }: CompetitorCardProps) {
   // All 4 sections load automatically on mount — collapsing is purely a
   // visual/reading-convenience toggle, never a fetch trigger.
   const [featuresOpen, setFeaturesOpen] = useState(true);
@@ -335,9 +341,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
     }
   }
 
-  // Fire all three the moment this card mounts — no click required.
+  // Fire on mount — no click required. News is skipped entirely when
+  // disabled, rather than fetched and hidden (real savings, see
+  // app/api/amazon/product-news/[asin]/route.ts).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadFeatures(); loadReviewAnalysis(); loadNews(); }, [c.asin, c.name]);
+  useEffect(() => { loadFeatures(); loadReviewAnalysis(); if (newsUpdatesEnabled) loadNews(); }, [c.asin, c.name, newsUpdatesEnabled]);
 
   const displayPrice   = live?.price        ?? c.price        ?? "—";
   const displayRating  = live?.rating_str   ?? c.rating       ?? "—";
@@ -691,7 +699,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
       <div className="border-t border-border/40 pt-3">
         <div className="w-full flex items-center justify-between text-text-muted">
           <button type="button" onClick={() => setWeaknessesOpen(!weaknessesOpen)} className="flex-1 flex items-center justify-between hover:text-text-primary transition-colors font-semibold text-left">
-            <span>Weaknesses & Recent Buyer Sentiment</span>
+            <span>{buyerSentimentEnabled ? "Weaknesses & Recent Buyer Sentiment" : "Weaknesses"}</span>
             {weaknessesOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
           {reviewAnalysis.status === "loaded" && <RefreshButton onClick={() => loadReviewAnalysis(true)} />}
@@ -744,36 +752,38 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
                   ))}
                 </div>
 
-                <div className="space-y-1.5 pt-2 border-t border-border/30">
-                  <p className="font-bold text-accent text-[10px] uppercase tracking-wider">Recent Buyer Sentiment (last 90 days)</p>
-                  {!reviewAnalysis.data.recentSentiment && <p className="italic text-text-muted">No reviews from the last 90 days.</p>}
-                  {reviewAnalysis.data.recentSentiment && (
-                    <>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {reviewAnalysis.data.recentSentiment.trend === "improving" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-success/10 border border-success/25 text-success"><TrendingUp className="w-3 h-3" /> Improving</span>}
-                        {reviewAnalysis.data.recentSentiment.trend === "declining" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-danger/10 border border-danger/25 text-danger"><TrendingDown className="w-3 h-3" /> Declining</span>}
-                        {reviewAnalysis.data.recentSentiment.trend === "stable" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-surface-3 border border-border text-text-muted"><Minus className="w-3 h-3" /> Stable</span>}
-                        {reviewAnalysis.data.recentSentiment.trend === "unknown" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-surface-3 border border-border text-text-muted"><Minus className="w-3 h-3" /> Trend unclear</span>}
-                        <span className="text-[10px] text-text-muted">
-                          {reviewAnalysis.data.recentSentiment.reviewCount} reviews
-                          {reviewAnalysis.data.recentSentiment.avgRating != null && ` · avg ${reviewAnalysis.data.recentSentiment.avgRating.toFixed(1)}★`}
-                          {reviewAnalysis.data.recentSentiment.priorAvgRating != null && ` (was ${reviewAnalysis.data.recentSentiment.priorAvgRating.toFixed(1)}★)`}
-                        </span>
-                      </div>
-                      {reviewAnalysis.data.recentSentiment.dominantThemes.map((t, idx) => (
-                        <div key={idx} className="space-y-1">
-                          <p className="text-text-secondary font-semibold flex items-center flex-wrap gap-1">
-                            {t.theme}
-                            <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(t)}]</span>
-                          </p>
-                          {t.evidence.slice(0, 2).map((e, i) => (
-                            <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
-                          ))}
+                {buyerSentimentEnabled && (
+                  <div className="space-y-1.5 pt-2 border-t border-border/30">
+                    <p className="font-bold text-accent text-[10px] uppercase tracking-wider">Recent Buyer Sentiment (last 90 days)</p>
+                    {!reviewAnalysis.data.recentSentiment && <p className="italic text-text-muted">No reviews from the last 90 days.</p>}
+                    {reviewAnalysis.data.recentSentiment && (
+                      <>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {reviewAnalysis.data.recentSentiment.trend === "improving" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-success/10 border border-success/25 text-success"><TrendingUp className="w-3 h-3" /> Improving</span>}
+                          {reviewAnalysis.data.recentSentiment.trend === "declining" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-danger/10 border border-danger/25 text-danger"><TrendingDown className="w-3 h-3" /> Declining</span>}
+                          {reviewAnalysis.data.recentSentiment.trend === "stable" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-surface-3 border border-border text-text-muted"><Minus className="w-3 h-3" /> Stable</span>}
+                          {reviewAnalysis.data.recentSentiment.trend === "unknown" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-surface-3 border border-border text-text-muted"><Minus className="w-3 h-3" /> Trend unclear</span>}
+                          <span className="text-[10px] text-text-muted">
+                            {reviewAnalysis.data.recentSentiment.reviewCount} reviews
+                            {reviewAnalysis.data.recentSentiment.avgRating != null && ` · avg ${reviewAnalysis.data.recentSentiment.avgRating.toFixed(1)}★`}
+                            {reviewAnalysis.data.recentSentiment.priorAvgRating != null && ` (was ${reviewAnalysis.data.recentSentiment.priorAvgRating.toFixed(1)}★)`}
+                          </span>
                         </div>
-                      ))}
-                    </>
-                  )}
-                </div>
+                        {reviewAnalysis.data.recentSentiment.dominantThemes.map((t, idx) => (
+                          <div key={idx} className="space-y-1">
+                            <p className="text-text-secondary font-semibold flex items-center flex-wrap gap-1">
+                              {t.theme}
+                              <span className="text-[9px] font-normal text-text-muted">[{reviewThemeSourceLabel(t)}]</span>
+                            </p>
+                            {t.evidence.slice(0, 2).map((e, i) => (
+                              <p key={i} className="pl-2 text-[10px] text-text-muted italic">&ldquo;{e.quote}&rdquo;{e.date && ` — ${e.date}`}</p>
+                            ))}
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
                 <p className="text-[9px] text-text-muted pt-1 border-t border-border/30">
                   Data retrieved {new Date(reviewAnalysis.data.retrievedAt).toLocaleString()}
                 </p>
@@ -784,67 +794,69 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
       </div>
 
       {/* ==================== SECTION 4: NEWS UPDATES ==================== */}
-      <div className="border-t border-border/40 pt-3">
-        <div className="w-full flex items-center justify-between text-text-muted">
-          <button type="button" onClick={() => setNewsOpen(!newsOpen)} className="flex-1 flex items-center justify-between hover:text-text-primary transition-colors font-semibold text-left">
-            <span className="flex items-center gap-1.5"><Newspaper className="w-3.5 h-3.5" /> News Updates</span>
-            {newsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
-          {newsState.status === "loaded" && <RefreshButton onClick={() => loadNews(true)} />}
-        </div>
-
-        {newsState.status === "loaded" && (
-          assertProvenance(newsState.data.provenance, "news", c.name) ? (
-            <SectionSourceLine
-              flavor="news"
-              provenance={newsState.data.provenance!}
-              resolvedAt={newsState.data.retrievedAt}
-              open={newsSourceOpen}
-              onToggle={() => setNewsSourceOpen(o => !o)}
-            />
-          ) : <SourceUnavailableCaption />
-        )}
-
-        {newsOpen && (
-          <div className="mt-3 space-y-2.5 animate-slide-down">
-            {newsState.status === "loading" && <SkeletonRows count={2} />}
-            {newsState.status === "error" && (
-              <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
-                <span className="text-danger">{newsState.message}</span>
-                <TimeoutChip onRetry={() => loadNews()} />
-              </div>
-            )}
-            {newsState.status === "loaded" && newsState.data.aiUnavailable && (
-              <div className="flex items-center justify-between gap-2 py-2">
-                <span className="text-warning">No AI provider is available right now to search for news.</span>
-                <TimeoutChip onRetry={() => loadNews()} />
-              </div>
-            )}
-            {newsState.status === "loaded" && !newsState.data.aiUnavailable && (
-              <>
-                {newsState.data.items.length === 0 && (
-                  <p className="italic text-text-muted">No product-specific news found (searched {new Date(newsState.data.searchedAt).toLocaleDateString()}).</p>
-                )}
-                {newsState.data.items.map((item, idx) => (
-                  <div key={idx} className="p-2 rounded-lg border border-border/60 space-y-0.5">
-                    <p className="font-semibold text-text-primary flex items-center flex-wrap">
-                      {item.title}
-                      <CitationMarker source={sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, newsState.data.searchedAt)} />
-                    </p>
-                    <p className="text-[11px] text-text-secondary leading-normal">{item.summary}</p>
-                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-text-muted hover:text-accent inline-flex items-center gap-1">
-                      {item.publisher}{item.date && ` · ${item.date}`} <ExternalLink className="w-2.5 h-2.5" />
-                    </a>
-                  </div>
-                ))}
-                {newsState.data.items.length > 0 && (
-                  <SourcesFootnoteList sources={newsState.data.items.map(item => sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, newsState.data.searchedAt))} />
-                )}
-              </>
-            )}
+      {newsUpdatesEnabled && (
+        <div className="border-t border-border/40 pt-3">
+          <div className="w-full flex items-center justify-between text-text-muted">
+            <button type="button" onClick={() => setNewsOpen(!newsOpen)} className="flex-1 flex items-center justify-between hover:text-text-primary transition-colors font-semibold text-left">
+              <span className="flex items-center gap-1.5"><Newspaper className="w-3.5 h-3.5" /> News Updates</span>
+              {newsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+            {newsState.status === "loaded" && <RefreshButton onClick={() => loadNews(true)} />}
           </div>
-        )}
-      </div>
+
+          {newsState.status === "loaded" && (
+            assertProvenance(newsState.data.provenance, "news", c.name) ? (
+              <SectionSourceLine
+                flavor="news"
+                provenance={newsState.data.provenance!}
+                resolvedAt={newsState.data.retrievedAt}
+                open={newsSourceOpen}
+                onToggle={() => setNewsSourceOpen(o => !o)}
+              />
+            ) : <SourceUnavailableCaption />
+          )}
+
+          {newsOpen && (
+            <div className="mt-3 space-y-2.5 animate-slide-down">
+              {newsState.status === "loading" && <SkeletonRows count={2} />}
+              {newsState.status === "error" && (
+                <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
+                  <span className="text-danger">{newsState.message}</span>
+                  <TimeoutChip onRetry={() => loadNews()} />
+                </div>
+              )}
+              {newsState.status === "loaded" && newsState.data.aiUnavailable && (
+                <div className="flex items-center justify-between gap-2 py-2">
+                  <span className="text-warning">No AI provider is available right now to search for news.</span>
+                  <TimeoutChip onRetry={() => loadNews()} />
+                </div>
+              )}
+              {newsState.status === "loaded" && !newsState.data.aiUnavailable && (
+                <>
+                  {newsState.data.items.length === 0 && (
+                    <p className="italic text-text-muted">No product-specific news found (searched {new Date(newsState.data.searchedAt).toLocaleDateString()}).</p>
+                  )}
+                  {newsState.data.items.map((item, idx) => (
+                    <div key={idx} className="p-2 rounded-lg border border-border/60 space-y-0.5">
+                      <p className="font-semibold text-text-primary flex items-center flex-wrap">
+                        {item.title}
+                        <CitationMarker source={sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, newsState.data.searchedAt)} />
+                      </p>
+                      <p className="text-[11px] text-text-secondary leading-normal">{item.summary}</p>
+                      <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-text-muted hover:text-accent inline-flex items-center gap-1">
+                        {item.publisher}{item.date && ` · ${item.date}`} <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                  ))}
+                  {newsState.data.items.length > 0 && (
+                    <SourcesFootnoteList sources={newsState.data.items.map(item => sourceFor(newsCitations, item.url, item.publisher || item.title, item.summary, newsState.data.searchedAt))} />
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

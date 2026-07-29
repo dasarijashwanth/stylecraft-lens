@@ -7,3 +7,11 @@ import { getFeatureFlag } from "./db/feature-flags";
 export async function isTdsEnabled(): Promise<boolean> {
   return getFeatureFlag("tds_enabled");
 }
+
+export async function isBuyerSentimentEnabled(): Promise<boolean> {
+  return getFeatureFlag("buyer_sentiment_enabled");
+}
+
+export async function isNewsUpdatesEnabled(): Promise<boolean> {
+  return getFeatureFlag("news_updates_enabled");
+}

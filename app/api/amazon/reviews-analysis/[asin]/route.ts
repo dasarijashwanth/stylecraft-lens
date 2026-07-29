@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { getAmazonProduct } from "@/lib/rainforest";
-import { analyzeReviews, ReviewAnalysis } from "@/lib/amazon-review-analysis";
+import { analyzeReviews, maskSentimentForResponse, ReviewAnalysis } from "@/lib/amazon-review-analysis";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
+import { isBuyerSentimentEnabled } from "@/lib/feature-flags";
 import type { ToolType } from "@/lib/tool-type-taxonomy";
 
 // Best-effort — analysisId is already threaded into this route for
@@ -90,17 +91,22 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     // middleware.ts already blocks anonymous /api/** requests; this is
     // defense-in-depth consistency with the rest of the codebase.
     await getAuthSession();
+    // Read once, applied consistently to both the cache-hit and fresh-
+    // compute branches below — masks the response only, never the stored
+    // row, so old cached sentiment (from before the flag existed) reappears
+    // immediately with zero regeneration if the flag is flipped back on.
+    const sentimentOn = await isBuyerSentimentEnabled();
 
     if (!forceRefresh) {
       const cached = await getCachedAnalysis(cacheKey);
       if (cached) {
-        return NextResponse.json({ ...cached.analysis, retrievedAt: cached.fetchedAt, cached: true });
+        return NextResponse.json({ ...maskSentimentForResponse(cached.analysis, sentimentOn), retrievedAt: cached.fetchedAt, cached: true });
       }
     }
 
     const product = isRealAsin ? await getAmazonProduct(rawAsin) : null;
     const requiredToolType = await resolveAnalysisToolType(analysisId);
-    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product", new Date(), product, requiredToolType);
+    const analysis = await analyzeReviews(isRealAsin ? rawAsin : "", productName || product?.title || rawAsin || "this product", new Date(), product, requiredToolType, { includeSentiment: sentimentOn });
 
     // Don't cache an "AI unavailable" or "sources unavailable" result for
     // 24h — both are transient (AI provider outage / Rainforest auth-credit
@@ -126,7 +132,7 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
       }
     }
 
-    return NextResponse.json({ ...analysis, retrievedAt: new Date().toISOString(), cached: false });
+    return NextResponse.json({ ...maskSentimentForResponse(analysis, sentimentOn), retrievedAt: new Date().toISOString(), cached: false });
   } catch (err: any) {
     return NextResponse.json({ error: "Live review data unavailable — retry" }, { status: 503 });
   }

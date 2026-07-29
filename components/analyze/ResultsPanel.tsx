@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CompetitorCard } from "./CompetitorCard";
 import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
@@ -94,6 +94,22 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
   // instead of re-running the resolver a second time.
   const [phase1Features, setPhase1Features] = useState<Record<number, KeyFeaturesResult>>({});
   const [phase2Features, setPhase2Features] = useState<Record<number, KeyFeaturesResult>>({});
+
+  // Fetched once here (not once per card) and threaded into every
+  // CompetitorCard — lib/feature-flags.ts's isBuyerSentimentEnabled()/
+  // isNewsUpdatesEnabled(). Default true (fail-open) until the fetch
+  // resolves, matching this codebase's flag convention.
+  const [buyerSentimentEnabled, setBuyerSentimentEnabled] = useState(true);
+  const [newsUpdatesEnabled, setNewsUpdatesEnabled] = useState(true);
+  useEffect(() => {
+    fetch("/api/features")
+      .then(res => res.json())
+      .then(data => {
+        if (typeof data.buyer_sentiment_enabled === "boolean") setBuyerSentimentEnabled(data.buyer_sentiment_enabled);
+        if (typeof data.news_updates_enabled === "boolean") setNewsUpdatesEnabled(data.news_updates_enabled);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleExportPDF = async () => {
     setExporting(true);
@@ -460,7 +476,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
             phase1.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+              <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
@@ -494,7 +510,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors && phase2.competitors.length > 0 ? (
             phase2.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+              <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>
