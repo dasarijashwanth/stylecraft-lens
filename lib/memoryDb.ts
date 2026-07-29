@@ -307,6 +307,12 @@ export interface MockFaqSearchMiss {
   createdAt: Date;
 }
 
+export interface MockMotorTechMiss {
+  id: string;
+  term: string;
+  createdAt: Date;
+}
+
 export interface MockSupportMessage {
   id: string;
   userId: string;
@@ -403,6 +409,10 @@ class MemoryDatabase {
   // legacyBrands above — real default competitor-matching config, not an
   // empty admin table.
   motorFamilies: MockMotorFamily[] = [];
+  // Real usage data (an analysis' free-text Motor Technology that didn't
+  // match any taxonomy family) — same non-seeded, non-persisted-across-
+  // restart precedent as faqSearchMisses just below.
+  motorTechSearchMisses: MockMotorTechMiss[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
   // Same always-seeded precedent — real default Help content, not an
   // empty admin table. Votes/search-misses start empty (real usage data).

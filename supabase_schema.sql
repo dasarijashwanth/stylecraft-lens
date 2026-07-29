@@ -833,3 +833,19 @@ ALTER TABLE feature_flags ENABLE ROW LEVEL SECURITY;
 -- to any feature" (every other FAQ row).
 ALTER TABLE faqs ADD COLUMN IF NOT EXISTS feature VARCHAR(50);
 UPDATE faqs SET feature = 'tds' WHERE category = 'TDS' AND feature IS NULL;
+
+-- 21. MOTOR TECH SEARCH MISSES — logs a free-text "Motor Technology" entry
+-- (analyze/new-project forms) that didn't match any enabled motor_families
+-- row, so the taxonomy admin (/dashboard/admin/competitor-matching) can see
+-- real-world motor names worth adding as a new family/alias. Read/write via
+-- lib/db/motor-families.ts's logMotorTechMiss/getMotorTechMisses — exact
+-- same shape as faq_search_misses (Section 15).
+CREATE TABLE IF NOT EXISTS motor_tech_search_misses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    term VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS motor_tech_search_misses_created_idx ON motor_tech_search_misses(created_at DESC);
+ALTER TABLE motor_tech_search_misses ENABLE ROW LEVEL SECURITY;
+-- Deliberately NO policy (see Section 17 above) — only supabaseAdmin
+-- (service role) ever reads/writes this table.

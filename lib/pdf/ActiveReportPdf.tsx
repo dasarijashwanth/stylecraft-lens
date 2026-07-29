@@ -3,6 +3,28 @@ import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, 
 import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
 import { summarizeSource } from "@/lib/provenance-format";
 import type { ProvenanceRow } from "@/lib/db/section-provenance";
+import { TOOL_TYPE_LABELS, type ToolType } from "@/lib/tool-type-taxonomy";
+
+const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both (merged)" };
+
+// Same "print every form input right above the weights sentence" reasoning
+// as lib/export-pdf.ts's renderFormInputsLine — kept as its own small
+// function here since this file renders via @react-pdf/renderer elements,
+// not HTML strings.
+function formInputsSummary(formInputs: any): string | null {
+  if (!formInputs) return null;
+  const industryLabel = formInputs.industry === "haircare-styling" ? "Hair Care & Styling" : formInputs.industry === "grooming-barbering" ? "Grooming & Barbering" : (formInputs.industry || "—");
+  const toolTypeLabel = formInputs.toolType && TOOL_TYPE_LABELS[formInputs.toolType as ToolType] ? TOOL_TYPE_LABELS[formInputs.toolType as ToolType] : "—";
+  const marketLabel = formInputs.targetMarket && TARGET_MARKET_LABELS[formInputs.targetMarket] ? TARGET_MARKET_LABELS[formInputs.targetMarket] : "—";
+  return [
+    `Industry: ${industryLabel}`,
+    `Tool Type: ${toolTypeLabel}`,
+    `Target Market: ${marketLabel}`,
+    `Motor Technology: ${formInputs.motorTech || "unspecified"}`,
+    `Target Price: ${formInputs.pricePoint || "unspecified"}`,
+    `Differentiator: ${formInputs.keyDiff || "none given"}`,
+  ].join("  ·  ");
+}
 
 // Never render a bare "—" for a competitor with partial data — omit the
 // missing part instead, and only fall back to an explicit sentence when
@@ -53,6 +75,7 @@ export function ActiveReportPdf({
   const citations = ca.citations || [];
   const provenanceRows: ProvenanceRow[] = ca.section_provenance || [];
   const matchingWeights = ca.matching_weights;
+  const formInputsLine = formInputsSummary(ca.form_inputs);
   const registrySnapshot = ca.legacy_registry_snapshot || null;
   const curatedCount = largeComps.filter((c: any) => c.curated_brand === true).length;
 
@@ -145,8 +168,13 @@ export function ActiveReportPdf({
         </Page>
       )}
 
-      {(provenanceRows.length > 0 || matchingWeights) && (
+      {(provenanceRows.length > 0 || matchingWeights || formInputsLine) && (
         <Page size="A4" style={styles.page}>
+          {formInputsLine && (
+            <Text style={{ fontSize: 8, color: "#666666", marginBottom: 4, lineHeight: 1.4 }}>
+              Analysis inputs — {formInputsLine}
+            </Text>
+          )}
           {matchingWeights && (
             <Text style={{ fontSize: 8, color: "#666666", marginBottom: 8, lineHeight: 1.4 }}>
               Competitors are prioritized by motor type match ({Math.round(matchingWeights.motor * 100)}%), then price

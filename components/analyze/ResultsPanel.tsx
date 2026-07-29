@@ -25,10 +25,12 @@ interface ResultsPanelProps {
       competitors: any[];
       matching_weights?: { motor: number; price: number; feature: number } | null;
       legacy_registry_snapshot?: { category_slug: string; category_name: string; brands: any[] } | null;
+      form_inputs?: Record<string, any> | null;
     };
     phase2: {
       competitors: any[];
       matching_weights?: { motor: number; price: number; feature: number } | null;
+      form_inputs?: Record<string, any> | null;
     };
     phase3: {
       amazon_category: string;
@@ -82,6 +84,10 @@ interface ResultsPanelProps {
 
 export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
+  // Threaded into each CompetitorCard so its "Why this competitor" section
+  // can name the actual differentiator a match was scored against, not
+  // just show an unlabeled checkmark.
+  const keyDiff: string | null = phase1.form_inputs?.keyDiff ?? phase2.form_inputs?.keyDiff ?? null;
   const [exporting, setExporting] = useState(false);
   // Populated as each CompetitorCard's own Key Features fetch resolves, so
   // the comparison table's Top Feature row can reuse real cited data
@@ -108,6 +114,8 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           strategic_recommendations: phase3.strategic_recommendations,
           quick_wins: phase3.quick_wins,
           citations: phase3.citations || [],
+          matching_weights: phase1.matching_weights ?? phase2.matching_weights ?? null,
+          form_inputs: phase1.form_inputs ?? phase2.form_inputs ?? null,
         },
         pricing_analysis: buildPricingAnalysis({
           competitors: [...phase1.competitors, ...phase2.competitors],
@@ -452,7 +460,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
             phase1.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+              <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
@@ -486,7 +494,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors && phase2.competitors.length > 0 ? (
             phase2.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+              <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>

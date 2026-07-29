@@ -3,6 +3,35 @@ import { isPricingAnalysisEmpty } from "./pricing-analysis";
 import { summarizeSource, describeProvenanceTier } from "./provenance-format";
 import type { ProvenanceRow } from "./db/section-provenance";
 import { escapeHtml } from "./html-escape";
+import { TOOL_TYPE_LABELS, type ToolType } from "./tool-type-taxonomy";
+
+const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both (merged)" };
+
+// Every form input that's supposed to shape a run (lib/analysisEngine.ts's
+// buildFormInputsSnapshot), printed as one plain line right above the
+// weights sentence — so the methodology appendix shows not just HOW
+// competitors were scored but WHAT inputs actually drove that scoring.
+function renderFormInputsLine(formInputs: any): string {
+  if (!formInputs) return "";
+  const industryLabel = formInputs.industry === "haircare-styling" ? "Hair Care & Styling" : formInputs.industry === "grooming-barbering" ? "Grooming & Barbering" : (formInputs.industry || "—");
+  const toolTypeLabel = formInputs.toolType && TOOL_TYPE_LABELS[formInputs.toolType as ToolType] ? TOOL_TYPE_LABELS[formInputs.toolType as ToolType] : "—";
+  const marketLabel = formInputs.targetMarket && TARGET_MARKET_LABELS[formInputs.targetMarket] ? TARGET_MARKET_LABELS[formInputs.targetMarket] : "—";
+
+  const parts = [
+    `Industry: ${industryLabel}`,
+    `Tool Type: ${toolTypeLabel}`,
+    `Target Market: ${marketLabel}`,
+    `Motor Technology: ${formInputs.motorTech || "unspecified"}`,
+    `Target Price: ${formInputs.pricePoint || "unspecified"}`,
+    `Differentiator: ${formInputs.keyDiff || "none given"}`,
+  ];
+
+  return `
+    <p style="font-size: 10px; color: #666;">
+      <strong>Analysis inputs</strong> — ${parts.map(escapeHtml).join(" &middot; ")}
+    </p>
+  `;
+}
 
 // "Data Sources & Methodology" appendix — one block per product+section,
 // rendered from whatever persisted provenance rows ended up on the report
@@ -33,6 +62,7 @@ function renderProvenanceAppendixHTML(report: any): string {
   return `
     <div class="page-break"></div>
     <h2>Data Sources &amp; Methodology</h2>
+    ${renderFormInputsLine(ca.form_inputs)}
     ${weights ? `
       <p style="font-size: 10px; color: #666;">
         Competitors are prioritized by motor type match (${Math.round(weights.motor * 100)}%), then price proximity

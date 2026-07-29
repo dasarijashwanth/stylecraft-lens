@@ -199,6 +199,11 @@ export async function buildReportSections(analysis: {
       // any later admin edit to the live /dashboard/admin/competitor-matching
       // config, same auditability reasoning as legacy_registry_snapshot above.
       matching_weights: analysis.phase1?.matching_weights ?? analysis.phase2?.matching_weights ?? null,
+      // Every analyze/new-project form input that's supposed to shape this
+      // run (industry/targetMarket/toolType/motorTech/keyDiff/pricePoint —
+      // see lib/analysisEngine.ts's buildFormInputsSnapshot), snapshotted
+      // the same way matching_weights is, for the methodology appendix.
+      form_inputs: analysis.phase1?.form_inputs ?? analysis.phase2?.form_inputs ?? null,
       market_snapshot: snapshot,
       key_trends: trends,
       market_gaps: gaps,

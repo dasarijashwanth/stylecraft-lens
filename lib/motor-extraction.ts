@@ -96,6 +96,18 @@ export async function resolveOurMotorType(
   if (input.motorTech) {
     const matched = matchMotorFamily(input.motorTech, families);
     if (matched) return { ...matched, source: "motor_tech_field" };
+
+    // Free text that matched nothing in the taxonomy — kept verbatim on
+    // the analysis (never coerced into a guess) AND flagged here so the
+    // taxonomy admin (/dashboard/admin/competitor-matching) can see real
+    // motor names worth adding as a new family/alias. Best-effort only,
+    // same as every other non-critical logging call in this pipeline.
+    try {
+      const { logMotorTechMiss } = await import("./db/motor-families");
+      await logMotorTechMiss(input.motorTech);
+    } catch {
+      // Never let logging block motor resolution.
+    }
   }
 
   const identityText = [identity.whatItIs, ...(identity.keyAttributes || []), ...(identity.evidence || []).map(e => e.quote)]

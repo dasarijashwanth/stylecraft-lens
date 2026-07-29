@@ -24,6 +24,12 @@ interface Weights {
   feature_weight: number;
 }
 
+interface MotorTechMiss {
+  term: string;
+  count: number;
+  last_searched_at: string;
+}
+
 const DOMAIN_LABELS: Record<string, string> = {
   clipper_trimmer_shaver: "Clippers, Trimmers & Shavers",
   beauty: "Beauty Tools",
@@ -32,6 +38,7 @@ const DOMAIN_LABELS: Record<string, string> = {
 export default function CompetitorMatchingAdminPage() {
   const { user, loading: authLoading } = useAuth();
   const [families, setFamilies] = useState<MotorFamily[]>([]);
+  const [misses, setMisses] = useState<MotorTechMiss[]>([]);
   const [weights, setWeights] = useState<Weights | null>(null);
   const [weightInputs, setWeightInputs] = useState({ motor: "0.45", price: "0.35", feature: "0.20" });
   const [loading, setLoading] = useState(true);
@@ -44,16 +51,19 @@ export default function CompetitorMatchingAdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const [famRes, weightRes] = await Promise.all([
+      const [famRes, weightRes, missRes] = await Promise.all([
         fetch("/api/admin/motor-families"),
         fetch("/api/admin/competitor-matching-config"),
+        fetch("/api/admin/motor-families/misses"),
       ]);
       const famData = await famRes.json();
       const weightData = await weightRes.json();
+      const missData = await missRes.json();
       if (!famRes.ok) throw new Error(famData.error || "Failed to load motor families");
       if (!weightRes.ok) throw new Error(weightData.error || "Failed to load weights");
       setFamilies(famData.families || []);
       setWeights(weightData.weights);
+      if (missRes.ok) setMisses(missData.misses || []);
       setWeightInputs({
         motor: String(weightData.weights.motor_weight),
         price: String(weightData.weights.price_weight),
@@ -324,6 +334,25 @@ export default function CompetitorMatchingAdminPage() {
               );
             })}
           </div>
+
+          {misses.length > 0 && (
+            <div className="border border-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
+                <h2 className="text-xs font-bold text-text-primary">Unrecognized Motor Technology entries</h2>
+                <p className="text-[10px] text-text-muted mt-0.5">
+                  Free-text Motor Technology values submitted on the analyze/new-project forms that didn&apos;t match any family above — kept verbatim on their analysis, never guessed. Consider adding one as a new family or alias.
+                </p>
+              </div>
+              <div className="p-4 space-y-1.5">
+                {misses.map(m => (
+                  <div key={m.term} className="flex items-center justify-between px-3 py-1.5 rounded-lg border border-border bg-surface-1 text-[11px]">
+                    <span className="font-semibold text-text-primary">{m.term}</span>
+                    <span className="text-text-muted">{m.count}x · last {new Date(m.last_searched_at).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

@@ -51,7 +51,17 @@ interface BrandProgress {
   category_slug?: string;
   category_name?: string;
   brands?: BrandProgressEntry[];
+  // Threaded from lib/analysisEngine.ts's writeBrandProgress — what's
+  // actually driving this search, for the upfront "Searching: X" summary
+  // line below (not just the reactive per-brand chips).
+  motor_label?: string | null;
+  tool_type_label?: string | null;
+  target_market_label?: "pro" | "consumer" | "both" | string | null;
+  price_band_low?: number | null;
+  price_band_high?: number | null;
 }
+
+const TARGET_MARKET_SUMMARY_LABELS: Record<string, string> = { pro: "Pro/Salon", consumer: "Retail", both: "Both (merged)" };
 
 interface PendingQuestion {
   question: string;
@@ -499,6 +509,15 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
               <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
                 Legacy brands being searched{brandProgress.category_name ? ` — ${brandProgress.category_name}` : ""}
               </span>
+              {(brandProgress.motor_label || brandProgress.tool_type_label || (brandProgress.price_band_low != null && brandProgress.price_band_high != null)) && (
+                <p className="mt-1 text-[10px] text-text-secondary italic">
+                  Searching: {[
+                    [brandProgress.motor_label, brandProgress.tool_type_label ? `${brandProgress.tool_type_label}s` : null].filter(Boolean).join(" "),
+                    brandProgress.target_market_label ? `${TARGET_MARKET_SUMMARY_LABELS[brandProgress.target_market_label] || brandProgress.target_market_label} brand list` : null,
+                    brandProgress.price_band_low != null && brandProgress.price_band_high != null ? `$${brandProgress.price_band_low.toFixed(0)}–$${brandProgress.price_band_high.toFixed(0)}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </p>
+              )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {brandProgress.brands.map((b, i) => (
                   <span

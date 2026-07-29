@@ -136,6 +136,59 @@ export async function deleteMotorFamily(id: string): Promise<void> {
   if (idx >= 0) memoryDb.motorFamilies.splice(idx, 1);
 }
 
+// Logged from lib/motor-extraction.ts's resolveOurMotorType whenever a
+// user's free-text Motor Technology entry doesn't match any enabled
+// family — surfaces on /dashboard/admin/competitor-matching so the
+// taxonomy admin can see real-world motor names worth adding as a new
+// family/alias, mirroring lib/db/faqs.ts's logFaqSearchMiss/
+// getFaqSearchMisses exactly (same dual-path shape, same "most frequent,
+// most recent within ties" summary).
+export async function logMotorTechMiss(term: string): Promise<void> {
+  const trimmed = term.trim();
+  if (!trimmed) return;
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("motor_tech_search_misses").insert({ term: trimmed });
+    if (error) throw error;
+    return;
+  }
+  memoryDb.motorTechSearchMisses.push({ id: `mtmiss_${Date.now()}_${Math.floor(Math.random() * 1e6)}`, term: trimmed, createdAt: new Date() });
+}
+
+export interface MotorTechMissSummary {
+  term: string;
+  count: number;
+  last_searched_at: string;
+}
+
+export async function getMotorTechMisses(limit = 50): Promise<MotorTechMissSummary[]> {
+  let rows: { term: string; created_at: string }[];
+  if (isSupabaseConfigured) {
+    const { data, error } = await supabaseAdmin.from("motor_tech_search_misses").select("term, created_at").order("created_at", { ascending: false });
+    if (error) throw error;
+    rows = data || [];
+  } else {
+    rows = memoryDb.motorTechSearchMisses
+      .slice()
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map(m => ({ term: m.term, created_at: m.createdAt.toISOString() }));
+  }
+
+  const summary = new Map<string, MotorTechMissSummary>();
+  for (const row of rows) {
+    const existing = summary.get(row.term);
+    if (existing) {
+      existing.count++;
+      if (row.created_at > existing.last_searched_at) existing.last_searched_at = row.created_at;
+    } else {
+      summary.set(row.term, { term: row.term, count: 1, last_searched_at: row.created_at });
+    }
+  }
+
+  return Array.from(summary.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
 export async function reorderMotorFamilies(orderedIds: string[]): Promise<void> {
   if (isSupabaseConfigured) {
     for (let i = 0; i < orderedIds.length; i++) {

@@ -9,7 +9,7 @@ import { computePriceBand, isWithinBand } from "./price-band";
 import { assertToolType, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
 import type { IdentityCard } from "./product-identification";
 import type { LegacyBrandRow } from "./db/legacy-brands";
-import type { CategorySlug } from "./legacy-brand-registry";
+import type { CategorySlug, ResolvedLegacyBrand } from "./legacy-brand-registry";
 
 // Hard ceiling on this pre-pass alone — inserted BEFORE Phase 1's existing
 // AI call, which itself has no time-budget gate on its OpenAI leg (only
@@ -58,6 +58,11 @@ export interface CuratedBrandCandidate {
   verified_by_rainforest: true;
   curated_brand: true;
   registry_brand: string;
+  // Populated only when this brand came through a "both" target-market
+  // merge (lib/legacy-brand-registry.ts's resolveLegacyBrandsForIdentity)
+  // — which list(s) it was found on, surfaced in provenance/"Why this
+  // competitor" text. Absent for the plain pro/consumer single-list case.
+  registry_source_lists?: ("pro" | "retail")[] | null;
 }
 
 // Duplicated deliberately rather than exporting the private helper from
@@ -113,7 +118,7 @@ function pickSearchAlias(brand: LegacyBrandRow, isProfessional: boolean): string
   return brand.brand_name;
 }
 
-function toCandidate(result: CategorySearchResult, brand: LegacyBrandRow): CuratedBrandCandidate {
+function toCandidate(result: CategorySearchResult, brand: LegacyBrandRow | ResolvedLegacyBrand): CuratedBrandCandidate {
   return {
     name: result.title.length > 100 ? `${result.title.slice(0, 100)}…` : result.title,
     brand: brand.brand_name,
@@ -135,6 +140,7 @@ function toCandidate(result: CategorySearchResult, brand: LegacyBrandRow): Curat
     verified_by_rainforest: true,
     curated_brand: true,
     registry_brand: brand.brand_name,
+    registry_source_lists: (brand as ResolvedLegacyBrand).sourceLists ?? null,
   };
 }
 
@@ -148,7 +154,7 @@ export type IdentityForDiscovery = Pick<IdentityCard, "category" | "subcategory"
 // skips re-verifying anything tagged verified_by_rainforest:true, so a
 // redundant lookup here would just double Rainforest cost for nothing).
 export async function searchCuratedLegacyBrands(
-  brands: LegacyBrandRow[],
+  brands: ResolvedLegacyBrand[],
   identity: IdentityForDiscovery,
   targetPriceRaw: number,
   categorySlug: CategorySlug,

@@ -4,7 +4,17 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ToolType, TOOL_TYPE_LABELS } from "@/lib/tool-type-taxonomy";
+import { ToolType, TOOL_TYPE_LABELS, toolTypesForIndustry } from "@/lib/tool-type-taxonomy";
+import { parsePriceToNumber } from "@/lib/pricing-analysis";
+
+const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Consumer", both: "Both" };
+
+interface MotorFamilyOption {
+  family_key: string;
+  label: string;
+  domain: string;
+  aliases: string[];
+}
 
 export default function NewProjectPage() {
   const router = useRouter();
@@ -34,6 +44,16 @@ export default function NewProjectPage() {
   // only; this is what actually identifies the product.
   const [productUrl, setProductUrl] = useState("");
   const [asin, setAsin] = useState("");
+  const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
+
+  // Populates the Motor Technology <datalist> with the real taxonomy
+  // (lib/motor-taxonomy.ts) — mirrors app/(app)/dashboard/analyze/page.tsx.
+  useEffect(() => {
+    fetch("/api/motor-families")
+      .then(r => r.json())
+      .then(data => setMotorFamilies(data.families || []))
+      .catch(() => {});
+  }, []);
 
   // Suggests the whole form from the most recent analysis that hasn't been
   // linked to a project yet — lets a user go straight from finishing an
@@ -72,16 +92,29 @@ export default function NewProjectPage() {
   const validate = (): boolean => {
     const errs: { [key: string]: string } = {};
     if (!name.trim()) errs.name = "Project name is required";
-    if (!productName.trim()) errs.productName = "Product name is required";
+    if (!productName.trim()) {
+      errs.productName = "Product name is required";
+    } else if (productName.trim().length < 3) {
+      errs.productName = "Product name must be at least 3 characters";
+    }
     if (!description.trim()) {
       errs.description = "Product description is required";
     } else if (description.length < 10) {
       errs.description = "Add at least 10 characters for sharper results";
     }
     if (!toolType) errs.toolType = "Select the exact tool type";
+    const priceNum = parsePriceToNumber(pricePoint);
+    if (!pricePoint.trim() || priceNum === null || priceNum <= 0) {
+      errs.pricePoint = "Enter a target price greater than $0";
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
+
+  function formatPriceOnBlur() {
+    const n = parsePriceToNumber(pricePoint);
+    if (n !== null && n > 0) setPricePoint(`$${n.toFixed(2)}`);
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,7 +138,7 @@ export default function NewProjectPage() {
           // Never submit a motor type for Hair Care & Styling — the field
           // only applies to Grooming & Barbering, even if a catalog
           // auto-fill left a stale value sitting in state.
-          motorTech: industry === "haircare-styling" ? undefined : (motorTech || undefined),
+          motorTech: industry === "haircare-styling" ? undefined : (motorTech.trim() || undefined),
           keyDiff: keyDiff.trim() || undefined,
           productUrl: productUrl.trim() || undefined,
           asin: asin.trim() || undefined,
@@ -200,6 +233,11 @@ export default function NewProjectPage() {
                   // clear any prior selection so a stale motor type never
                   // gets submitted for a Hair Care & Styling product.
                   if (e.target.value === "haircare-styling") setMotorTech("");
+                  // Tool Type options are Industry-dependent (see
+                  // toolTypesForIndustry) — a Tool Type valid under the old
+                  // Industry is meaningless once the Industry no longer
+                  // offers it.
+                  setToolType(prev => (toolTypesForIndustry(e.target.value).includes(prev as ToolType) ? prev : ""));
                 }}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                 required
@@ -224,8 +262,8 @@ export default function NewProjectPage() {
                     type="button"
                     onClick={() => setTargetMarket(opt.key as any)}
                     className={`py-1.5 rounded-md text-[10px] font-bold transition-all ${
-                      targetMarket === opt.key 
-                        ? "bg-surface-3 text-text-primary border border-border-strong shadow-sm" 
+                      targetMarket === opt.key
+                        ? "bg-surface-3 text-text-primary border border-border-strong shadow-sm"
                         : "text-text-secondary hover:text-text-primary"
                     }`}
                   >
@@ -233,6 +271,9 @@ export default function NewProjectPage() {
                   </button>
                 ))}
               </div>
+              <p className="text-[10px] text-text-muted">
+                Affects which competitor brands are searched — Pro/Salon and Consumer use separate curated brand lists; Both merges and dedupes across both.
+              </p>
             </div>
           </div>
 
@@ -314,8 +355,8 @@ export default function NewProjectPage() {
                 }`}
               >
                 <option value="" disabled>Select exact tool type…</option>
-                {Object.entries(TOOL_TYPE_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
+                {toolTypesForIndustry(industry).map((value) => (
+                  <option key={value} value={value}>{TOOL_TYPE_LABELS[value]}</option>
                 ))}
               </select>
               {errors.toolType && <p className="text-[10px] text-danger">{errors.toolType}</p>}
@@ -335,14 +376,22 @@ export default function NewProjectPage() {
 
             {/* Price Point */}
             <div className="space-y-1">
-              <label className="font-semibold text-text-primary block">Target Price Point</label>
+              <label className="font-semibold text-text-primary block">Target Price Point *</label>
               <input
                 type="text"
                 value={pricePoint}
-                onChange={(e) => setPricePoint(e.target.value)}
+                onChange={(e) => {
+                  setPricePoint(e.target.value);
+                  if (errors.pricePoint) setErrors(prev => { const n = { ...prev }; delete n.pricePoint; return n; });
+                }}
+                onBlur={formatPriceOnBlur}
                 placeholder="e.g. $180"
-                className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                className={`w-full px-3 py-2 border rounded-lg bg-surface-1 outline-none text-text-primary focus:border-accent ${
+                  errors.pricePoint ? "border-danger" : "border-border"
+                }`}
               />
+              {errors.pricePoint && <p className="text-[10px] text-danger">{errors.pricePoint}</p>}
+              <p className="text-[10px] text-text-muted">Competitors are matched by motor technology first, then closest to this price.</p>
             </div>
           </div>
 
@@ -369,18 +418,22 @@ export default function NewProjectPage() {
             {industry !== "haircare-styling" && (
               <div className="space-y-1">
                 <label className="font-semibold text-text-primary block">Motor technology</label>
-                <select
+                <input
+                  type="text"
+                  list="motor-family-options"
                   value={motorTech}
                   onChange={(e) => setMotorTech(e.target.value)}
+                  placeholder="e.g. Vector, Magnetic, Rotary, Brushless DC…"
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
-                >
-                  <option value="">Select motor type</option>
-                  <option value="Brushless DC">Brushless DC (BLDC)</option>
-                  <option value="Rotary">Rotary motor</option>
-                  <option value="Magnetic/Pivot">Magnetic / Pivot motor</option>
-                  <option value="Universal/Corded">Universal corded motor</option>
-                  <option value="Cordless Li-ion">Cordless / Lithium-ion</option>
-                </select>
+                />
+                <datalist id="motor-family-options">
+                  {motorFamilies.map(f => (
+                    <option key={f.family_key} value={f.label} />
+                  ))}
+                </datalist>
+                <p className="text-[10px] text-text-muted">
+                  Claude searches for {(toolType ? TOOL_TYPE_LABELS[toolType].toLowerCase() : "matching")} products with this motor technology first, then narrows by price. Free text is fine — an unrecognized entry is kept as-is, never guessed.
+                </p>
               </div>
             )}
 
@@ -391,12 +444,22 @@ export default function NewProjectPage() {
                 type="text"
                 value={keyDiff}
                 onChange={(e) => setKeyDiff(e.target.value)}
-                placeholder="e.g. interchangeable body kits, stayed-cool blade"
+                placeholder="e.g. full-metal body, zero-gap blade, 4-hour battery life"
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
               />
+              <p className="text-[10px] text-text-muted">Optional — competitors sharing this feature are ranked slightly higher.</p>
             </div>
           </div>
         </div>
+
+        {/* Review-step summary — pure derived text, confirms every field's
+            real value right before the project is created (no new state). */}
+        {productName.trim() && toolType && (
+          <p className="text-[11px] text-text-secondary bg-surface-3/30 border border-border rounded-lg px-4 py-2.5">
+            Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {TOOL_TYPE_LABELS[toolType]}, {motorTech.trim() || "motor tech unspecified"}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
+            {keyDiff.trim() && <> · differentiator: {keyDiff.trim()}</>}
+          </p>
+        )}
 
         {/* Action Row */}
         <div className="flex justify-end gap-3 pt-2">

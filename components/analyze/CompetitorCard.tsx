@@ -44,6 +44,10 @@ interface Competitor {
   // in-band slots (lib/analysisEngine.ts's Phase 1 top-up fallback).
   curated_brand?:      boolean;
   brand_list_status?:  "not_curated" | null;
+  // Set only for a "both" target-market analysis (lib/legacy-brand-
+  // registry.ts's resolveLegacyBrandsForIdentity merges the pro+retail
+  // curated lists) — which list(s) this curated pick came from.
+  registry_source_lists?: ("pro" | "retail")[] | null;
   // One sentence justifying why this is a real legacy/emerging competitor
   // at this price tier, per lib/analysisEngine.ts's Phase 1/2 prompts.
   inclusion_rationale?: string;
@@ -65,6 +69,11 @@ interface Competitor {
   our_lineup_percentile?:  number | null;
   feature_score?:          number;
   composite_score?:        number;
+  // Set by lib/analysisEngine.ts's selectByCompositeScore when the analysis
+  // form's Key Differentiator field was given AND this candidate's real
+  // listing text (lib/differentiator-match.ts) appears to share it — null
+  // when no Key Differentiator was given at all.
+  differentiator_match?:  boolean | null;
 }
 
 interface CompetitorCardProps {
@@ -78,6 +87,10 @@ interface CompetitorCardProps {
   // provenance row (lib/db/section-provenance.ts) carries a real
   // analysis_id when one exists. Never required for a provenance write.
   analysisId?: string | null;
+  // The analysis form's Key Differentiator text (if any) — displayed
+  // alongside competitor.differentiator_match so a "matches" line names
+  // the actual feature, not just an unlabeled checkmark.
+  keyDiff?: string | null;
 }
 
 type FeaturesState =
@@ -240,7 +253,7 @@ async function safeJson(res: Response): Promise<any> {
   }
 }
 
-export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }: CompetitorCardProps) {
+export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff }: CompetitorCardProps) {
   // All 4 sections load automatically on mount — collapsing is purely a
   // visual/reading-convenience toggle, never a fetch trigger.
   const [featuresOpen, setFeaturesOpen] = useState(true);
@@ -415,6 +428,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
               Included despite a different motor type — no exact/adjacent-motor candidate was available for this slot.
             </p>
           )}
+          {c.differentiator_match === true && keyDiff && (
+            <p className="text-[10px] text-success leading-snug">
+              ✓ Matches differentiator: {keyDiff}
+            </p>
+          )}
         </div>
       )}
 
@@ -464,6 +482,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId }
           {c.brand_list_status === "not_curated" && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="Curated brands couldn't fill all 5 legacy slots within the price band — this pick came from AI research instead.">
               Not on curated legacy list
+            </span>
+          )}
+          {c.registry_source_lists && c.registry_source_lists.length > 0 && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-blue-950/40 border border-blue-900/40 text-blue-400" title="Target Market: Both merges and dedupes the Pro/Salon and Retail curated brand lists.">
+              via {c.registry_source_lists.map(l => (l === "pro" ? "Pro/Salon" : "Retail")).join(" + ")} list
             </span>
           )}
           {c.motor_match_tier === "different" && (

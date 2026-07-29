@@ -57,7 +57,17 @@ function normalizeStr(s: string): string {
 // either side never counts as a mismatch — it simply doesn't contribute
 // (no invented "0 vs unknown" penalty). Returns 0 (not null) when nothing
 // is comparable at all, so it composes cleanly with computeCompositeScore.
-export function computeFeatureScore(ours: FeatureComparable, theirs: FeatureComparable): number {
+//
+// `differentiatorMatch` (Part 2 of the motor+price-led discovery plan) is
+// optional and backward-compatible: omit it (or pass null/undefined — the
+// "no Key Differentiator was given" case) and this returns exactly the
+// structural score as before, unchanged. When the analysis form's Key
+// Differentiator field IS set, the caller resolves whether this specific
+// candidate's real listing text matches it (lib/differentiator-match.ts)
+// and passes that boolean here — blended in at a fixed 30% weight so a
+// differentiator match can meaningfully move the score without ever fully
+// overriding grounded structural spec overlap.
+export function computeFeatureScore(ours: FeatureComparable, theirs: FeatureComparable, differentiatorMatch?: boolean | null): number {
   const checks: boolean[] = [];
 
   if (ours.bladeTech && theirs.bladeTech) checks.push(normalizeStr(ours.bladeTech) === normalizeStr(theirs.bladeTech));
@@ -68,8 +78,9 @@ export function computeFeatureScore(ours: FeatureComparable, theirs: FeatureComp
   if (ours.cordless != null && theirs.cordless != null) checks.push(ours.cordless === theirs.cordless);
   if (ours.buildMaterial && theirs.buildMaterial) checks.push(normalizeStr(ours.buildMaterial) === normalizeStr(theirs.buildMaterial));
 
-  if (checks.length === 0) return 0;
-  return checks.filter(Boolean).length / checks.length;
+  const structuralScore = checks.length === 0 ? 0 : checks.filter(Boolean).length / checks.length;
+  if (differentiatorMatch === undefined || differentiatorMatch === null) return structuralScore;
+  return structuralScore * 0.7 + (differentiatorMatch ? 1 : 0) * 0.3;
 }
 
 export function computeCompositeScore(motorScore: number, priceScore: number, featureScore: number, weights: MatchingWeights = DEFAULT_WEIGHTS): number {

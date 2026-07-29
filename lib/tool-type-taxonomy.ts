@@ -44,6 +44,18 @@ export const TOOL_TYPE_LABELS: Record<ToolType, string> = {
   combo: "Combo / Multi-Tool Kit",
 };
 
+// Which tool types are selectable for each of the analyze/new-project
+// forms' 2 Industry options — the form previously showed all 9 ToolType
+// options regardless of Industry, letting a Hair Care & Styling analysis
+// select "Clipper" (and vice versa). Combo is valid either way, since a
+// multi-tool kit can combine tools from either domain.
+export const GROOMING_TOOL_TYPES: ToolType[] = ["clipper", "trimmer", "shaver", "combo"];
+export const BEAUTY_TOOL_TYPES: ToolType[] = ["dryer", "flat_iron", "curling_iron", "hot_brush", "other_styling", "combo"];
+
+export function toolTypesForIndustry(industry: string): ToolType[] {
+  return industry === "haircare-styling" ? BEAUTY_TOOL_TYPES : GROOMING_TOOL_TYPES;
+}
+
 type SingleToolType = Exclude<ToolType, "combo" | "other_styling">;
 
 interface ToolTypeAliasEntry {

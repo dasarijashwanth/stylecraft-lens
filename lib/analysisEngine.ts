@@ -12,7 +12,7 @@ import { getMarketData } from "./market-data";
 import { buildOverviewParagraph } from "./build-overview-paragraph";
 import { identifyProduct, needsUserInput, IdentityCard } from "./product-identification";
 import { getKnownBrandsHint } from "./known-brands-by-category";
-import { assertToolType, buildToolTypePromptGuard } from "./tool-type-taxonomy";
+import { assertToolType, buildToolTypePromptGuard, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
 import type { ToolType } from "./tool-type-taxonomy";
 import { finalizeCitations } from "./citations";
 import { insertProvenance } from "./db/section-provenance";
@@ -35,6 +35,7 @@ import { buildIndieBrandLineups, computePercentileInLineup, type LineupProduct }
 import { resolveOurLineupTier, percentileForManualTier, type LineupTier } from "./our-product-position";
 import { extractCompetitorSpecs, extractOurSpecsFromTds } from "./spec-extraction";
 import { getTdsFieldsForProject } from "./db/documents";
+import { matchesDifferentiator } from "./differentiator-match";
 
 // "brushless rotary" style combined label — used consistently everywhere
 // our own motor type needs to appear in a search query or prompt.
@@ -70,6 +71,22 @@ export interface AnalysisContext {
   // back to evidence-based resolution, pausing to ask if that's also
   // unresolvable — never guesses).
   toolType?: ToolType;
+}
+
+// Snapshotted onto the phase1/phase2 result alongside matching_weights
+// (same "auditability independent of later admin/form edits" reasoning) —
+// feeds the "Data Sources & Methodology" appendix (lib/export-pdf.ts) and
+// the results/report UI, printing every form input that's supposed to
+// shape a run right next to the weights that actually used them.
+function buildFormInputsSnapshot(context: AnalysisContext) {
+  return {
+    industry: context.industry,
+    targetMarket: context.targetMarket,
+    toolType: context.toolType ?? null,
+    motorTech: context.motorTech ?? null,
+    keyDiff: context.keyDiff ?? null,
+    pricePoint: context.pricePoint ?? null,
+  };
 }
 
 // Keyed off the VERIFIED, STRICT identity.toolType (lib/tool-type-taxonomy.ts)
@@ -797,6 +814,11 @@ export interface CompositeScoringContext {
   // indie-specific concept).
   ourLineupPercentile?: number | null;
   indieLineups?: Map<string, LineupProduct[]>;
+  // The analysis form's optional Key Differentiator (context.keyDiff) —
+  // absent/null means the field was never given, in which case
+  // computeFeatureScore's differentiator blend is skipped entirely
+  // (see that function's own header comment).
+  keyDiff?: string | null;
 }
 
 // Replaces applyPriceBandGate's plain "in-band first, then closest to
@@ -868,7 +890,13 @@ export function selectByCompositeScore(
     }
 
     const theirSpecs = extractCompetitorSpecs(c);
-    const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs);
+    // Real listing text only (title/feature_bullets/description — the same
+    // grounding data enrichCompetitorsWithRainforest now forwards), never
+    // AI-claimed fields — a differentiator "match" must be found in text
+    // that's actually been verified, not just asserted by the discovery step.
+    const candidateText = [c.name, ...(Array.isArray(c.feature_bullets) ? c.feature_bullets : []), c.description || ""].filter(Boolean).join(" ");
+    const differentiatorMatch = ctx.keyDiff ? matchesDifferentiator(ctx.keyDiff, candidateText) : null;
+    const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs, differentiatorMatch);
     const compositeScore = computeCompositeScore(motorScore, priceScore, featureScore, ctx.weights);
 
     const outOfBand = !isWithinBand(c._resolvedPrice, primaryBand);
@@ -888,6 +916,7 @@ export function selectByCompositeScore(
       their_lineup_sample: theirLineupSample,
       our_lineup_percentile: ctx.ourLineupPercentile ?? null,
       feature_score: featureScore,
+      differentiator_match: differentiatorMatch,
       composite_score: compositeScore,
       ...(outOfBand ? { out_of_band: true, out_of_band_reason: buildOutOfBandLabel(_resolvedPrice, primaryBand) } : {}),
     };
@@ -986,12 +1015,20 @@ async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolT
   if (!hasRainforestKey) return competitors;
 
   return mapWithConcurrency(competitors, 3, async (c) => {
-      // Already live-verified by discoverCompetitorsLive (a `type=search`
-      // result, already real/current) — re-checking via a second,
-      // independent `type=product` lookup here is redundant and, if that
-      // second call has a transient failure, would wrongly overwrite
-      // already-good data with "unverified" placeholders.
-      if (c.verified_by_rainforest === true) return c;
+      // Already live-verified by discoverCompetitorsLive/curated-legacy
+      // discovery (a `type=search` result, already real/current for
+      // price/rating) — BUT a `type=search` result never carries
+      // specifications/attributes/feature_bullets/description (both
+      // lib/legacy-brand-discovery.ts's CuratedBrandCandidate and
+      // discoverCompetitorsLive's own candidates always have
+      // key_features: [] and nothing else), so extractCompetitorMotorType
+      // (lib/motor-extraction.ts) has no real listing text to search and
+      // silently resolves to the "unverified" tier forever. Only skip the
+      // redundant re-fetch when this candidate already has real grounding
+      // data to search — otherwise, fall through to a real `type=product`
+      // pull below so it can actually be motor-grounded.
+      const hasGroundingData = (c.specifications?.length > 0) || (c.attributes?.length > 0) || (c.feature_bullets?.length > 0) || !!c.description;
+      if (c.verified_by_rainforest === true && hasGroundingData) return c;
 
       let product = await getAmazonProduct(c.asin);
 
@@ -1026,6 +1063,15 @@ async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolT
       }
 
       if (!product) {
+        // This candidate was already trusted (a real type=search
+        // verification — curated legacy discovery or discoverCompetitorsLive
+        // — see hasGroundingData above) before this re-fetch-for-grounding
+        // attempt was even made; a failed/transient re-fetch must not
+        // regress its already-good real price/rating down to a placeholder
+        // — it simply stays ungrounded on motor type, exactly as it was
+        // before this function's grounding fix existed.
+        if (c.verified_by_rainforest === true) return c;
+
         // Keep a format-valid, AI-discovered ASIN instead of wiping it —
         // Rainforest verification can fail (credit/auth outage, transient
         // network issue) even when the ASIN itself is correct, and nulling
@@ -1076,6 +1122,14 @@ async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolT
         model_number: product.model_number,
         description: product.description,
         key_features: realFeatures.length > 0 ? realFeatures : c.key_features,
+        // Raw grounding data — forwarded (not just folded into the
+        // display-shaped key_features above) so extractCompetitorMotorType
+        // (lib/motor-extraction.ts) and matchesDifferentiator
+        // (lib/differentiator-match.ts) have real listing text to search
+        // instead of silently resolving to "unverified"/no-match forever.
+        specifications: product.specifications,
+        attributes: product.attributes,
+        feature_bullets: product.feature_bullets,
         verified_by_rainforest: true,
       };
   });
@@ -1113,13 +1167,21 @@ async function persistLegacyRegistryProvenance(competitors: any[], registry: Res
   for (const comp of competitors) {
     try {
       const isCurated = comp.curated_brand === true;
+      // registry_source_lists is only ever set for a "both" target-market
+      // merge (lib/legacy-brand-registry.ts's resolveLegacyBrandsForIdentity)
+      // — surfaces which list(s) matched right alongside the existing
+      // curated-vs-fallback tier text, same provenance mechanism.
+      const sourceLists: ("pro" | "retail")[] | null = comp.registry_source_lists ?? null;
+      const sourceListsLabel = sourceLists && sourceLists.length > 0
+        ? ` (via ${sourceLists.map(l => (l === "pro" ? "Pro/Salon" : "Retail")).join(" + ")} list)`
+        : "";
       await insertProvenance({
         productKey: resolveCacheKey(comp.asin ?? "", comp.name ?? ""),
         section: "legacy_brand_registry",
         analysisId,
         productName: comp.name ?? null,
         tiers: [{
-          tier: isCurated ? `Curated list: ${registry.categoryName}` : "Not on curated legacy list — AI-sourced fallback",
+          tier: isCurated ? `Curated list: ${registry.categoryName}${sourceListsLabel}` : "Not on curated legacy list — AI-sourced fallback",
           attempted: true,
           outcome: "success",
         }],
@@ -1357,6 +1419,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         ourMotor,
         ourSpecs,
         weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+        keyDiff: context.keyDiff ?? null,
       };
 
       // Curated legacy-brand registry (lib/db/legacy-brands.ts) takes
@@ -1373,12 +1436,21 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // Wrapped with category context on every write — the live panel
         // (components/analyze/ProgressPanel.tsx, polling this via GET
         // /api/analyses/[id]) needs the category name/slug alongside each
-        // brand's live status, not just the bare brand array.
+        // brand's live status, not just the bare brand array. motor/tool-
+        // type/price-band/market labels are included so the panel can show
+        // an upfront "Searching: X" summary of what's actually driving this
+        // search, not just the per-brand chips.
+        const legacyBand = computePriceBand(targetPriceRaw, "legacy", 0);
         const writeBrandProgress = (entries: BrandProgressEntry[]) =>
           updatePhase1BrandProgress(analysisId, {
             category_slug: registry.categorySlug,
             category_name: registry.categoryName,
             brands: entries,
+            motor_label: ourMotorLabel || null,
+            tool_type_label: identityCard.toolType && identityCard.toolType !== "combo" ? TOOL_TYPE_LABELS[identityCard.toolType] : null,
+            target_market_label: context.targetMarket,
+            price_band_low: legacyBand.min,
+            price_band_high: legacyBand.max,
           });
 
         await writeBrandProgress(registry.brands.map(b => ({ brand: b.brand_name, status: "searching" })));
@@ -1446,11 +1518,12 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           legacy_registry_snapshot: {
             category_slug: registry.categorySlug,
             category_name: registry.categoryName,
-            brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order })),
+            brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order, source_lists: b.sourceLists ?? null })),
           },
           // Same auditability reasoning — the actual weights THIS run used,
           // independent of any later admin edit to the live config.
           matching_weights: scoringCtx.weights,
+          form_inputs: buildFormInputsSnapshot(context),
         };
         // Per-competitor provenance (which curated list — or the "not on
         // curated list" AI fallback — sourced each legacy pick), feeding the
@@ -1471,6 +1544,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         }
         result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx);
         result.matching_weights = scoringCtx.weights;
+        result.form_inputs = buildFormInputsSnapshot(context);
         webSearchCount += result.web_searches_performed || 0;
       }
 
@@ -1587,9 +1661,11 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
         ourLineupPercentile,
         indieLineups,
+        keyDiff: context.keyDiff ?? null,
       };
       result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx);
       result.matching_weights = scoringCtx.weights;
+      result.form_inputs = buildFormInputsSnapshot(context);
       if (hasRainforestKey) {
         await persistPricingProvenance(result.competitors, analysisId);
       }
@@ -1936,7 +2012,11 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
 // known-brand hint is only included when the identified category matches
 // a family this app already has real brand knowledge for
 // (lib/known-brands-by-category.ts); otherwise the model searches freely.
-function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, ourMotorLabel?: string | null) {
+// Exported for scripts/verify-motor-price-discovery.ts — lets the offline
+// verify suite inspect the exact generated prompt text (e.g. assert zero
+// literal "clipper" substrings for a trimmer identity) without needing a
+// live AI call.
+export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, ourMotorLabel?: string | null) {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
   const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
@@ -1944,14 +2024,20 @@ function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, tar
   const tierKeyword = deriveTierKeyword(targetPriceRaw);
   const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
 
+  const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType] : (identity.subcategory || identity.category);
+  const combinedExampleQuery = `{brand} ${ourMotorLabel || ""} ${toolTypeLabel} near ${targetDisplay}`.replace(/\s+/g, " ").trim();
+
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
+${identity.toolType ? buildToolTypePromptGuard(identity.toolType) : ""}
+
 Your task: Research up to 8 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
 For each brand, find their ONE best matching product THAT FALLS WITHIN THE ACCEPTABLE PRICE RANGE below, in the SAME category as the identified product — among in-band candidates only, prioritize matching key attributes first. Return up to 8 products total.
-${ourMotorLabel ? `\nMOTOR TYPE IS THE #1 PRIORITY, ABOVE PRICE AND FEATURES: the identified product uses a ${ourMotorLabel} motor. For each brand, prefer their model that ALSO uses ${ourMotorLabel} (or the closest related motor technology in their lineup) over a model that merely matches on price — search directly for e.g. "{brand} ${ourMotorLabel} ${identity.subcategory || identity.category}" before falling back to a plain brand+category search. If a brand's only in-range model uses a different motor type, still include it (never leave a brand slot empty over motor mismatch alone) but make that clear in its inclusion_rationale.` : ""}
+
+DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize matching motor technology "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : ` No motor technology was specified, so proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}" — before falling back to a plain brand+category search.${ourMotorLabel ? ` For each brand, prefer their model that ALSO uses ${ourMotorLabel} (or the closest related motor technology in their lineup) over a model that merely matches on price. If a brand's only in-range model uses a different motor type, still include it (never leave a brand slot empty over motor mismatch alone) but make that clear in its inclusion_rationale.` : ""}
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
@@ -1989,7 +2075,7 @@ Return this EXACT JSON schema:
         }
       ],
       "top_feature_summary": "Single sentence — their #1 differentiating feature",
-      "inclusion_rationale": "One sentence: why this is a real established/major-brand competitor at this price tier, plus a source (e.g. 'Wahl — decades-long clipper incumbent, #1 BSR in Beauty & Personal Care, per Amazon listing')."
+      "inclusion_rationale": "One sentence: why this is a real established/major-brand competitor at this price tier, plus a source (e.g. 'Wahl — decades-long incumbent brand, #1 BSR in Beauty & Personal Care, per Amazon listing')."
     }
   ]
 }`;
@@ -2008,7 +2094,7 @@ Company Context: ${context.companyContext || "—"}
 
 Instructions:
 1. ${brandHint ? `Check these known brands first: ${brandHint.join(", ")} — then add any other established brand your search finds in this category.` : "Search broadly for established brands in this exact category."}
-2. Include the price tier in at least one of your searches, e.g. "best ${tierKeyword} ${identity.subcategory || identity.category} ${bandLabel}", to bias results toward the correct price segment.
+2. Combine motor technology and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best ${tierKeyword} ${toolTypeLabel} ${bandLabel}", to bias results toward the correct motor+price segment together.
 3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
 4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
 
@@ -2041,7 +2127,8 @@ async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityC
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
+// Exported for the same offline-verify reason as buildPhase1Prompt above.
+export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
   // brandHintOverride (when the identified product maps to a legacy-brand
   // registry category, lib/legacy-brand-registry.ts) takes priority over
   // the static, non-binding lib/known-brands-by-category.ts hint — the
@@ -2054,13 +2141,19 @@ function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, tar
   const tierKeyword = deriveTierKeyword(targetPriceRaw);
   const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
 
+  const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType] : (identity.subcategory || identity.category);
+  const combinedExampleQuery = `${ourMotorLabel || ""} ${toolTypeLabel} near ${targetDisplay}`.replace(/\s+/g, " ").trim();
+
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
+${identity.toolType ? buildToolTypePromptGuard(identity.toolType) : ""}
+
 Your task: Research up to 8 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
-${ourMotorLabel ? `\nMOTOR TYPE IS THE #1 PRIORITY: the identified product uses a ${ourMotorLabel} motor. Prioritize indie/emerging brands specifically known for similar motor technology — lead your searches with the motor type itself (e.g. "${ourMotorLabel} ${identity.subcategory || identity.category}", "best ${ourMotorLabel} ${identity.subcategory || identity.category} ${new Date().getFullYear()}", "new ${ourMotorLabel} ${identity.subcategory || identity.category} brand") before falling back to generic category searches. A candidate whose motor type you cannot confirm from its own listing should still be included if nothing better is found, but note in its inclusion_rationale that motor type could not be verified.` : ""}
+
+DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize indie/emerging brands specifically known for similar motor technology "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : ` No motor technology was specified, so proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}", or "best ${combinedExampleQuery} ${new Date().getFullYear()}" — before falling back to generic category searches.${ourMotorLabel ? ` A candidate whose motor type you cannot confirm from its own listing should still be included if nothing better is found, but note in its inclusion_rationale that motor type could not be verified.` : ""}
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
@@ -2116,7 +2209,7 @@ Key Differentiator: ${context.keyDiff || "—"}
 
 Instructions:
 1. Search Amazon for emerging brand products matching the identified category and key attributes, within the acceptable price range — price is a hard filter here, not a secondary preference.
-2. Include the price tier in at least one of your searches, e.g. "best value ${identity.subcategory || identity.category} ${bandLabel}", to bias results toward the correct price segment.
+2. Combine motor technology and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best value ${toolTypeLabel} ${bandLabel}", to bias results toward the correct motor+price segment together.
 3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
 4. ${brandHint ? `Exclude the large brands: ${brandHint.join(", ")}.` : "Exclude any large established brand — focus on indie/newer names."}
 5. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
@@ -2177,20 +2270,30 @@ async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityC
 // Runs whenever Rainforest is configured, regardless of category — the
 // static getCategoryFallbackCompetitors data is now a last-resort only,
 // used solely when Rainforest itself is unavailable/fails outright.
-async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, excludeNames: string[] = []): Promise<any[]> {
+async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, excludeNames: string[] = [], motorHint?: string | null): Promise<any[]> {
   if (!hasRainforestKey) return [];
   const category = identity.subcategory || identity.category;
   if (!category) return [];
 
   const brandHint = getKnownBrandsHint(identity.category) || [];
   const searchTerms: string[] = [];
-  // Tried first when a target price is known — biases the search toward the
+  // Motor-led search tried first when both a motor hint and a target price
+  // are known — this is the no-AI-key/offline demo fallback path (real
+  // production discovery always goes through buildPhase1Prompt/
+  // buildPhase2Prompt's combined motor+price instruction instead), but it
+  // should still lead with motor+price together rather than price alone.
+  if (motorHint && targetPriceRaw != null) {
+    const band = computePriceBand(targetPriceRaw, tier, 0);
+    searchTerms.push(`${motorHint} ${category} $${band.min.toFixed(0)}-$${band.max.toFixed(0)}`);
+  }
+  // Tried next when a target price is known — biases the search toward the
   // correct price segment before falling through to generic phrasings.
   if (targetPriceRaw != null) {
     const band = computePriceBand(targetPriceRaw, tier, 0);
     const tierKeyword = deriveTierKeyword(targetPriceRaw);
     searchTerms.push(`best ${tierKeyword} ${category} $${band.min.toFixed(0)}-$${band.max.toFixed(0)}`);
   }
+  if (motorHint) searchTerms.push(`${motorHint} ${category}`);
   if (brandHint.length) {
     const slice = tier === "legacy" ? brandHint.slice(0, 5) : brandHint.slice(-5);
     for (const b of slice) searchTerms.push(`${b} ${category}`);
@@ -2258,7 +2361,7 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
 // ----------------------------------------------------
 // SMART MOCK GENERATORS FOR OFFLINE / NO-KEY USE
 async function generateMockPhase1(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null) {
-  const live = await discoverCompetitorsLive(identity, "legacy", targetPriceRaw);
+  const live = await discoverCompetitorsLive(identity, "legacy", targetPriceRaw, [], context.motorTech || null);
   if (live.length > 0) {
     return { web_searches_performed: live.length, competitors: live };
   }
@@ -2310,7 +2413,7 @@ async function generateMockPhase1(context: AnalysisContext, identity: IdentityCa
 
 async function generateMockPhase2(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null, phase1?: any) {
   const excludeNames = (phase1?.competitors || []).map((c: any) => c.name as string);
-  const live = await discoverCompetitorsLive(identity, "emerging", targetPriceRaw, excludeNames);
+  const live = await discoverCompetitorsLive(identity, "emerging", targetPriceRaw, excludeNames, context.motorTech || null);
   if (live.length > 0) {
     return { web_searches_performed: live.length, competitors: live };
   }

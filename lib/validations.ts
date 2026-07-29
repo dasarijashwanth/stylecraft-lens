@@ -39,51 +39,56 @@ export const AddCompetitorSchema = z.object({
   main_products: z.string().max(200).optional(),
 });
 
+// Target Price is required (not just optional free text) — every field on
+// the analyze/new-project forms is meant to genuinely shape discovery, and
+// price is a hard input to the price-band/composite-scoring math
+// (lib/price-band.ts, lib/competitor-scoring.ts), so an unset price can't
+// be allowed to silently fall through as "no preference."
+const RequiredPricePoint = z.string()
+  .min(1, "Target price is required")
+  .max(20)
+  .refine(val => /^\$?\d+(\.\d{1,2})?$/.test(val), "Price must be a number like 99.95 or $99.95")
+  .refine(val => parseFloat(val.replace(/[^0-9.]/g, "")) > 0, "Target price must be greater than $0");
+
 export const ProjectSchema = z.object({
   name:            z.string().min(2).max(100),
   industry:        z.enum(["grooming-barbering", "haircare-styling"]),
   targetMarket:    z.enum(["pro", "consumer", "both"]),
-  productName:     z.string().min(2).max(100),
+  productName:     z.string().min(3).max(100),
   description:     z.string().min(10).max(2000),
   category:        z.string().max(100).optional(),
   toolType:        z.enum(TOOL_TYPE_VALUES),
   companyContext:  z.string().max(1000).optional(),
   motorTech:       z.string().max(100).optional(),
   keyDiff:         z.string().max(200).optional(),
-  pricePoint:      z.string()
-                     .max(20)
-                     .optional()
-                     .refine(
-                       val => !val || /^\$?\d+(\.\d{1,2})?$/.test(val),
-                       "Price must be a number like 99.95 or $99.95"
-                     ),
+  pricePoint:      RequiredPricePoint,
 });
 
 export const AnalysisFormSchema = z.object({
   industry: z.string().min(1, "Select an industry"),
   targetMarket: z.enum(["pro", "consumer", "both"]),
-  productName: z.string().min(2, "Product name must be at least 2 characters").max(100),
+  productName: z.string().min(3, "Product name must be at least 3 characters").max(100),
   description: z.string().min(10, "Add at least 10 characters for sharper results").max(2000),
   category: z.string().optional(),
   toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
   companyContext: z.string().max(1000).optional(),
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
-  pricePoint: z.string().max(50).optional(),
+  pricePoint: RequiredPricePoint,
 });
 
 export const NewProjectSchema = z.object({
   name: z.string().min(2, "Project name must be at least 2 characters").max(100),
   industry: z.string().min(1, "Select an industry"),
   targetMarket: z.enum(["pro", "consumer", "both"]),
-  productName: z.string().min(2, "Product name must be at least 2 characters").max(100),
+  productName: z.string().min(3, "Product name must be at least 3 characters").max(100),
   description: z.string().min(10, "Add at least 10 characters for sharper results").max(2000),
   category: z.string().optional(),
   toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
   companyContext: z.string().max(1000).optional(),
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
-  pricePoint: z.string().max(50).optional(),
+  pricePoint: RequiredPricePoint,
   // The product-anchor identity — optional, but when provided drives the
   // real-time TDS snapshot + auto-fill pipeline (see lib/snapshot-capture.ts).
   productUrl: z.string().max(500).optional().refine(v => !v || normalizeUrl(v) !== null, "Enter a valid product URL"),
