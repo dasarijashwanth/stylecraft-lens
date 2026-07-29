@@ -525,6 +525,20 @@ interface TableRowDef {
   label: string;
   getValue: (comp: any, idx: number) => string | null;
   getSourceUrl?: (comp: any, idx: number) => string | null;
+  // Overrides the generic "Not available for {name}" fallback text for a
+  // null cell — used by the Amazon-only rows below to say WHY it's empty
+  // (sold via brand/pro channels, not simply "unknown") when a competitor
+  // is real and verified but genuinely has no Amazon listing at all.
+  getEmptyLabel?: (comp: any) => string | null;
+}
+
+// Shared by every Amazon-only row (rating/reviews/BSR/monthly sales) — a
+// competitor discovered via lib/legacy-brand-discovery.ts's brand-site
+// pass with no matching Amazon listing (sources.amazon === null) is real
+// and verified, just not sold on Amazon; that's a different, more
+// specific empty-state than "we don't know."
+function amazonOnlyEmptyLabel(c: any): string | null {
+  return c.sources?.brand_site && !c.sources?.amazon ? "Sold via brand/pro channels — not on Amazon" : null;
 }
 
 function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTableProps) {
@@ -541,10 +555,10 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
       getValue: (c) => (c.motor_match_tier === "unverified" ? "Unverified" : c.motor_type || null),
     },
     { label: "Amazon Price", getValue: (c) => c.price || null },
-    { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null) },
-    { label: "Review Count", getValue: (c) => c.review_count || null },
-    { label: "Monthly Sales", getValue: (c) => c.monthly_sales || null },
-    { label: "Best Seller Rank", getValue: (c) => c.bsr_rank || null },
+    { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null), getEmptyLabel: amazonOnlyEmptyLabel },
+    { label: "Review Count", getValue: (c) => c.review_count || null, getEmptyLabel: amazonOnlyEmptyLabel },
+    { label: "Monthly Sales", getValue: (c) => c.monthly_sales || null, getEmptyLabel: amazonOnlyEmptyLabel },
+    { label: "Best Seller Rank", getValue: (c) => c.bsr_rank || null, getEmptyLabel: amazonOnlyEmptyLabel },
     { label: "Brand", getValue: (c) => c.brand || null },
     { label: "Manufacturer", getValue: (c) => c.manufacturer || null },
     { label: "Model Number", getValue: (c) => c.model_number || null },
@@ -586,8 +600,9 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
               {competitors.map((comp, idx) => {
                 const value = row.getValue(comp, idx);
                 const sourceUrl = row.getSourceUrl?.(comp, idx);
+                const emptyLabel = !value ? (row.getEmptyLabel?.(comp) || `Not available for ${comp.brand || comp.name}`) : null;
                 return (
-                  <td key={idx} className="p-2 border-r border-border/40 max-w-[180px] truncate" title={value ?? `Not available for ${comp.brand || comp.name}`}>
+                  <td key={idx} className="p-2 border-r border-border/40 max-w-[180px] truncate" title={value ?? emptyLabel ?? undefined}>
                     {value ? (
                       <span className="inline-flex items-center gap-1">
                         {value}
@@ -598,7 +613,7 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
                         )}
                       </span>
                     ) : (
-                      <span className="italic text-text-muted normal-case font-sans">Not available for {comp.brand || comp.name}</span>
+                      <span className="italic text-text-muted normal-case font-sans">{emptyLabel}</span>
                     )}
                   </td>
                 );

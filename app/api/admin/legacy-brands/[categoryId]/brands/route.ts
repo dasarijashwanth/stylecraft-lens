@@ -13,7 +13,7 @@ export async function POST(req: NextRequest, { params }: { params: { categoryId:
     const session = await getAuthSession();
     requireAdmin(session.role);
 
-    const { brandName, aliases } = await req.json();
+    const { brandName, aliases, officialDomains } = await req.json();
     if (!brandName || !String(brandName).trim()) {
       return NextResponse.json({ error: "brandName is required" }, { status: 400 });
     }
@@ -21,6 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: { categoryId:
     const brand = await addBrand(params.categoryId, {
       brandName: String(brandName).trim(),
       aliases: Array.isArray(aliases) ? aliases.filter(Boolean) : [],
+      officialDomains: Array.isArray(officialDomains) ? officialDomains.filter(Boolean) : [],
     });
     return NextResponse.json({ brand });
   } catch (err: any) {

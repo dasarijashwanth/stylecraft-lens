@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ShieldAlert, Plus, X, Loader2, ArrowUp, ArrowDown } from "lucide-react";
+import { ShieldAlert, Plus, X, Loader2, ArrowUp, ArrowDown, Pencil, Check, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { Spinner } from "@/components/ui/Spinner";
@@ -11,8 +11,19 @@ interface Brand {
   category_id: string;
   brand_name: string;
   aliases: string[];
+  official_domains: string[];
   enabled: boolean;
   sort_order: number;
+}
+
+interface DomainHealthEntry {
+  brandName: string;
+  domain: string;
+  attempts: number;
+  errors: number;
+  lastOutcome: string;
+  lastAttemptedAt: string;
+  flagged: boolean;
 }
 
 interface Category {
@@ -31,6 +42,9 @@ export default function LegacyBrandsAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [newBrandText, setNewBrandText] = useState<Record<string, string>>({});
   const [busyBrandId, setBusyBrandId] = useState<string | null>(null);
+  const [editingDomainsFor, setEditingDomainsFor] = useState<string | null>(null);
+  const [domainsDraft, setDomainsDraft] = useState("");
+  const [domainHealth, setDomainHealth] = useState<DomainHealthEntry[]>([]);
 
   async function load() {
     setLoading(true);
@@ -47,10 +61,48 @@ export default function LegacyBrandsAdminPage() {
     }
   }
 
+  async function loadDomainHealth() {
+    try {
+      const res = await fetch("/api/admin/legacy-brands/domain-health");
+      const data = await res.json();
+      if (res.ok) setDomainHealth(data.health || []);
+    } catch {
+      // Best-effort only — the health panel just stays empty on failure.
+    }
+  }
+
   useEffect(() => {
-    if (user && (user.role === "OWNER" || user.role === "ADMIN")) load();
+    if (user && (user.role === "OWNER" || user.role === "ADMIN")) {
+      load();
+      loadDomainHealth();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  function startEditingDomains(brand: Brand) {
+    setEditingDomainsFor(brand.id);
+    setDomainsDraft(brand.official_domains.join(", "));
+  }
+
+  async function saveDomains(categoryId: string, brandId: string) {
+    const officialDomains = domainsDraft.split(",").map(d => d.trim().toLowerCase()).filter(Boolean);
+    setBusyBrandId(brandId);
+    try {
+      const res = await fetch(`/api/admin/legacy-brands/${categoryId}/brands/${brandId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ officialDomains }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update domains");
+      setEditingDomainsFor(null);
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update domains");
+    } finally {
+      setBusyBrandId(null);
+    }
+  }
 
   // Shorthand: "Hot Tools (Hot Tools Professional, HT Pro)" adds a brand
   // with aliases in one line, matching the spec's "include brand aliases
@@ -199,9 +251,35 @@ export default function LegacyBrandsAdminPage() {
                       </button>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <span className="text-xs font-semibold text-text-primary">{brand.brand_name}</span>
-                      {brand.aliases.length > 0 && (
-                        <span className="ml-2 text-[10px] text-text-muted">aka {brand.aliases.join(", ")}</span>
+                      <div>
+                        <span className="text-xs font-semibold text-text-primary">{brand.brand_name}</span>
+                        {brand.aliases.length > 0 && (
+                          <span className="ml-2 text-[10px] text-text-muted">aka {brand.aliases.join(", ")}</span>
+                        )}
+                      </div>
+                      {editingDomainsFor === brand.id ? (
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <input
+                            type="text"
+                            value={domainsDraft}
+                            onChange={e => setDomainsDraft(e.target.value)}
+                            onKeyDown={e => e.key === "Enter" && saveDomains(category.id, brand.id)}
+                            placeholder="e.g. wahlpro.com, wahl.com"
+                            autoFocus
+                            className="flex-1 px-2 py-1 text-[10px] border border-border rounded bg-surface-1 text-text-primary outline-none focus:border-accent"
+                          />
+                          <button type="button" onClick={() => saveDomains(category.id, brand.id)} disabled={busyBrandId === brand.id} className="p-1 text-success hover:text-success/80" title="Save">
+                            {busyBrandId === brand.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                          </button>
+                          <button type="button" onClick={() => setEditingDomainsFor(null)} className="p-1 text-text-muted hover:text-danger" title="Cancel">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button type="button" onClick={() => startEditingDomains(brand)} className="flex items-center gap-1 mt-0.5 text-[10px] text-text-muted hover:text-accent transition-colors">
+                          <span>{brand.official_domains.length > 0 ? `sites: ${brand.official_domains.join(", ")}` : "no official site configured"}</span>
+                          <Pencil className="w-2.5 h-2.5" />
+                        </button>
                       )}
                     </div>
                     <button
@@ -245,6 +323,36 @@ export default function LegacyBrandsAdminPage() {
               </div>
             </div>
           ))}
+
+          {domainHealth.length > 0 && (
+            <div className="border border-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
+                <h2 className="text-xs font-bold text-text-primary">Domain health</h2>
+                <p className="text-[10px] text-text-muted">
+                  Rolled up from recent brand-official-site discovery attempts. A flagged domain has failed on every one of its last 3+ attempts — likely wrong, renamed, or unreachable.
+                </p>
+              </div>
+              <div className="p-4 space-y-1.5">
+                {domainHealth.map(h => (
+                  <div
+                    key={`${h.brandName}::${h.domain}`}
+                    className={`flex items-center justify-between px-3 py-1.5 rounded-lg border text-[11px] ${
+                      h.flagged ? "border-danger/30 bg-danger-bg" : "border-border bg-surface-1"
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {h.flagged && <AlertTriangle className="w-3 h-3 text-danger shrink-0" />}
+                      <span className="font-semibold text-text-primary">{h.brandName}</span>
+                      <span className="text-text-muted">{h.domain}</span>
+                    </div>
+                    <span className="text-text-muted">
+                      {h.errors}/{h.attempts} failed · last: {h.lastOutcome}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

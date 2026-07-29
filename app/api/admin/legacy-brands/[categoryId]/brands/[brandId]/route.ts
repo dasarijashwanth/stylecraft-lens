@@ -17,9 +17,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { categoryId
     requireAdmin(session.role);
 
     const body = await req.json();
-    const patch: { brandName?: string; aliases?: string[]; enabled?: boolean; sortOrder?: number } = {};
+    const patch: { brandName?: string; aliases?: string[]; officialDomains?: string[]; enabled?: boolean; sortOrder?: number } = {};
     if (typeof body.brandName === "string") patch.brandName = body.brandName.trim();
     if (Array.isArray(body.aliases)) patch.aliases = body.aliases.filter(Boolean);
+    if (Array.isArray(body.officialDomains)) patch.officialDomains = body.officialDomains.filter(Boolean);
     if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
     if (typeof body.sortOrder === "number") patch.sortOrder = body.sortOrder;
 

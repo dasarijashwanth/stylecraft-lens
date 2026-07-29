@@ -24,6 +24,11 @@ export interface LegacyBrandRow {
   category_id: string;
   brand_name: string;
   aliases: string[];
+  // Brand's own official website domain(s) (e.g. "wahlpro.com") — searched
+  // FIRST by lib/brand-site-discovery.ts, before Amazon, so a legacy pro
+  // product that isn't on Amazon at all can still become a competitor.
+  // Admin-editable at /dashboard/admin/legacy-brands, same as aliases.
+  official_domains: string[];
   enabled: boolean;
   sort_order: number;
   created_at: string;
@@ -35,7 +40,7 @@ function mockCategoryToRow(c: MockBrandCategory): BrandCategoryRow {
 }
 
 function mockBrandToRow(b: MockLegacyBrand): LegacyBrandRow {
-  return { id: b.id, category_id: b.categoryId, brand_name: b.brandName, aliases: b.aliases, enabled: b.enabled, sort_order: b.sortOrder, created_at: b.createdAt.toISOString(), updated_at: b.updatedAt.toISOString() };
+  return { id: b.id, category_id: b.categoryId, brand_name: b.brandName, aliases: b.aliases, official_domains: b.officialDomains, enabled: b.enabled, sort_order: b.sortOrder, created_at: b.createdAt.toISOString(), updated_at: b.updatedAt.toISOString() };
 }
 
 export async function listCategories(): Promise<BrandCategoryRow[]> {
@@ -79,7 +84,7 @@ export async function getEnabledLegacyBrandsForCategory(slug: string): Promise<L
   return brands.filter(b => b.enabled).sort((a, b) => a.sort_order - b.sort_order);
 }
 
-export async function addBrand(categoryId: string, input: { brandName: string; aliases?: string[] }): Promise<LegacyBrandRow> {
+export async function addBrand(categoryId: string, input: { brandName: string; aliases?: string[]; officialDomains?: string[] }): Promise<LegacyBrandRow> {
   if (isSupabaseConfigured) {
     const { data: existing } = await supabaseAdmin
       .from("legacy_brands")
@@ -91,7 +96,7 @@ export async function addBrand(categoryId: string, input: { brandName: string; a
     const nextSort = (existing?.sort_order ?? -1) + 1;
     const { data, error } = await supabaseAdmin
       .from("legacy_brands")
-      .insert({ category_id: categoryId, brand_name: input.brandName, aliases: input.aliases || [], sort_order: nextSort })
+      .insert({ category_id: categoryId, brand_name: input.brandName, aliases: input.aliases || [], official_domains: input.officialDomains || [], sort_order: nextSort })
       .select()
       .single();
     if (error) throw error;
@@ -106,6 +111,7 @@ export async function addBrand(categoryId: string, input: { brandName: string; a
     categoryId,
     brandName: input.brandName,
     aliases: input.aliases || [],
+    officialDomains: input.officialDomains || [],
     enabled: true,
     sortOrder: nextSort,
     createdAt: now,
@@ -117,12 +123,13 @@ export async function addBrand(categoryId: string, input: { brandName: string; a
 
 export async function updateBrand(
   brandId: string,
-  patch: { brandName?: string; aliases?: string[]; enabled?: boolean; sortOrder?: number }
+  patch: { brandName?: string; aliases?: string[]; officialDomains?: string[]; enabled?: boolean; sortOrder?: number }
 ): Promise<LegacyBrandRow | null> {
   if (isSupabaseConfigured) {
     const dbPatch: any = { updated_at: new Date().toISOString() };
     if (patch.brandName !== undefined) dbPatch.brand_name = patch.brandName;
     if (patch.aliases !== undefined) dbPatch.aliases = patch.aliases;
+    if (patch.officialDomains !== undefined) dbPatch.official_domains = patch.officialDomains;
     if (patch.enabled !== undefined) dbPatch.enabled = patch.enabled;
     if (patch.sortOrder !== undefined) dbPatch.sort_order = patch.sortOrder;
     const { data, error } = await supabaseAdmin.from("legacy_brands").update(dbPatch).eq("id", brandId).select().single();
@@ -134,6 +141,7 @@ export async function updateBrand(
   if (!row) return null;
   if (patch.brandName !== undefined) row.brandName = patch.brandName;
   if (patch.aliases !== undefined) row.aliases = patch.aliases;
+  if (patch.officialDomains !== undefined) row.officialDomains = patch.officialDomains;
   if (patch.enabled !== undefined) row.enabled = patch.enabled;
   if (patch.sortOrder !== undefined) row.sortOrder = patch.sortOrder;
   row.updatedAt = new Date();

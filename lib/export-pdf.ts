@@ -33,6 +33,33 @@ function renderFormInputsLine(formInputs: any): string {
   `;
 }
 
+// One line per selected competitor: its motor evidence (verbatim quote +
+// URL when one was actually found), price logic, and which source(s)
+// contributed (brand_site/amazon/both) — the existing section-level rows
+// below cover key_features/reviews/news/pricing as a whole section, never
+// at this per-competitor granularity.
+function renderCompetitorEvidenceHTML(ca: any): string {
+  const competitors = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])];
+  if (competitors.length === 0) return "";
+
+  return `
+    <h3 style="font-size: 12px; margin-top: 14px;">Per-Competitor Evidence</h3>
+    <ul style="font-size: 9px; color: #666;">
+      ${competitors.map((c: any) => {
+        const motorLine = c.motor_match_tier === "unverified"
+          ? "Motor type: not confirmed from any source"
+          : `Motor type: ${escapeHtml(c.motor_type || "unknown")} (${escapeHtml(c.motor_match_tier || "unverified")})${c.motor_source_quote ? ` — &quot;${escapeHtml(c.motor_source_quote)}&quot;` : ""}`;
+        const priceLine = `Price: ${c.price_logic === "relative" ? "matched by relative brand tier" : "matched by absolute proximity to target"}`;
+        const sourceLabel = c.sources?.brand_site && c.sources?.amazon ? "brand site + Amazon"
+          : c.sources?.brand_site ? `brand site (${escapeHtml(c.sources.brand_site.url)})`
+          : c.sources?.amazon ? "Amazon" : "unspecified";
+        const fallbackLine = c.motor_unverified_fallback ? " — included as a last-resort, motor-unverified pick" : "";
+        return `<li><strong>${escapeHtml(c.name || "Unknown")}</strong> — ${motorLine}; ${priceLine}; source: ${sourceLabel}${fallbackLine}</li>`;
+      }).join("")}
+    </ul>
+  `;
+}
+
 // "Data Sources & Methodology" appendix — one block per product+section,
 // rendered from whatever persisted provenance rows ended up on the report
 // (lib/db/reports.ts attaches these at save time; see lib/section-provenance.ts).
@@ -54,7 +81,7 @@ function renderProvenanceAppendixHTML(report: any): string {
 
   const SECTION_LABELS: Record<string, string> = {
     key_features: "Key Features", reviews: "Reviews", news: "News Updates", pricing: "Pricing",
-    legacy_brand_registry: "Legacy Brand Sourcing",
+    legacy_brand_registry: "Legacy Brand Sourcing", brand_site_discovery: "Brand Official Site",
   };
 
   const weights = ca.matching_weights;
@@ -71,6 +98,7 @@ function renderProvenanceAppendixHTML(report: any): string {
         motor/price/feature scores are noted on its comparison table row above.
       </p>
     ` : ""}
+    ${renderCompetitorEvidenceHTML(ca)}
     ${rows.map(row => `
       <div class="comp-specs" style="margin-bottom: 10px;">
         <p><strong>${escapeHtml(row.product_name || "Unknown product")} — ${SECTION_LABELS[row.section] || row.section}</strong></p>

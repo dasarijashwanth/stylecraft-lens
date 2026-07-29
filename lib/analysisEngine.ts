@@ -843,7 +843,7 @@ export function selectByCompositeScore(
   identity: IdentityCard,
   limit: number,
   ctx: CompositeScoringContext,
-  opts: { allowStaticFallbackTopup?: boolean } = {}
+  opts: { allowStaticFallbackTopup?: boolean; requireMotorEvidenceFirst?: boolean } = {}
 ): any[] {
   const allowStaticFallbackTopup = opts.allowStaticFallbackTopup ?? true;
   const withPrice = candidates.map(c => ({
@@ -923,7 +923,36 @@ export function selectByCompositeScore(
   });
 
   scored.sort((a, b) => b.composite_score - a.composite_score);
-  let final = tier === "legacy" ? dedupeToOnePerBrand(scored, limit) : scored.slice(0, limit);
+
+  let final: any[];
+  if (opts.requireMotorEvidenceFirst) {
+    // Motor evidence required to be a first-class ("verified") candidate —
+    // exact/adjacent/different tiers all mean "we found real motor-type
+    // text for this candidate," even a confirmed mismatch; only
+    // "unverified" (zero motor evidence at all) is held back. Verified
+    // candidates fill slots first (still ranked among themselves by the
+    // existing composite score); unverified ones are only pulled in for
+    // any slots still empty afterward, and are excluded from brands a
+    // verified pick already seated (never let an ungrounded pick from a
+    // brand crowd out — or duplicate — a brand that already has a real,
+    // motor-evidenced competitor).
+    const verifiedPool = scored.filter(c => c.motor_match_tier !== "unverified");
+    const unverifiedPool = scored.filter(c => c.motor_match_tier === "unverified");
+    final = tier === "legacy" ? dedupeToOnePerBrand(verifiedPool, limit) : verifiedPool.slice(0, limit);
+
+    if (final.length < limit) {
+      const usedBrands = new Set(final.map((c: any) => (c.brand || "").trim().toLowerCase()));
+      const remaining = limit - final.length;
+      const fallbackPool = tier === "legacy"
+        ? unverifiedPool.filter((c: any) => !usedBrands.has((c.brand || "").trim().toLowerCase()))
+        : unverifiedPool;
+      const topUp = (tier === "legacy" ? dedupeToOnePerBrand(fallbackPool, remaining) : fallbackPool.slice(0, remaining))
+        .map((c: any) => ({ ...c, motor_unverified_fallback: true }));
+      final = [...final, ...topUp];
+    }
+  } else {
+    final = tier === "legacy" ? dedupeToOnePerBrand(scored, limit) : scored.slice(0, limit);
+  }
 
   // Same static-fallback topup as applyPriceBandGate, for the same reason —
   // only reachable for categories with real curated fallback data.
@@ -1011,6 +1040,48 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 // their price/rating/ASIN explicitly cleared (never left showing a stale
 // or fabricated value as if it were current) and point at a live Amazon
 // search instead of a fabricated /dp/{asin} link.
+// Direct-ASIN lookup, falling back to a brand+title search when there's no
+// ASIN or the direct lookup resolved the wrong product — both legs
+// tool-type-gated. Extracted so a candidate that never had an ASIN at all
+// (a brand-site-only curated find, see lib/legacy-brand-discovery.ts's
+// buildHybridCandidate) can still attempt this exact same cross-check for
+// its own `sources.amazon`, without duplicating the resolution logic.
+async function resolveAmazonProductForCandidate(asin: string | undefined | null, name: string, brand: string | undefined, requiredToolType?: ToolType | null) {
+  let product = asin ? await getAmazonProduct(asin) : null;
+
+  // A syntactically-valid, real ASIN can still be the WRONG product — the
+  // direct lookup has no cross-check against what the AI actually claimed
+  // this competitor was, so a stale/hallucinated/sibling-SKU ASIN would
+  // otherwise silently overwrite price/rating/specs/images with a
+  // different tool type's real data while the displayed name stayed
+  // unchanged (an invisible mismatch). Discard it exactly like a failed
+  // lookup rather than trusting a wrong-type product.
+  if (product && requiredToolType && !assertToolType(product.title, requiredToolType).ok) {
+    console.warn(`[tool-type] discarded direct-ASIN Rainforest match for "${name}" — "${product.title}" doesn't match required type ${requiredToolType}`);
+    product = null;
+  }
+
+  if (!product) {
+    const match = await resolveAsinBySearch(name, brand);
+    if (match) {
+      const candidateProduct = await getAmazonProduct(match.asin);
+      // Same tool-type cross-check on the fallback title-search match —
+      // its own acceptance threshold (brand-substring + >=0.6 title
+      // token-overlap similarity) comfortably passes a sibling product
+      // whose title differs only in the type word (e.g. "clipper" vs
+      // "trimmer"), so tool-type agreement is required IN ADDITION to
+      // that similarity score, not instead of it.
+      if (candidateProduct && requiredToolType && !assertToolType(candidateProduct.title, requiredToolType).ok) {
+        console.warn(`[tool-type] discarded fallback title-search match for "${name}" — "${candidateProduct.title}" doesn't match required type ${requiredToolType}`);
+      } else {
+        product = candidateProduct;
+      }
+    }
+  }
+
+  return product;
+}
+
 async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolType?: ToolType | null): Promise<any[]> {
   if (!hasRainforestKey) return competitors;
 
@@ -1030,37 +1101,7 @@ async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolT
       const hasGroundingData = (c.specifications?.length > 0) || (c.attributes?.length > 0) || (c.feature_bullets?.length > 0) || !!c.description;
       if (c.verified_by_rainforest === true && hasGroundingData) return c;
 
-      let product = await getAmazonProduct(c.asin);
-
-      // A syntactically-valid, real ASIN can still be the WRONG product —
-      // the direct lookup has no cross-check against what the AI actually
-      // claimed this competitor was, so a stale/hallucinated/sibling-SKU
-      // ASIN would otherwise silently overwrite price/rating/specs/images
-      // with a different tool type's real data while the displayed name
-      // stayed unchanged (an invisible mismatch). Discard it exactly like
-      // a failed lookup rather than trusting a wrong-type product.
-      if (product && requiredToolType && !assertToolType(product.title, requiredToolType).ok) {
-        console.warn(`[tool-type] discarded direct-ASIN Rainforest match for "${c.name}" — "${product.title}" doesn't match required type ${requiredToolType}`);
-        product = null;
-      }
-
-      if (!product) {
-        const match = await resolveAsinBySearch(c.name, c.brand);
-        if (match) {
-          const candidateProduct = await getAmazonProduct(match.asin);
-          // Same tool-type cross-check on the fallback title-search match
-          // — its own acceptance threshold (brand-substring + >=0.6 title
-          // token-overlap similarity) comfortably passes a sibling product
-          // whose title differs only in the type word (e.g. "clipper" vs
-          // "trimmer"), so tool-type agreement is required IN ADDITION to
-          // that similarity score, not instead of it.
-          if (candidateProduct && requiredToolType && !assertToolType(candidateProduct.title, requiredToolType).ok) {
-            console.warn(`[tool-type] discarded fallback title-search match for "${c.name}" — "${candidateProduct.title}" doesn't match required type ${requiredToolType}`);
-          } else {
-            product = candidateProduct;
-          }
-        }
-      }
+      const product = await resolveAmazonProductForCandidate(c.asin, c.name, c.brand, requiredToolType);
 
       if (!product) {
         // This candidate was already trusted (a real type=search
@@ -1131,6 +1172,18 @@ async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolT
         attributes: product.attributes,
         feature_bullets: product.feature_bullets,
         verified_by_rainforest: true,
+        // Preserves any existing sources.brand_site (a curated hybrid
+        // candidate re-grounded here) while recording this real Amazon
+        // pull — c.sources is undefined for every non-curated candidate,
+        // in which case this is simply { brand_site: undefined, amazon }.
+        sources: {
+          ...(c.sources || {}),
+          amazon: {
+            asin: product.asin, url: product.amazon_url, price: product.price, price_raw: product.price_raw,
+            rating: product.rating_str, review_count: product.reviews_str, bsr_rank: product.bsr, monthly_sales: product.monthly_str,
+            retrieved_at: new Date().toISOString(),
+          },
+        },
       };
   });
 }
@@ -1466,6 +1519,60 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         );
 
         let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard);
+
+        // Real motor-grounding fix — curated candidates from the Amazon leg
+        // (lib/legacy-brand-discovery.ts's toCandidate, a type=search result
+        // only) never had specifications/attributes/feature_bullets, so
+        // extractCompetitorMotorType always resolved "unverified" for them.
+        // This mirrors exactly what the AI-driven (non-registry) branch
+        // below already does — same function, same hasGroundingData
+        // short-circuit, zero new logic. Brand-site-sourced candidates
+        // already carry real description text (skipped by that
+        // short-circuit) so this only re-fetches the ones that actually
+        // still need it (pure Amazon-leg hits with no brand-site data).
+        if (hasRainforestKey) {
+          competitors = await enrichCompetitorsWithRainforest(competitors, identityCard.toolType);
+        }
+
+        // Brand-site-only candidates (no Amazon match from the concurrent
+        // Amazon leg) still get one real Amazon cross-check attempt for
+        // their own sources.amazon — "Attempt ASIN resolution for every
+        // brand-site find; amazon:null is fully supported." A miss here
+        // never clobbers the candidate's already-real brand-site price/
+        // verification (unlike enrichCompetitorsWithRainforest's own
+        // failure path, which is correct for "Amazon lookup failed" but
+        // wrong for "verified via brand site, simply not on Amazon").
+        if (hasRainforestKey) {
+          competitors = await mapWithConcurrency(competitors, 3, async (c: any) => {
+            if (!c.sources?.brand_site || c.sources?.amazon) return c;
+            const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, identityCard.toolType);
+            if (!product) return c;
+
+            const sitePriceRaw = c.sources.brand_site.price_raw;
+            const useAmazonPrice = product.price_raw != null && (sitePriceRaw == null || product.price_raw <= sitePriceRaw);
+
+            return {
+              ...c,
+              asin: product.asin,
+              amazon_url: product.amazon_url,
+              rating: product.rating_str,
+              review_count: product.reviews_str,
+              bsr_rank: product.bsr || c.bsr_rank,
+              monthly_sales: product.monthly_str || c.monthly_sales,
+              price: useAmazonPrice ? product.price : c.price,
+              price_raw: useAmazonPrice ? product.price_raw : c.price_raw,
+              sources: {
+                ...c.sources,
+                amazon: {
+                  asin: product.asin, url: product.amazon_url, price: product.price, price_raw: product.price_raw,
+                  rating: product.rating_str, review_count: product.reviews_str, bsr_rank: product.bsr, monthly_sales: product.monthly_str,
+                  retrieved_at: new Date().toISOString(),
+                },
+              },
+            };
+          });
+        }
+
         // Motor -> price -> feature composite selection, not just
         // "in-band first, then closest to target price" — see
         // selectByCompositeScore's own header comment for why
@@ -1474,7 +1581,11 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // unrelated static getCategoryFallbackCompetitors dataset in place
         // of an honest "not on curated list" AI result below (topup is
         // still available on the SECOND, post-AI-topup call further down).
-        competitors = selectByCompositeScore(competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: false });
+        // requireMotorEvidenceFirst:true — a real motor-evidenced candidate
+        // (from any brand) always fills a slot before a motor-unverified
+        // one does, per the "motor before brand" reordering this whole
+        // module exists for.
+        competitors = selectByCompositeScore(competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
 
         // Only attempt the AI top-up if the curated pass finished fast — it
         // has its own ~15s hard cap (CURATED_BRAND_SEARCH_TIME_BUDGET_MS),
@@ -1506,7 +1617,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
             .map((c: any) => ({ ...c, curated_brand: false, brand_list_status: "not_curated" }));
 
-          competitors = selectByCompositeScore([...competitors, ...aiCompetitors], targetPriceRaw, "legacy", identityCard, 5, scoringCtx);
+          competitors = selectByCompositeScore([...competitors, ...aiCompetitors], targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true });
         }
 
         result = {
@@ -1542,7 +1653,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         if (hasRainforestKey) {
           result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
         }
-        result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx);
+        result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true });
         result.matching_weights = scoringCtx.weights;
         result.form_inputs = buildFormInputsSnapshot(context);
         webSearchCount += result.web_searches_performed || 0;
@@ -1663,7 +1774,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         indieLineups,
         keyDiff: context.keyDiff ?? null,
       };
-      result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx);
+      result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true });
       result.matching_weights = scoringCtx.weights;
       result.form_inputs = buildFormInputsSnapshot(context);
       if (hasRainforestKey) {
@@ -2090,7 +2201,7 @@ Key Attributes: ${attributesLine}
 Target Market: ${context.targetMarket}
 Target Price Point: ${targetDisplay} — ACCEPTABLE RANGE: ${bandLabel} (see CRITICAL RULES). Reject anything outside this range.
 Key Differentiator: ${context.keyDiff || "—"}
-Company Context: ${context.companyContext || "—"}
+Positioning Context (product-specific facts — current BSR, price tier, target customer — never a company/brand description): ${context.companyContext || "—"}
 
 Instructions:
 1. ${brandHint ? `Check these known brands first: ${brandHint.join(", ")} — then add any other established brand your search finds in this category.` : "Search broadly for established brands in this exact category."}
@@ -2206,6 +2317,7 @@ Key Attributes: ${attributesLine}
 Target Market: ${context.targetMarket}
 Target Price Point: ${targetDisplay} — ACCEPTABLE RANGE: ${bandLabel} (see CRITICAL RULES). Reject anything outside this range.
 Key Differentiator: ${context.keyDiff || "—"}
+Positioning Context (product-specific facts — current BSR, price tier, target customer — never a company/brand description): ${context.companyContext || "—"}
 
 Instructions:
 1. Search Amazon for emerging brand products matching the identified category and key attributes, within the acceptable price range — price is a hard filter here, not a secondary preference.

@@ -41,11 +41,30 @@ function competitorSummary(c: any): string {
   if (c.manufacturer) parts.push(`Mfr: ${c.manufacturer}`);
   if (c.model_number) parts.push(`Model: ${c.model_number}`);
   if (c.verified_by_rainforest === false) parts.push("unverified");
+  // A real, verified competitor that simply isn't sold on Amazon at all
+  // (lib/legacy-brand-discovery.ts's brand-site pass) — distinct from the
+  // "unverified" tag above, which means a lookup was attempted and failed.
+  if (c.sources?.brand_site && !c.sources?.amazon) parts.push("Sold via brand/pro channels — not on Amazon");
+  if (c.motor_unverified_fallback) parts.push("last-resort pick, motor type unconfirmed");
   // Only the exception is flagged — a curated-list pick is the expected
   // default and needs no extra tag; a competitor the curated registry
   // couldn't fill (lib/analysisEngine.ts's AI top-up fallback) does.
   if (c.brand_list_status === "not_curated") parts.push("Not on curated legacy list");
   return parts.length > 0 ? parts.join(" · ") : "No verified pricing/rating data found for this competitor";
+}
+
+// Same per-competitor evidence block as lib/export-pdf.ts's
+// renderCompetitorEvidenceHTML — motor evidence quote+source and which
+// source(s) contributed, at a finer grain than the section-level
+// ProvenanceAppendix below.
+function competitorEvidenceLine(c: any): string {
+  const motorLine = c.motor_match_tier === "unverified"
+    ? "not confirmed from any source"
+    : `${c.motor_type || "unknown"} (${c.motor_match_tier})${c.motor_source_quote ? ` — "${c.motor_source_quote}"` : ""}`;
+  const sourceLabel = c.sources?.brand_site && c.sources?.amazon ? "brand site + Amazon"
+    : c.sources?.brand_site ? `brand site (${c.sources.brand_site.url})`
+    : c.sources?.amazon ? "Amazon" : "unspecified";
+  return `Motor: ${motorLine} · Source: ${sourceLabel}`;
 }
 
 export function ActiveReportPdf({
@@ -181,6 +200,14 @@ export function ActiveReportPdf({
               proximity ({Math.round(matchingWeights.price * 100)}%) — absolute for legacy brands, relative to each
               indie brand&apos;s own lineup — then comparable feature/spec overlap ({Math.round(matchingWeights.feature * 100)}%).
             </Text>
+          )}
+          {(largeComps.length > 0 || emergingComps.length > 0) && (
+            <View style={{ marginBottom: 8 }}>
+              <Text style={{ fontSize: 10, fontWeight: 700, marginBottom: 4 }}>Per-Competitor Evidence</Text>
+              {[...largeComps, ...emergingComps].map((c: any, i: number) => (
+                <TwoColRow key={i} question={c.name} answer={competitorEvidenceLine(c)} />
+              ))}
+            </View>
           )}
           <ProvenanceAppendix rows={provenanceRows} />
           <PageFooter />

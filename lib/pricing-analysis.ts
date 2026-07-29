@@ -26,6 +26,25 @@ export interface PricingBenchmarkRow {
   price_raw: number | null;
   source_url: string | null;
   retrieved_at: string | null;
+  // Which source this row's price actually came from — a curated legacy
+  // competitor can be brand-site-only (real MSRP, no Amazon listing at
+  // all), in which case this is "brand_site", never a bare "—" pretending
+  // to be a normal Amazon price. Null for a non-legacy/no-sources
+  // competitor (today's unmodified behavior).
+  price_source: "brand_site" | "amazon" | null;
+}
+
+function resolvePriceSource(c: { price_raw?: number | null; sources?: { brand_site?: { price_raw: number | null } | null; amazon?: { price_raw: number | null } | null } }): "brand_site" | "amazon" | null {
+  const bs = c.sources?.brand_site;
+  const az = c.sources?.amazon;
+  if (!bs && !az) return null;
+  if (bs && !az) return "brand_site";
+  if (az && !bs) return "amazon";
+  // Both exist — whichever's price_raw matches the final resolved price
+  // (buildHybridCandidate picks the lower of the two) is the real source.
+  if (az!.price_raw != null && az!.price_raw === c.price_raw) return "amazon";
+  if (bs!.price_raw != null && bs!.price_raw === c.price_raw) return "brand_site";
+  return "amazon";
 }
 
 export interface PricingAnalysis {
@@ -157,6 +176,7 @@ export interface BuildPricingAnalysisInput {
     source_url?: string | null;
     last_updated?: string | null;
     retrieved_at?: string | null;
+    sources?: { brand_site?: { url: string; price_raw: number | null } | null; amazon?: { url: string; price_raw: number | null } | null } | null;
   }>;
   targetPriceCandidates: [string | null | undefined, TargetPriceSource][];
   identity?: { category?: string; subcategory?: string; whatItIs?: string };
@@ -171,8 +191,9 @@ export function buildPricingAnalysis(input: BuildPricingAnalysisInput): PricingA
       tier: null,
       price: c.price ?? null,
       price_raw: c.price_raw ?? parsePriceToNumber(c.price),
-      source_url: c.source_url ?? c.amazon_url ?? null,
+      source_url: c.source_url ?? c.amazon_url ?? c.sources?.brand_site?.url ?? null,
       retrieved_at: c.retrieved_at ?? c.last_updated ?? null,
+      price_source: resolvePriceSource({ price_raw: c.price_raw ?? parsePriceToNumber(c.price), sources: c.sources ?? undefined }),
     }));
 
   const tiers = computeTiers(rows);

@@ -249,6 +249,9 @@ export interface MockLegacyBrand {
   categoryId: string;
   brandName: string;
   aliases: string[];
+  // Brand's own official website domain(s) — see lib/db/legacy-brands.ts's
+  // LegacyBrandRow.official_domains for the full rationale.
+  officialDomains: string[];
   enabled: boolean;
   sortOrder: number;
   createdAt: Date;
@@ -571,44 +574,50 @@ class MemoryDatabase {
       { slug: "retail_beauty", name: "Retail Beauty", productTypes: ["dryer", "iron", "styler", "brush"], audience: "retail" },
     ];
 
-    const brandDefs: Record<string, { name: string; aliases: string[] }[]> = {
+    // Official domain(s) per brand — seeded best-effort from the brand's
+    // own known site(s), searched FIRST by lib/brand-site-discovery.ts
+    // before falling through to Amazon. Runtime discovery attempts are
+    // what actually verify these are live (see the admin "Domain health"
+    // panel) — a wrong/stale seed here just means that one brand's
+    // brand-site attempts come up empty, never breaks anything.
+    const brandDefs: Record<string, { name: string; aliases: string[]; officialDomains: string[] }[]> = {
       legacy_professional_clippers: [
-        { name: "Wahl", aliases: [] },
-        { name: "Andis", aliases: [] },
-        { name: "Oster", aliases: [] },
-        { name: "BaByliss", aliases: ["BaBylissPRO", "Babyliss Pro"] },
-        { name: "TPOB", aliases: ["The Profession Of Barbering"] },
-        { name: "Cocco", aliases: [] },
-        { name: "JRL", aliases: [] },
+        { name: "Wahl", aliases: [], officialDomains: ["wahlpro.com", "wahl.com"] },
+        { name: "Andis", aliases: [], officialDomains: ["andis.com"] },
+        { name: "Oster", aliases: [], officialDomains: ["osterpro.com"] },
+        { name: "BaByliss", aliases: ["BaBylissPRO", "Babyliss Pro"], officialDomains: ["babylisspro.com"] },
+        { name: "TPOB", aliases: ["The Profession Of Barbering"], officialDomains: ["tpobshop.com"] },
+        { name: "Cocco", aliases: [], officialDomains: ["coccohaircutting.com"] },
+        { name: "JRL", aliases: [], officialDomains: ["jrlprofessional.com"] },
       ],
       legacy_retail_clippers: [
-        { name: "Wahl", aliases: [] },
-        { name: "Andis", aliases: [] },
-        { name: "Oster", aliases: [] },
-        { name: "Panasonic", aliases: [] },
-        { name: "Conair", aliases: [] },
-        { name: "Manscaped", aliases: [] },
-        { name: "Remington", aliases: [] },
+        { name: "Wahl", aliases: [], officialDomains: ["wahlpro.com", "wahl.com"] },
+        { name: "Andis", aliases: [], officialDomains: ["andis.com"] },
+        { name: "Oster", aliases: [], officialDomains: ["osterpro.com"] },
+        { name: "Panasonic", aliases: [], officialDomains: ["panasonic.com"] },
+        { name: "Conair", aliases: [], officialDomains: ["conair.com"] },
+        { name: "Manscaped", aliases: [], officialDomains: ["manscaped.com"] },
+        { name: "Remington", aliases: [], officialDomains: ["remingtonproducts.com"] },
       ],
       professional_beauty: [
-        { name: "BaByliss", aliases: ["BaBylissPRO", "Babyliss Pro"] },
-        { name: "GHD", aliases: [] },
-        { name: "Paul Mitchell", aliases: [] },
-        { name: "Bio Ionic", aliases: [] },
-        { name: "Dyson", aliases: [] },
-        { name: "Shark", aliases: [] },
-        { name: "Amika", aliases: [] },
-        { name: "Olivia Garden", aliases: [] },
-        { name: "T3", aliases: [] },
+        { name: "BaByliss", aliases: ["BaBylissPRO", "Babyliss Pro"], officialDomains: ["babylisspro.com"] },
+        { name: "GHD", aliases: [], officialDomains: ["ghdhair.com"] },
+        { name: "Paul Mitchell", aliases: [], officialDomains: ["paulmitchell.com"] },
+        { name: "Bio Ionic", aliases: [], officialDomains: ["bioionic.com"] },
+        { name: "Dyson", aliases: [], officialDomains: ["dyson.com"] },
+        { name: "Shark", aliases: [], officialDomains: ["sharkbeauty.com"] },
+        { name: "Amika", aliases: [], officialDomains: ["loveamika.com"] },
+        { name: "Olivia Garden", aliases: [], officialDomains: ["oliviagarden.com"] },
+        { name: "T3", aliases: [], officialDomains: ["t3micro.com"] },
       ],
       retail_beauty: [
-        { name: "Conair", aliases: [] },
-        { name: "Revlon", aliases: [] },
-        { name: "L'Oreal", aliases: ["L'Oréal", "LOreal", "L Oreal"] },
-        { name: "Hot Tools", aliases: ["Hot Tools Professional"] },
-        { name: "Drybar", aliases: [] },
-        { name: "Dyson", aliases: [] },
-        { name: "Shark", aliases: [] },
+        { name: "Conair", aliases: [], officialDomains: ["conair.com"] },
+        { name: "Revlon", aliases: [], officialDomains: ["revlonhairtools.com"] },
+        { name: "L'Oreal", aliases: ["L'Oréal", "LOreal", "L Oreal"], officialDomains: [] },
+        { name: "Hot Tools", aliases: ["Hot Tools Professional"], officialDomains: ["hottools.com"] },
+        { name: "Drybar", aliases: [], officialDomains: ["thedrybar.com"] },
+        { name: "Dyson", aliases: [], officialDomains: ["dyson.com"] },
+        { name: "Shark", aliases: [], officialDomains: ["sharkbeauty.com"] },
       ],
     };
 
@@ -628,6 +637,7 @@ class MemoryDatabase {
           categoryId,
           brandName: b.name,
           aliases: b.aliases,
+          officialDomains: b.officialDomains,
           enabled: true,
           sortOrder: i,
           createdAt: now,

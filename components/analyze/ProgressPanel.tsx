@@ -13,7 +13,11 @@ interface PhaseState {
 // Phase 0 (Product Identification) runs before any competitor search —
 // added so every downstream phase keys off a VERIFIED category instead
 // of a hardcoded default (see lib/analysisEngine.ts / lib/product-identification.ts).
-const PHASE_LABELS = [
+// Exported so scripts/verify-phase-sequence-contract.ts can assert this
+// stays byte-identical — the motor+price-led discovery rework changes
+// research logic INSIDE Phase 1/2, never the phase sequence/labels
+// themselves.
+export const PHASE_LABELS = [
   "Identifying the product",
   "Researching large brand competitors",
   "Researching indie & emerging competitors",
@@ -26,8 +30,9 @@ const PHASE_LABELS = [
 // during Phase 0 (lib/product-identification.ts's strict tool-type
 // resolution — see lib/tool-type-taxonomy.ts). "motorType" pauses during
 // Phase 1 (lib/analysisEngine.ts's resolveOurMotorType gate), "lineupTier"
-// during Phase 2 (resolveOurLineupTier, indie relative pricing).
-const PENDING_QUESTION_PHASE_INDEX: Record<string, number> = {
+// during Phase 2 (resolveOurLineupTier, indie relative pricing). Exported
+// for the same regression-contract reason as PHASE_LABELS above.
+export const PENDING_QUESTION_PHASE_INDEX: Record<string, number> = {
   category: 0,
   toolType: 0,
   pricePoint: 1,
@@ -45,7 +50,13 @@ interface BrandProgressEntry {
   // The authoritative motor match tier is computed later and shown on the
   // completed competitor card/table.
   motorMatched?: boolean;
+  // Which source actually produced this brand's final candidate — set
+  // once lib/legacy-brand-discovery.ts merges its concurrent brand-site +
+  // Amazon passes. Absent while still "searching".
+  source?: "brand_site" | "amazon" | "both" | null;
 }
+
+const SOURCE_LABELS: Record<string, string> = { brand_site: "brand site", amazon: "Amazon", both: "brand site + Amazon" };
 
 interface BrandProgress {
   category_slug?: string;
@@ -532,8 +543,12 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
                     }`}
                   >
                     {b.brand}
-                    {b.status === "found" && <span>✓{b.price ? ` ${b.price}` : ""}{b.motorMatched ? " · motor match" : ""}</span>}
-                    {b.status === "not_found" && <span>✕</span>}
+                    {b.status === "found" && (
+                      <span>
+                        ✓{b.price ? ` ${b.price}` : ""}{b.motorMatched ? " · motor match" : ""}{b.source ? ` (${SOURCE_LABELS[b.source] || b.source})` : ""}
+                      </span>
+                    )}
+                    {b.status === "not_found" && <span>✕{b.reason ? ` ${b.reason}` : ""}</span>}
                     {b.status === "searching" && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
                   </span>
                 ))}

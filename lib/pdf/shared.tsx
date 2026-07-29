@@ -309,7 +309,7 @@ export function SourceLine({ text }: { text: string }) {
 
 const SECTION_LABELS: Record<string, string> = {
   key_features: "Key Features", reviews: "Reviews", news: "News Updates", pricing: "Pricing",
-  legacy_brand_registry: "Legacy Brand Sourcing",
+  legacy_brand_registry: "Legacy Brand Sourcing", brand_site_discovery: "Brand Official Site",
 };
 
 // "Data Sources & Methodology" appendix, modeled directly on CitationList

@@ -126,3 +126,32 @@ export async function getAllLatestProvenance(productKey: string): Promise<Record
   }
   return out;
 }
+
+// Every recent row for one section, most-recent first — unlike
+// getLatestProvenance/getAllLatestProvenance (both "latest per product
+// key"), this is for admin rollup views that need to see EVERY recent
+// attempt across many product keys, e.g. the legacy-brands admin page's
+// "Domain health" panel scanning brand_site_discovery rows to find
+// domains that have been failing repeatedly.
+export async function getRecentProvenanceBySection(section: string, limit = 200): Promise<ProvenanceRow[]> {
+  if (isSupabaseConfigured) {
+    const { data, error } = await supabaseAdmin
+      .from("section_provenance")
+      .select("*")
+      .eq("section", section)
+      .order("resolved_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data || [];
+  }
+
+  return memoryDb.sectionProvenance
+    .filter(r => r.section === section)
+    .sort((a, b) => b.resolvedAt.getTime() - a.resolvedAt.getTime())
+    .slice(0, limit)
+    .map(row => ({
+      id: row.id, product_key: row.productKey, section: row.section,
+      analysis_id: row.analysisId, product_name: row.productName,
+      tiers: row.tiers, queries: row.queries, resolved_at: row.resolvedAt.toISOString(),
+    }));
+}

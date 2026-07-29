@@ -6,7 +6,7 @@
 // richest of the three resolver-specific shapes that existed before this)
 // so Key Features, Reviews, News, and Pricing can all populate the same
 // persisted record (see lib/db/section-provenance.ts).
-export type ProvenanceSection = "key_features" | "reviews" | "news" | "pricing" | "legacy_brand_registry";
+export type ProvenanceSection = "key_features" | "reviews" | "news" | "pricing" | "legacy_brand_registry" | "brand_site_discovery";
 
 // "skipped" = a tier intentionally not attempted because an earlier tier
 // already found enough, or a time budget was hit — distinct from "empty"

@@ -74,6 +74,20 @@ interface Competitor {
   // listing text (lib/differentiator-match.ts) appears to share it — null
   // when no Key Differentiator was given at all.
   differentiator_match?:  boolean | null;
+  // Set by selectByCompositeScore's requireMotorEvidenceFirst pass — this
+  // candidate had ZERO motor evidence (no verified competitor could fill
+  // the slot) and was pulled in only as a last-resort, explicitly labeled.
+  motor_unverified_fallback?: boolean;
+  // Which source(s) actually produced this competitor — brand-site specs
+  // are authoritative for motor/technical data; Amazon supplies live
+  // price/rating/reviews/BSR when a listing exists. `amazon: null` means a
+  // real product genuinely not sold on Amazon at all (distinct from
+  // verified_by_rainforest:false, which means a lookup was attempted and
+  // failed/unconfirmed).
+  sources?: {
+    brand_site: { url: string; price: string | null; price_raw: number | null; retrieved_at: string } | null;
+    amazon: { asin: string; url: string; price: string | null; price_raw: number | null; rating: string | null; review_count: string | null; bsr_rank: string | null; monthly_sales: string | null; retrieved_at: string } | null;
+  };
 }
 
 interface CompetitorCardProps {
@@ -472,6 +486,16 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           {c.verified_by_rainforest === false && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="Could not confirm a live Amazon listing for this competitor — use the search link above to look it up directly.">
               Unverified — see search link
+            </span>
+          )}
+          {c.sources?.brand_site && !c.sources?.amazon && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-blue-950/40 border border-blue-900/40 text-blue-400" title={`Verified from ${c.sources.brand_site.url} — this product isn't sold on Amazon at all.`}>
+              Verified via brand site — not sold on Amazon
+            </span>
+          )}
+          {c.motor_unverified_fallback && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No motor-evidenced candidate was available to fill this slot — included as a last-resort, motor type unconfirmed.">
+              Motor type unconfirmed — last-resort pick
             </span>
           )}
           {c.out_of_band && (

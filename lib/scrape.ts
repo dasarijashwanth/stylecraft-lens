@@ -48,7 +48,8 @@ function extractJsonLdProduct($: cheerio.CheerioAPI): any | null {
   return product;
 }
 
-export async function scrapeProductPage(url: string): Promise<ScrapedProduct | null> {
+export async function scrapeProductPage(url: string, opts: { aiFallback?: boolean } = {}): Promise<ScrapedProduct | null> {
+  const aiFallback = opts.aiFallback ?? true;
   let html: string;
   try {
     // url is a user-entered product URL — safeFetch blocks non-http(s)
@@ -130,8 +131,13 @@ export async function scrapeProductPage(url: string): Promise<ScrapedProduct | n
   // search if this URL didn't render) and only fills in what cheerio
   // missed, never overwriting data cheerio already found directly in the
   // page's own markup.
+  // opts.aiFallback:false (lib/brand-site-discovery.ts's only caller to pass
+  // this) deliberately skips this ~20s OpenAI leg — that caller already has
+  // Amazon running concurrently as its cross-check/backstop, and bulk brand
+  // discovery across several brands can't afford this per-candidate cost.
+  // Every other caller keeps the default (true), unchanged.
   const isSparse = !result.title || !result.price || priceIsRegexGuess;
-  if (isSparse && hasOpenAIKey) {
+  if (isSparse && hasOpenAIKey && aiFallback) {
     try {
       const { data } = await searchAndExtractJson<{
         title?: string; description?: string; brand?: string; price?: string;

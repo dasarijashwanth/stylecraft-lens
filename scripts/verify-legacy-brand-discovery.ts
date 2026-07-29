@@ -138,7 +138,11 @@ async function main() {
     10 // 10ms override — the mock's 50ms delay guarantees this trips before step 2
   );
   assert(cutoffCandidates.length === 0, "no candidates matched (every mock response was empty) — the cutoff didn't fabricate anything");
-  assert(CURATED_BRAND_SEARCH_TIME_BUDGET_MS === 15_000, `production constant is unaffected by the test override (still ${CURATED_BRAND_SEARCH_TIME_BUDGET_MS}ms)`);
+  // Raised from 15_000 to 20_000 — the brand-site pass now runs
+  // CONCURRENTLY with this Amazon leg (its own independent ~12s budget),
+  // so total wall time is ~max(12s, 20s), not a sum; see
+  // lib/legacy-brand-discovery.ts's header comment.
+  assert(CURATED_BRAND_SEARCH_TIME_BUDGET_MS === 20_000, `production constant is unaffected by the test override (still ${CURATED_BRAND_SEARCH_TIME_BUDGET_MS}ms)`);
 
   console.log("\n[3] applyPriceBandGate — allowStaticFallbackTopup:false never injects the unrelated static dataset");
   const identityForGate: any = {

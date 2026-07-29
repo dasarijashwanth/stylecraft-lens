@@ -849,3 +849,13 @@ CREATE INDEX IF NOT EXISTS motor_tech_search_misses_created_idx ON motor_tech_se
 ALTER TABLE motor_tech_search_misses ENABLE ROW LEVEL SECURITY;
 -- Deliberately NO policy (see Section 17 above) — only supabaseAdmin
 -- (service role) ever reads/writes this table.
+
+-- 22. LEGACY BRAND OFFICIAL DOMAINS — a brand's own official website
+-- domain(s) (e.g. "wahlpro.com"), searched FIRST by
+-- lib/brand-site-discovery.ts, before Amazon, so a legacy pro product
+-- that isn't sold on Amazon at all can still become a real competitor.
+-- Admin-editable at /dashboard/admin/legacy-brands alongside aliases.
+-- NULL/empty means "no known domain yet" — that brand's discovery simply
+-- skips the brand-site pass and falls through to Amazon only, same as
+-- today's behavior.
+ALTER TABLE legacy_brands ADD COLUMN IF NOT EXISTS official_domains TEXT[] DEFAULT '{}'::text[];
