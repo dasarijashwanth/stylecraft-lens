@@ -72,28 +72,36 @@ async function main() {
     const analysis = await createAnalysis(context.userId, context.orgId, undefined, context);
     const analysisId = analysis.id;
 
-    const expectedSequence: { phase: number; status: string }[] = [
-      { phase: 1, status: "running" },   // Phase 0 (identification) -> Phase 1
-      { phase: 2, status: "running" },   // Phase 1 (legacy) -> Phase 2
-      { phase: 2, status: "running" },   // Phase 2a (emerging AI discovery) -> Phase 2b
-      { phase: 3, status: "running" },   // Phase 2b (Rainforest enrichment/lineups/scoring) -> Phase 3
-      { phase: 4, status: "running" },   // Phase 3a (synthesis) -> Phase 3b
-      { phase: 4, status: "running" },   // Phase 3b (anti-boilerplate) -> Phase 3c
-      { phase: 5, status: "complete" },  // Phase 3c (citations/finalize) -> complete
-    ];
-
-    const actualSequence: { phase: number; status: string }[] = [];
-    for (let i = 0; i < expectedSequence.length; i++) {
+    // Phase 1 and Phase 2a are now each an internal multi-round fill loop
+    // (guarantees 5+5 competitors — see lib/analysisEngine.ts's
+    // __phase1Fill/__phase2Fill checkpoints), so the EXACT number of calls
+    // spent "at" phase 1 or phase 2 before advancing is no longer fixed —
+    // it depends on how many rounds the mock/fallback data needs to satisfy
+    // (or exhaust) the fill loop, same as it already varied for phase 4's
+    // pre-existing 3b/3c internal repeat. The real, unchanging contract this
+    // test must prove is: the DISTINCT phase numbers are visited in order
+    // 1,2,3,4,5 — never skipped, never out of order, never regressing —
+    // and the analysis reaches "complete". A generous iteration cap guards
+    // against an infinite loop bug rather than asserting an exact count.
+    const MAX_CALLS = 30;
+    const distinctPhaseOrder: number[] = [];
+    let finalStep: any = null;
+    for (let i = 0; i < MAX_CALLS; i++) {
       const step = await runAnalysisStep(analysisId);
-      actualSequence.push({ phase: step.phase, status: step.status });
       if (step.pendingQuestion) {
         throw new Error(`Unexpected pause at call ${i + 1}: ${JSON.stringify(step.pendingQuestion)} — the fixture context should never trigger a pause-and-ask.`);
       }
+      if (distinctPhaseOrder[distinctPhaseOrder.length - 1] !== step.phase) {
+        distinctPhaseOrder.push(step.phase);
+      }
+      finalStep = step;
+      if (step.status === "complete") break;
     }
 
+    assert(finalStep?.status === "complete", `the analysis reaches status "complete" within ${MAX_CALLS} calls (got ${finalStep?.status})`);
     assert(
-      JSON.stringify(actualSequence) === JSON.stringify(expectedSequence),
-      `phase sequence is exactly [1,2,2,3,4,4,5] with the right statuses (got ${JSON.stringify(actualSequence)})`
+      JSON.stringify(distinctPhaseOrder) === JSON.stringify([1, 2, 3, 4, 5]),
+      `the distinct phase numbers visited are exactly [1,2,3,4,5] in order, regardless of how many internal fill-loop rounds each took (got ${JSON.stringify(distinctPhaseOrder)})`
     );
 
     const finalRecord = await getAnalysis(analysisId);

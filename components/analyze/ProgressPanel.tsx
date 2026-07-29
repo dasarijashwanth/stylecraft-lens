@@ -296,18 +296,27 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
             continue;
           }
 
-          if (step.phase === 1) {
+          // step.stepResult is null on an intermediate checkpoint response
+          // (e.g. Phase 2a's own completion still reports phase: 2, per
+          // lib/analysisEngine.ts's __phase2Stage pattern) — guarding on it
+          // here stops that null from clobbering a real result an earlier
+          // call at the SAME phase number already populated. Confirmed live:
+          // without this guard, Phase 2a's completion wiped out Phase 1's
+          // already-correct results.phase1 (and the same shape of bug would
+          // hit results.identity too), and onComplete's payload has no DB
+          // fallback on this live (non-resume) path.
+          if (step.phase === 1 && step.stepResult) {
             results.identity = step.stepResult;
             setIdentity(step.stepResult);
           }
           if (step.phase === 2) {
-            results.phase1 = step.stepResult;
             // Phase 1 is fully done — the completed competitor list (with
             // tier badges/out-of-band labels) takes over from here; the
             // live search-in-progress chip panel has served its purpose.
             setBrandProgress(null);
+            if (step.stepResult) results.phase1 = step.stepResult;
           }
-          if (step.phase === 3) results.phase2 = step.stepResult;
+          if (step.phase === 3 && step.stepResult) results.phase2 = step.stepResult;
           if (step.phase === 5) {
             results.phase3 = step.stepResult;
             results.reportId = step.reportId;

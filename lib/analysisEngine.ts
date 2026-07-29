@@ -1408,6 +1408,70 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
 }
 
+// Shared by Phase 1's and Phase 2a's multi-round fill loop (see the header
+// comments on each phase below) — lives inside phase1_result/phase2_result
+// JSONB while its loop is running, deleted the instant the tier's pool is
+// ready for final scoring. `searchesSoFar` is a running total (fed by the
+// same onSearchUsed callback that already tracks webSearchCount) — used
+// for the "searched N queries" honesty text on a hard-floor empty slot,
+// not fed back verbatim into a later round's prompt (the round-specific
+// instructions in fillRoundExtraInstruction already push toward genuinely
+// different query angles without needing an explicit banned-query list).
+interface FillLoopMarker {
+  round: 1 | 2 | 3;
+  searchesSoFar: number;
+}
+
+// Round 2 asks the same question again but explicitly broader (more brand
+// names, more query phrasings, more result pages) WITHOUT relaxing any
+// actual rule. Round 3 is the genuine relaxation ladder — motor-unconfirmed
+// candidates, non-curated brands (legacy only), and a wider price band are
+// explicitly permitted — but tool-type/product-category correctness is
+// never relaxed at either round.
+function fillRoundExtraInstruction(round: 2 | 3, tier: CompetitorTier): string {
+  if (round === 2) {
+    return tier === "legacy"
+      ? "ADDITIONAL SEARCH ROUND — the first round didn't fill all 5 slots. Broaden your search: try more brand names, alternate query phrasings (synonyms/singular-plural of the product type), and check additional Amazon search result pages beyond the first. Do not lower any standard — every candidate must still meet all the rules above."
+      : "ADDITIONAL SEARCH ROUND — the first round didn't fill all 5 slots. Broaden your search: try more indie/DTC brand names, alternate query phrasings, additional roundup/review articles, and additional Amazon search result pages beyond the first. Do not lower any standard — every candidate must still meet all the rules above.";
+  }
+  return tier === "legacy"
+    ? "RELAXED SEARCH ROUND — after two full search rounds, slots are still open. This time it's OK to include: a candidate whose motor type can't be confirmed from its own listing (say so in inclusion_rationale), a candidate from a brand not on any curated list, or a candidate priced up to 50% away from the target price if nothing closer exists. Still reject anything of the wrong product type."
+    : "RELAXED SEARCH ROUND — after two full search rounds, slots are still open. This time it's OK to include: a candidate whose motor type can't be confirmed from its own listing (say so in inclusion_rationale), or a candidate priced up to 50% away from the target price if nothing closer exists. Still reject anything of the wrong product type or an already-excluded large brand.";
+}
+
+// Cross-round dedup — reject a newly-found candidate that's already in the
+// accumulating pool, by real (non-placeholder) ASIN or by brand+name, so a
+// later round's broader search can't just re-discover the same products
+// and waste a slot. Reuses normalizeBrandToken (lib/legacy-brand-discovery.ts)
+// rather than a second normalizer.
+function mergeNewCandidatesIntoPool(pool: any[], incoming: any[]): any[] {
+  const seenAsins = new Set(pool.map((c: any) => (c.asin || "").toUpperCase()).filter((a: string) => /^[A-Z0-9]{10}$/.test(a)));
+  const seenBrandName = new Set(pool.map((c: any) => `${normalizeBrandToken(c.brand || "")}|${normalizeBrandToken(c.name || "")}`));
+  const fresh = incoming.filter((c: any) => {
+    const asin = (c.asin || "").toUpperCase();
+    if (/^[A-Z0-9]{10}$/.test(asin) && seenAsins.has(asin)) return false;
+    const key = `${normalizeBrandToken(c.brand || "")}|${normalizeBrandToken(c.name || "")}`;
+    if (seenBrandName.has(key)) return false;
+    return true;
+  });
+  return [...pool, ...fresh];
+}
+
+// A slot the fill loop genuinely could not fill after exhausting the full
+// round/relaxation ladder — rendered as an honest labeled empty rather than
+// silently returning fewer than 5. `reason` names how much was actually
+// searched, per the "never silently show fewer and move on" requirement.
+function buildEmptySlotPlaceholder(tier: CompetitorTier, identity: IdentityCard, ourMotorLabel: string | null, searchesSoFar: number): any {
+  const motorPart = ourMotorLabel ? `${ourMotorLabel} ` : "";
+  const typeLabel = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType] : (identity.subcategory || identity.category);
+  return {
+    empty_slot: true,
+    tier,
+    name: `No additional ${tier === "legacy" ? "legacy" : "emerging"} competitor found`,
+    reason: `Only found this many qualifying ${tier} competitors for ${motorPart}${typeLabel} in this price range (searched ${searchesSoFar} quer${searchesSoFar === 1 ? "y" : "ies"} across brand sites, Amazon, and web search, through the full relaxation ladder).`,
+  };
+}
+
 export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepResult> {
   const startTime = Date.now();
   const record: any = await getAnalysis(analysisId);
@@ -1577,184 +1641,220 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // there's no registry match (an out-of-registry category) or the
       // registry category has zero enabled brands.
       const registry = await resolveLegacyBrandsForIdentity(identityCard);
-      let result: any;
 
-      if (registry) {
-        // Wrapped with category context on every write — the live panel
-        // (components/analyze/ProgressPanel.tsx, polling this via GET
-        // /api/analyses/[id]) needs the category name/slug alongside each
-        // brand's live status, not just the bare brand array. motor/tool-
-        // type/price-band/market labels are included so the panel can show
-        // an upfront "Searching: X" summary of what's actually driving this
-        // search, not just the per-brand chips.
-        const legacyBand = computePriceBand(targetPriceRaw, "legacy", 0);
-        const writeBrandProgress = (entries: BrandProgressEntry[]) =>
-          updatePhase1BrandProgress(analysisId, {
+      // ----------------------------------------------------
+      // PHASE 1a: MULTI-ROUND FILL LOOP
+      // ----------------------------------------------------
+      // Guarantees 5 legacy slots by running progressively broader/relaxed
+      // search rounds instead of stopping after one query batch. record.phase
+      // stays "1" across every round (a __phase1Fill marker inside
+      // phase1_result tracks which round is next), mirroring the exact
+      // __phase2Stage checkpoint pattern this session's Phase-2 timeout fix
+      // already proved out — each round is its own bounded /continue call,
+      // never stacked with another round in the same request (round 1's
+      // curated search alone can take up to ~20s, and a round-2/3 AI call up
+      // to ~45s — stacking two of those, as the old broken
+      // AI_TOPUP_TIME_THRESHOLD_MS gate tried to avoid, risked exceeding
+      // Vercel's 60s cap; that gate measured elapsed time from the wrong
+      // clock and effectively never let the top-up run at all — deleted
+      // entirely below, replaced by giving the top-up its own checkpoint
+      // with its own fresh budget). Round 1 falling through straight to
+      // finalize in the same call (when it already fills all 5) is safe —
+      // that's the common case and is exactly what this phase already did
+      // before this change.
+      const fill: FillLoopMarker = record.phase1_result?.__phase1Fill ?? { round: 1, searchesSoFar: 0 };
+      let pool: any[] = record.phase1_result?.__phase1Pool ?? [];
+      let legacyRegistrySnapshot: any = record.phase1_result?.__phase1RegistrySnapshot ?? null;
+      const searchesBeforeThisRound = webSearchCount;
+
+      if (fill.round === 1) {
+        if (registry) {
+          // Wrapped with category context on every write — the live panel
+          // (components/analyze/ProgressPanel.tsx, polling this via GET
+          // /api/analyses/[id]) needs the category name/slug alongside each
+          // brand's live status, not just the bare brand array. motor/tool-
+          // type/price-band/market labels are included so the panel can show
+          // an upfront "Searching: X" summary of what's actually driving this
+          // search, not just the per-brand chips.
+          const legacyBand = computePriceBand(targetPriceRaw, "legacy", 0);
+          const writeBrandProgress = (entries: BrandProgressEntry[]) =>
+            updatePhase1BrandProgress(analysisId, {
+              category_slug: registry.categorySlug,
+              category_name: registry.categoryName,
+              brands: entries,
+              motor_label: ourMotorLabel || null,
+              tool_type_label: identityCard.toolType && identityCard.toolType !== "combo" ? TOOL_TYPE_LABELS[identityCard.toolType] : null,
+              target_market_label: context.targetMarket,
+              price_band_low: legacyBand.min,
+              price_band_high: legacyBand.max,
+            });
+
+          await writeBrandProgress(registry.brands.map(b => ({ brand: b.brand_name, status: "searching" })));
+
+          const curatedCandidates = await searchCuratedLegacyBrands(
+            registry.brands,
+            identityCard,
+            targetPriceRaw,
+            registry.categorySlug,
+            writeBrandProgress,
+            undefined,
+            ourMotorLabel
+          );
+
+          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard);
+
+          // Real motor-grounding fix — curated candidates from the Amazon leg
+          // (lib/legacy-brand-discovery.ts's toCandidate, a type=search result
+          // only) never had specifications/attributes/feature_bullets, so
+          // extractCompetitorMotorType always resolved "unverified" for them.
+          // This mirrors exactly what the AI-driven (non-registry) branch
+          // below already does — same function, same hasGroundingData
+          // short-circuit, zero new logic. Brand-site-sourced candidates
+          // already carry real description text (skipped by that
+          // short-circuit) so this only re-fetches the ones that actually
+          // still need it (pure Amazon-leg hits with no brand-site data).
+          if (hasRainforestKey) {
+            competitors = await enrichCompetitorsWithRainforest(competitors, identityCard.toolType);
+          }
+
+          // Brand-site-only candidates (no Amazon match from the concurrent
+          // Amazon leg) still get one real Amazon cross-check attempt for
+          // their own sources.amazon — "Attempt ASIN resolution for every
+          // brand-site find; amazon:null is fully supported." A miss here
+          // never clobbers the candidate's already-real brand-site price/
+          // verification (unlike enrichCompetitorsWithRainforest's own
+          // failure path, which is correct for "Amazon lookup failed" but
+          // wrong for "verified via brand site, simply not on Amazon").
+          if (hasRainforestKey) {
+            competitors = await mapWithConcurrency(competitors, 3, async (c: any) => {
+              if (!c.sources?.brand_site || c.sources?.amazon) return c;
+              const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, identityCard.toolType);
+              if (!product) return c;
+
+              const sitePriceRaw = c.sources.brand_site.price_raw;
+              const useAmazonPrice = product.price_raw != null && (sitePriceRaw == null || product.price_raw <= sitePriceRaw);
+
+              return {
+                ...c,
+                asin: product.asin,
+                amazon_url: product.amazon_url,
+                rating: product.rating_str,
+                review_count: product.reviews_str,
+                bsr_rank: product.bsr || c.bsr_rank,
+                monthly_sales: product.monthly_str || c.monthly_sales,
+                price: useAmazonPrice ? product.price : c.price,
+                price_raw: useAmazonPrice ? product.price_raw : c.price_raw,
+                sources: {
+                  ...c.sources,
+                  amazon: {
+                    asin: product.asin, url: product.amazon_url, price: product.price, price_raw: product.price_raw,
+                    rating: product.rating_str, review_count: product.reviews_str, bsr_rank: product.bsr, monthly_sales: product.monthly_str,
+                    retrieved_at: new Date().toISOString(),
+                  },
+                },
+              };
+            });
+          }
+
+          pool = mergeNewCandidatesIntoPool(pool, competitors);
+          legacyRegistrySnapshot = {
             category_slug: registry.categorySlug,
             category_name: registry.categoryName,
-            brands: entries,
-            motor_label: ourMotorLabel || null,
-            tool_type_label: identityCard.toolType && identityCard.toolType !== "combo" ? TOOL_TYPE_LABELS[identityCard.toolType] : null,
-            target_market_label: context.targetMarket,
-            price_band_low: legacyBand.min,
-            price_band_high: legacyBand.max,
-          });
-
-        await writeBrandProgress(registry.brands.map(b => ({ brand: b.brand_name, status: "searching" })));
-
-        const curatedCandidates = await searchCuratedLegacyBrands(
-          registry.brands,
-          identityCard,
-          targetPriceRaw,
-          registry.categorySlug,
-          writeBrandProgress,
-          undefined,
-          ourMotorLabel
-        );
-
-        let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard);
-
-        // Real motor-grounding fix — curated candidates from the Amazon leg
-        // (lib/legacy-brand-discovery.ts's toCandidate, a type=search result
-        // only) never had specifications/attributes/feature_bullets, so
-        // extractCompetitorMotorType always resolved "unverified" for them.
-        // This mirrors exactly what the AI-driven (non-registry) branch
-        // below already does — same function, same hasGroundingData
-        // short-circuit, zero new logic. Brand-site-sourced candidates
-        // already carry real description text (skipped by that
-        // short-circuit) so this only re-fetches the ones that actually
-        // still need it (pure Amazon-leg hits with no brand-site data).
-        if (hasRainforestKey) {
-          competitors = await enrichCompetitorsWithRainforest(competitors, identityCard.toolType);
-        }
-
-        // Brand-site-only candidates (no Amazon match from the concurrent
-        // Amazon leg) still get one real Amazon cross-check attempt for
-        // their own sources.amazon — "Attempt ASIN resolution for every
-        // brand-site find; amazon:null is fully supported." A miss here
-        // never clobbers the candidate's already-real brand-site price/
-        // verification (unlike enrichCompetitorsWithRainforest's own
-        // failure path, which is correct for "Amazon lookup failed" but
-        // wrong for "verified via brand site, simply not on Amazon").
-        if (hasRainforestKey) {
-          competitors = await mapWithConcurrency(competitors, 3, async (c: any) => {
-            if (!c.sources?.brand_site || c.sources?.amazon) return c;
-            const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, identityCard.toolType);
-            if (!product) return c;
-
-            const sitePriceRaw = c.sources.brand_site.price_raw;
-            const useAmazonPrice = product.price_raw != null && (sitePriceRaw == null || product.price_raw <= sitePriceRaw);
-
-            return {
-              ...c,
-              asin: product.asin,
-              amazon_url: product.amazon_url,
-              rating: product.rating_str,
-              review_count: product.reviews_str,
-              bsr_rank: product.bsr || c.bsr_rank,
-              monthly_sales: product.monthly_str || c.monthly_sales,
-              price: useAmazonPrice ? product.price : c.price,
-              price_raw: useAmazonPrice ? product.price_raw : c.price_raw,
-              sources: {
-                ...c.sources,
-                amazon: {
-                  asin: product.asin, url: product.amazon_url, price: product.price, price_raw: product.price_raw,
-                  rating: product.rating_str, review_count: product.reviews_str, bsr_rank: product.bsr, monthly_sales: product.monthly_str,
-                  retrieved_at: new Date().toISOString(),
-                },
-              },
-            };
-          });
-        }
-
-        // Motor -> price -> feature composite selection, not just
-        // "in-band first, then closest to target price" — see
-        // selectByCompositeScore's own header comment for why
-        // applyPriceBandGate itself stays untouched. allowStaticFallbackTopup:
-        // false — the curated-only pass must never silently pull from the
-        // unrelated static getCategoryFallbackCompetitors dataset in place
-        // of an honest "not on curated list" AI result below (topup is
-        // still available on the SECOND, post-AI-topup call further down).
-        // requireMotorEvidenceFirst:true — a real motor-evidenced candidate
-        // (from any brand) always fills a slot before a motor-unverified
-        // one does, per the "motor before brand" reordering this whole
-        // module exists for.
-        competitors = selectByCompositeScore(competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
-
-        // Only attempt the AI top-up if the curated pass finished fast — it
-        // has its own ~15s hard cap (CURATED_BRAND_SEARCH_TIME_BUDGET_MS),
-        // and OpenAI's web-search leg (runOpenAiWebSearch) has NO time-budget
-        // check of its own today (only Gemini's fallback leg does), so a
-        // slow curated pass followed by a full ~45s OpenAI attempt could
-        // push this phase past Vercel's 60s ceiling. Skipping is always
-        // safe/honest — fewer real curated results is correct, inventing
-        // competitors to fill the gap is not.
-        const AI_TOPUP_TIME_THRESHOLD_MS = 8_000;
-        if (competitors.length < 5 && Date.now() - startTime < AI_TOPUP_TIME_THRESHOLD_MS) {
+            brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order, source_lists: b.sourceLists ?? null })),
+          };
+        } else {
           const aiResult: any = await withAiFallback(
-            "Phase 1 (curated top-up)",
+            "Phase 1",
             hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
             hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
             () => generateMockPhase1(context, identityCard, targetPriceRaw),
             startTime
           );
           webSearchCount += aiResult.web_searches_performed || 0;
-
           let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard);
           if (hasRainforestKey) {
             aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, identityCard.toolType);
           }
-
-          // Never duplicate a brand slot already filled by the curated pass.
-          const usedBrands = new Set(competitors.map((c: any) => normalizeBrandToken(c.brand || "")));
-          aiCompetitors = aiCompetitors
-            .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
-            .map((c: any) => ({ ...c, curated_brand: false, brand_list_status: "not_curated" }));
-
-          competitors = selectByCompositeScore([...competitors, ...aiCompetitors], targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true });
+          pool = mergeNewCandidatesIntoPool(pool, aiCompetitors);
         }
-
-        result = {
-          web_searches_performed: webSearchCount,
-          competitors,
-          // Snapshotted per-analysis for auditability — which category and
-          // exact brand list (in priority order) this run actually searched,
-          // independent of any later admin edit to the live registry.
-          legacy_registry_snapshot: {
-            category_slug: registry.categorySlug,
-            category_name: registry.categoryName,
-            brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order, source_lists: b.sourceLists ?? null })),
-          },
-          // Same auditability reasoning — the actual weights THIS run used,
-          // independent of any later admin edit to the live config.
-          matching_weights: scoringCtx.weights,
-          form_inputs: buildFormInputsSnapshot(context),
-        };
-        // Per-competitor provenance (which curated list — or the "not on
-        // curated list" AI fallback — sourced each legacy pick), feeding the
-        // PDF's existing "Data Sources & Methodology" appendix.
-        await persistLegacyRegistryProvenance(competitors, registry, analysisId);
       } else {
-        result = await withAiFallback(
-          "Phase 1",
-          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
-          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
+        // ---- Round 2 (broadened, same strictness) / Round 3 (relaxation
+        // ladder) — an AI discovery pass with round-specific instructions.
+        // For the registry branch this IS the "not on curated list" top-up
+        // (now unconditional and given its own checkpoint/budget instead of
+        // racing the curated search's own time budget); for the non-
+        // registry branch it's simply a broader/relaxed re-ask. ----
+        const usedBrands = new Set(pool.map((c: any) => normalizeBrandToken(c.brand || "")));
+        const extraInstruction = fillRoundExtraInstruction(fill.round, "legacy");
+        const aiResult: any = await withAiFallback(
+          `Phase 1 (fill round ${fill.round})`,
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel, extraInstruction) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel, extraInstruction) : null,
           () => generateMockPhase1(context, identityCard, targetPriceRaw),
           startTime
         );
+        webSearchCount += aiResult.web_searches_performed || 0;
 
-        result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "legacy", identityCard);
+        let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard)
+          .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
+          .map((c: any) => (registry ? { ...c, curated_brand: false, brand_list_status: "not_curated" } : c));
         if (hasRainforestKey) {
-          result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
+          aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, identityCard.toolType);
         }
-        result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true });
-        result.matching_weights = scoringCtx.weights;
-        result.form_inputs = buildFormInputsSnapshot(context);
-        webSearchCount += result.web_searches_performed || 0;
+        pool = mergeNewCandidatesIntoPool(pool, aiCompetitors);
       }
 
+      const updatedFill: FillLoopMarker = { round: fill.round, searchesSoFar: fill.searchesSoFar + (webSearchCount - searchesBeforeThisRound) };
+
+      // How many real slots would selection currently fill? Recomputed via
+      // the real selection function every round (never a separately-
+      // maintained counter) so it can't drift from what final selection
+      // will actually decide. allowStaticFallbackTopup stays false here —
+      // that safety net is reserved for the finalize step below, once every
+      // real search round has already run.
+      const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
+
+      if (trialSelection.length < 5 && updatedFill.round < 3) {
+        await updateAnalysisPhase(analysisId, 1, "phase1_result", {
+          __phase1Fill: { round: (updatedFill.round + 1) as 1 | 2 | 3, searchesSoFar: updatedFill.searchesSoFar },
+          __phase1Pool: pool,
+          __phase1RegistrySnapshot: legacyRegistrySnapshot,
+        }, webSearchCount);
+        return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: webSearchCount };
+      }
+
+      // ----------------------------------------------------
+      // PHASE 1b: FINALIZE — full relaxation ladder + honest empty slots
+      // ----------------------------------------------------
+      let competitors = selectByCompositeScore(pool, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: true, requireMotorEvidenceFirst: true });
+      const stillShort = 5 - competitors.length;
+      for (let i = 0; i < stillShort; i++) {
+        competitors.push(buildEmptySlotPlaceholder("legacy", identityCard, ourMotorLabel, updatedFill.searchesSoFar));
+      }
+
+      const result: any = {
+        web_searches_performed: webSearchCount,
+        competitors,
+        // Snapshotted per-analysis for auditability — which category and
+        // exact brand list (in priority order) this run actually searched,
+        // independent of any later admin edit to the live registry.
+        legacy_registry_snapshot: legacyRegistrySnapshot,
+        // Same auditability reasoning — the actual weights THIS run used,
+        // independent of any later admin edit to the live config.
+        matching_weights: scoringCtx.weights,
+        form_inputs: buildFormInputsSnapshot(context),
+        fill_rounds_used: updatedFill.round,
+      };
+
+      const realCompetitors = competitors.filter((c: any) => !c.empty_slot);
+      if (registry) {
+        // Per-competitor provenance (which curated list — or the "not on
+        // curated list" AI fallback — sourced each legacy pick), feeding the
+        // PDF's existing "Data Sources & Methodology" appendix.
+        await persistLegacyRegistryProvenance(realCompetitors, registry, analysisId);
+      }
       if (hasRainforestKey) {
-        await persistPricingProvenance(result.competitors, analysisId);
+        await persistPricingProvenance(realCompetitors, analysisId);
       }
 
       await updateAnalysisPhase(analysisId, 2, "phase1_result", result, webSearchCount);
@@ -1792,24 +1892,61 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
       if (record.phase2_result?.__phase2Stage !== "discovered") {
         // ----------------------------------------------------
-        // PHASE 2a: EMERGING-COMPETITOR AI DISCOVERY
+        // PHASE 2a: MULTI-ROUND EMERGING-COMPETITOR AI DISCOVERY
         // ----------------------------------------------------
+        // Guarantees 5 emerging slots the same way Phase 1a now does —
+        // Phase 2 previously had ZERO re-query mechanism at all (a single
+        // AI call, no retry if it under-delivered). record.phase2_result's
+        // __phase2Fill marker tracks the round; __phase2Stage stays
+        // whatever it was ("not discovered yet") across every round in this
+        // loop, only flipping to "discovered" once the pool is ready to
+        // hand off to 2b (unchanged below).
+        const fill: FillLoopMarker = record.phase2_result?.__phase2Fill ?? { round: 1, searchesSoFar: 0 };
+        let pool: any[] = record.phase2_result?.__phase2Pool ?? [];
+        const searchesBeforeThisRound = webSearchCount;
+
+        const usedBrands = new Set(pool.map((c: any) => normalizeBrandToken(c.brand || "")));
+        const extraInstruction = fill.round === 1 ? undefined : fillRoundExtraInstruction(fill.round, "emerging");
         const result: any = await withAiFallback(
-          "Phase 2",
-          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
-          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel) : null,
+          fill.round === 1 ? "Phase 2" : `Phase 2 (fill round ${fill.round})`,
+          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel, extraInstruction) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel, extraInstruction) : null,
           () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
           startTime
         );
 
-        result.competitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
+        let newCompetitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
         if (registryBrandTokens) {
-          result.competitors = result.competitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
+          newCompetitors = newCompetitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
         }
+        newCompetitors = newCompetitors.filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")));
         webSearchCount += result.web_searches_performed || 0;
-        result.__phase2Stage = "discovered";
+        pool = mergeNewCandidatesIntoPool(pool, newCompetitors);
 
-        await updateAnalysisPhase(analysisId, 2, "phase2_result", result, webSearchCount);
+        const updatedFill: FillLoopMarker = { round: fill.round, searchesSoFar: fill.searchesSoFar + (webSearchCount - searchesBeforeThisRound) };
+
+        // Cheap trial check (no Rainforest/indie-lineup calls — those stay
+        // in 2b) — indieLineups: [] makes relative-pricing candidates fall
+        // back to absolute-price scoring for this estimate only; the real,
+        // authoritative selection with full indie lineups happens in 2b
+        // regardless of what this trial predicts.
+        const trialCtx: CompositeScoringContext = {
+          motorFamilies, ourMotor, ourSpecs, ourLineupPercentile, indieLineups: new Map(),
+          weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+          keyDiff: context.keyDiff ?? null,
+        };
+        const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "emerging", identityCard, 5, trialCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
+
+        if (trialSelection.length < 5 && updatedFill.round < 3) {
+          await updateAnalysisPhase(analysisId, 2, "phase2_result", {
+            __phase2Fill: { round: (updatedFill.round + 1) as 1 | 2 | 3, searchesSoFar: updatedFill.searchesSoFar },
+            __phase2Pool: pool,
+          }, webSearchCount);
+          return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: webSearchCount };
+        }
+
+        const finalized: any = { competitors: pool, __phase2Stage: "discovered", __phase2FillRoundsUsed: updatedFill.round, __phase2SearchesSoFar: updatedFill.searchesSoFar };
+        await updateAnalysisPhase(analysisId, 2, "phase2_result", finalized, webSearchCount);
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: webSearchCount };
       }
 
@@ -1818,6 +1955,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // ----------------------------------------------------
       const result: any = record.phase2_result;
       delete result.__phase2Stage;
+      const fillRoundsUsed: number = result.__phase2FillRoundsUsed ?? 1;
+      const searchesSoFarPhase2: number = result.__phase2SearchesSoFar ?? 0;
+      delete result.__phase2FillRoundsUsed;
+      delete result.__phase2SearchesSoFar;
 
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
@@ -1840,11 +1981,17 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         indieLineups,
         keyDiff: context.keyDiff ?? null,
       };
-      result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true });
+      result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true, allowStaticFallbackTopup: true });
+      const stillShortEmerging = 5 - result.competitors.length;
+      for (let i = 0; i < stillShortEmerging; i++) {
+        result.competitors.push(buildEmptySlotPlaceholder("emerging", identityCard, ourMotorLabel, searchesSoFarPhase2));
+      }
       result.matching_weights = scoringCtx.weights;
       result.form_inputs = buildFormInputsSnapshot(context);
+      result.fill_rounds_used = fillRoundsUsed;
+      const realEmergingCompetitors = result.competitors.filter((c: any) => !c.empty_slot);
       if (hasRainforestKey) {
-        await persistPricingProvenance(result.competitors, analysisId);
+        await persistPricingProvenance(realEmergingCompetitors, analysisId);
       }
 
       await updateAnalysisPhase(analysisId, 3, "phase2_result", result, webSearchCount);
@@ -2192,7 +2339,7 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
 // verify suite inspect the exact generated prompt text (e.g. assert zero
 // literal "clipper" substrings for a trimmer identity) without needing a
 // live AI call.
-export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, ourMotorLabel?: string | null) {
+export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, ourMotorLabel?: string | null, extraInstruction?: string) {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
   const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
@@ -2272,13 +2419,13 @@ Instructions:
 1. ${brandHint ? `Check these known brands first: ${brandHint.join(", ")} — then add any other established brand your search finds in this category.` : "Search broadly for established brands in this exact category."}
 2. Combine motor technology and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best ${tierKeyword} ${toolTypeLabel} ${bandLabel}", to bias results toward the correct motor+price segment together.
 3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
-4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
+4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.${extraInstruction ? `\n\n${extraInstruction}` : ""}`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel);
+async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel, extraInstruction);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -2296,15 +2443,15 @@ function assertHasCompetitors(parsed: any): any {
   return parsed;
 }
 
-async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel);
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel, extraInstruction);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
 // Exported for the same offline-verify reason as buildPhase1Prompt above.
-export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
+export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
   // brandHintOverride (when the identified product maps to a legacy-brand
   // registry category, lib/legacy-brand-registry.ts) takes priority over
   // the static, non-binding lib/known-brands-by-category.ts hint — the
@@ -2389,19 +2536,19 @@ Instructions:
 2. Combine motor technology and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best value ${toolTypeLabel} ${bandLabel}", to bias results toward the correct motor+price segment together.
 3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
 4. ${brandHint ? `Exclude the large brands: ${brandHint.join(", ")}.` : "Exclude any large established brand — focus on indie/newer names."}
-5. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.`;
+5. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.${extraInstruction ? `\n\n${extraInstruction}` : ""}`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel, extraInstruction);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel);
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel, extraInstruction);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
