@@ -7,40 +7,67 @@
 // fabricated from brand reputation.
 import type { RainforestSpec } from "./rainforest";
 import type { MotorFamilyRow } from "./db/motor-families";
-import { matchMotorFamily, MatchedMotor } from "./motor-taxonomy";
+import type { BrandedMotorNameRow } from "./db/branded-motor-names";
+import { matchMotorFamily, matchBrandedMotorName, MatchedMotor } from "./motor-taxonomy";
 import type { IdentityCard } from "./product-identification";
 import { isRealAnswer } from "./field-answer-state";
 
+// Which cascade step actually resolved the match — surfaced in the UI/PDF
+// alongside the existing verified sourceQuote, so "how do we know this" is
+// as answerable for motor type as it already is for every other section.
+export type MotorConfirmedVia = "branded_map" | "spec_table" | "title" | "bullets" | "description";
+
 export interface CompetitorMotorExtraction extends MatchedMotor {
   sourceQuote: string;
+  confirmedVia: MotorConfirmedVia;
 }
 
 const MOTOR_SPEC_LABELS = ["motor type", "motor technology", "motor"];
 
 // Reuses whatever Rainforest data enrichCompetitorsWithRainforest already
-// fetched (specifications/attributes/feature_bullets/description) — no
-// dedicated per-competitor page-fetch needed, per the plan's Context
-// section (a real cost this feature deliberately avoids).
+// fetched (specifications/attributes/feature_bullets/description/title) —
+// no dedicated per-competitor page-fetch needed, per the plan's Context
+// section (a real cost this feature deliberately avoids). `brand` +
+// `brandedNames` are optional — when given, a brand's own proprietary
+// motor name (e.g. "IN3" -> vector, lib/db/branded-motor-names.ts) is
+// checked FIRST, since a matched brand's own term is higher-confidence
+// than a generic taxonomy alias hit.
 export function extractCompetitorMotorType(
-  product: { specifications?: RainforestSpec[]; attributes?: RainforestSpec[]; feature_bullets?: string[]; description?: string | null },
-  families: MotorFamilyRow[]
+  product: { specifications?: RainforestSpec[]; attributes?: RainforestSpec[]; feature_bullets?: string[]; description?: string | null; title?: string | null },
+  families: MotorFamilyRow[],
+  opts?: { brand?: string | null; brandedNames?: BrandedMotorNameRow[] }
 ): CompetitorMotorExtraction | null {
   const specAndAttr = [...(product.specifications || []), ...(product.attributes || [])];
 
+  if (opts?.brand && opts.brandedNames?.length) {
+    const brandedTexts = [product.title, ...(product.feature_bullets || []), product.description].filter((t): t is string => !!t);
+    for (const text of brandedTexts) {
+      const matched = matchBrandedMotorName(opts.brand, text, opts.brandedNames, families);
+      if (matched) return { ...matched, sourceQuote: text, confirmedVia: "branded_map" };
+    }
+  }
+
   // Prefer an explicit "Motor Type"/"Motor" spec row — highest-confidence
-  // source, and its own {name, value} pair doubles as a precise quote.
+  // generic source, and its own {name, value} pair doubles as a precise quote.
   for (const spec of specAndAttr) {
     const nameLower = (spec.name || "").toLowerCase();
     if (MOTOR_SPEC_LABELS.some(label => nameLower.includes(label))) {
       const matched = matchMotorFamily(spec.value, families);
-      if (matched) return { ...matched, sourceQuote: `${spec.name}: ${spec.value}` };
+      if (matched) return { ...matched, sourceQuote: `${spec.name}: ${spec.value}`, confirmedVia: "spec_table" };
     }
+  }
+
+  // Title next — often states the motor name directly (e.g. "... Vector
+  // Motor Clipper ...") and wasn't scanned at all before this.
+  if (product.title) {
+    const matched = matchMotorFamily(product.title, families);
+    if (matched) return { ...matched, sourceQuote: product.title, confirmedVia: "title" };
   }
 
   // Fall back to feature bullets — verbatim Amazon listing text.
   for (const bullet of product.feature_bullets || []) {
     const matched = matchMotorFamily(bullet, families);
-    if (matched) return { ...matched, sourceQuote: bullet };
+    if (matched) return { ...matched, sourceQuote: bullet, confirmedVia: "bullets" };
   }
 
   // Last resort: the listing description — quote the specific matching
@@ -49,7 +76,7 @@ export function extractCompetitorMotorType(
     const sentences = product.description.split(/(?<=[.!?])\s+/);
     for (const sentence of sentences) {
       const matched = matchMotorFamily(sentence, families);
-      if (matched) return { ...matched, sourceQuote: sentence.trim() };
+      if (matched) return { ...matched, sourceQuote: sentence.trim(), confirmedVia: "description" };
     }
   }
 

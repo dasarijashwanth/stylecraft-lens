@@ -272,6 +272,17 @@ export interface MockMotorFamily {
   updatedAt: Date;
 }
 
+export interface MockBrandedMotorName {
+  id: string;
+  brandName: string;
+  brandedTerm: string;
+  familyKey: string;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockCompetitorMatchingConfig {
   motorWeight: number;
   priceWeight: number;
@@ -416,6 +427,9 @@ class MemoryDatabase {
   // match any taxonomy family) — same non-seeded, non-persisted-across-
   // restart precedent as faqSearchMisses just below.
   motorTechSearchMisses: MockMotorTechMiss[] = [];
+  // Real usage data (admin-entered brand -> proprietary motor name -> family
+  // mappings) — starts empty, same precedent as legacy brands' official_domains.
+  brandedMotorNames: MockBrandedMotorName[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
   // Same always-seeded precedent — real default Help content, not an
   // empty admin table. Votes/search-misses start empty (real usage data).

@@ -4,6 +4,7 @@
 // selection (lib/competitor-scoring.ts). Plain TS, no server-only imports.
 import { normalizeBrandToken } from "./legacy-brand-discovery";
 import type { MotorFamilyRow } from "./db/motor-families";
+import type { BrandedMotorNameRow } from "./db/branded-motor-names";
 import { resolveRegistryCategorySlug } from "./legacy-brand-registry";
 import type { IdentityCard } from "./product-identification";
 
@@ -64,6 +65,30 @@ export function matchMotorFamily(text: string, families: MotorFamilyRow[]): Matc
     modifierKey: matchedModifier?.family_key ?? null,
     modifierLabel: matchedModifier?.label ?? null,
   };
+}
+
+// motor_families.aliases is a single GLOBAL namespace matched regardless of
+// brand — adding a brand's own proprietary marketing name there (e.g. "IN3")
+// would wrongly match every other brand's product that happens to share the
+// same string. This checks only entries scoped to the SAME brand (brand-name
+// comparison uses the same normalizeBrandToken equality this codebase
+// already uses for brand matching elsewhere), so a proprietary term is only
+// ever trusted for the brand that actually owns it.
+export function matchBrandedMotorName(brand: string, text: string, brandedNames: BrandedMotorNameRow[], families: MotorFamilyRow[]): MatchedMotor | null {
+  const brandToken = normalizeBrandToken(brand || "");
+  if (!brandToken) return null;
+  const textTokens = new Set(normalizeBrandToken(text || "").split(/\s+/).filter(Boolean));
+  if (textTokens.size === 0) return null;
+
+  for (const entry of brandedNames) {
+    if (!entry.enabled) continue;
+    if (normalizeBrandToken(entry.brand_name) !== brandToken) continue;
+    if (!aliasMatchesText(entry.branded_term, textTokens)) continue;
+    const family = families.find(f => f.enabled && f.family_key === entry.family_key);
+    if (!family) continue;
+    return { familyKey: family.family_key, label: family.label, modifierKey: null, modifierLabel: null };
+  }
+  return null;
 }
 
 // exact (same family) > adjacent (either family lists the other in its

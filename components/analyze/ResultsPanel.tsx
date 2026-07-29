@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CompetitorCard } from "./CompetitorCard";
+import { CompetitorCard, EmptySlotCard } from "./CompetitorCard";
 import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
@@ -84,6 +84,11 @@ interface ResultsPanelProps {
 
 export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
+  // A slot the fill loop couldn't fill (lib/analysisEngine.ts's
+  // buildEmptySlotPlaceholder) renders as EmptySlotCard, not a real
+  // competitor — counts/comparison-table columns must never include it.
+  const phase1RealCompetitors = (phase1.competitors || []).filter((c: any) => !c.empty_slot);
+  const phase2RealCompetitors = (phase2.competitors || []).filter((c: any) => !c.empty_slot);
   // Threaded into each CompetitorCard so its "Why this competitor" section
   // can name the actual differentiator a match was scored against, not
   // just show an unlabeled checkmark.
@@ -119,8 +124,8 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         created_at: new Date().toISOString(),
         competitive_analysis: {
           product_name: analysis.productName,
-          large_brand_competitors: phase1.competitors,
-          indie_emerging_competitors: phase2.competitors,
+          large_brand_competitors: phase1RealCompetitors,
+          indie_emerging_competitors: phase2RealCompetitors,
           market_snapshot: phase3.market_snapshot,
           key_trends: phase3.key_trends,
           market_gaps: phase3.market_gaps,
@@ -134,7 +139,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           form_inputs: phase1.form_inputs ?? phase2.form_inputs ?? null,
         },
         pricing_analysis: buildPricingAnalysis({
-          competitors: [...phase1.competitors, ...phase2.competitors],
+          competitors: [...phase1RealCompetitors, ...phase2RealCompetitors],
           targetPriceCandidates: [[analysis.pricePoint, "project_record"]],
           identity: analysis.identity,
         }),
@@ -177,7 +182,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           <div className="results-meta text-[11px] text-text-muted font-mono leading-none">
             <span>{phase3.amazon_category || "Market Analysis"}</span>
             <span className="mx-2">·</span>
-            <span>{(phase1.competitors?.length ?? 0) + (phase2.competitors?.length ?? 0)} products mapped</span>
+            <span>{phase1RealCompetitors.length + phase2RealCompetitors.length} products mapped</span>
             <span className="mx-2">·</span>
             <span>{analysis.totalSearches ?? 0} web searches performed</span>
           </div>
@@ -460,7 +465,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             <h2 className="text-base font-bold text-text-primary tracking-tight">Large Brand Competitors</h2>
           </div>
           <span className="count-badge bg-indigo-950/60 border border-indigo-900/60 text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
-            {phase1.competitors?.length ?? 0} Brands
+            {phase1RealCompetitors.length} Brands
           </span>
         </div>
 
@@ -468,7 +473,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           <p className="text-[10px] text-text-muted italic -mt-3">
             Competitors prioritized by motor type, then price (legacy: nearest to your target price), then comparable specs.
             {phase1.legacy_registry_snapshot && (
-              <> Legacy competitors selected from the {phase1.legacy_registry_snapshot.category_name} brand list ({phase1.competitors?.filter((c: any) => c.curated_brand === true).length ?? 0} of {phase1.competitors?.length ?? 0} from curated brands).</>
+              <> Legacy competitors selected from the {phase1.legacy_registry_snapshot.category_name} brand list ({phase1RealCompetitors.filter((c: any) => c.curated_brand === true).length} of {phase1RealCompetitors.length} from curated brands).</>
             )}
           </p>
         )}
@@ -476,7 +481,9 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
             phase1.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+              comp.empty_slot
+                ? <EmptySlotCard key={i} reason={comp.reason || "No additional legacy competitor found."} />
+                : <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
@@ -485,7 +492,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
 
         <div className="pt-4 border-t border-border/40">
           <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Legacy Brand Specification Comparison</h3>
-          <CompetitorTable competitors={phase1.competitors} tier="legacy" resolvedFeatures={phase1Features} />
+          <CompetitorTable competitors={phase1RealCompetitors} tier="legacy" resolvedFeatures={phase1Features} />
         </div>
       </section>
 
@@ -497,7 +504,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             <h2 className="text-base font-bold text-text-primary tracking-tight">Indie & Emerging Competitors</h2>
           </div>
           <span className="count-badge bg-amber-950/60 border border-amber-900/60 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
-            {phase2.competitors?.length ?? 0} Brands
+            {phase2RealCompetitors.length} Brands
           </span>
         </div>
 
@@ -510,7 +517,9 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors && phase2.competitors.length > 0 ? (
             phase2.competitors.map((comp, i) => (
-              <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+              comp.empty_slot
+                ? <EmptySlotCard key={i} reason={comp.reason || "No additional emerging competitor found."} />
+                : <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>
@@ -519,7 +528,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
 
         <div className="pt-4 border-t border-border/40">
           <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Emerging Brand Specification Comparison</h3>
-          <CompetitorTable competitors={phase2.competitors} tier="emerging" resolvedFeatures={phase2Features} />
+          <CompetitorTable competitors={phase2RealCompetitors} tier="emerging" resolvedFeatures={phase2Features} />
         </div>
       </section>
     </div>

@@ -30,6 +30,14 @@ interface MotorTechMiss {
   last_searched_at: string;
 }
 
+interface BrandedMotorName {
+  id: string;
+  brand_name: string;
+  branded_term: string;
+  family_key: string;
+  enabled: boolean;
+}
+
 const DOMAIN_LABELS: Record<string, string> = {
   clipper_trimmer_shaver: "Clippers, Trimmers & Shavers",
   beauty: "Beauty Tools",
@@ -39,6 +47,7 @@ export default function CompetitorMatchingAdminPage() {
   const { user, loading: authLoading } = useAuth();
   const [families, setFamilies] = useState<MotorFamily[]>([]);
   const [misses, setMisses] = useState<MotorTechMiss[]>([]);
+  const [brandedNames, setBrandedNames] = useState<BrandedMotorName[]>([]);
   const [weights, setWeights] = useState<Weights | null>(null);
   const [weightInputs, setWeightInputs] = useState({ motor: "0.45", price: "0.35", feature: "0.20" });
   const [loading, setLoading] = useState(true);
@@ -46,15 +55,18 @@ export default function CompetitorMatchingAdminPage() {
   const [savingWeights, setSavingWeights] = useState(false);
   const [newFamilyText, setNewFamilyText] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [newBranded, setNewBranded] = useState({ brandName: "", brandedTerm: "", familyKey: "" });
+  const [savingBranded, setSavingBranded] = useState(false);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [famRes, weightRes, missRes] = await Promise.all([
+      const [famRes, weightRes, missRes, brandedRes] = await Promise.all([
         fetch("/api/admin/motor-families"),
         fetch("/api/admin/competitor-matching-config"),
         fetch("/api/admin/motor-families/misses"),
+        fetch("/api/admin/branded-motor-map"),
       ]);
       const famData = await famRes.json();
       const weightData = await weightRes.json();
@@ -64,6 +76,10 @@ export default function CompetitorMatchingAdminPage() {
       setFamilies(famData.families || []);
       setWeights(weightData.weights);
       if (missRes.ok) setMisses(missData.misses || []);
+      if (brandedRes.ok) {
+        const brandedData = await brandedRes.json();
+        setBrandedNames(brandedData.brandedNames || []);
+      }
       setWeightInputs({
         motor: String(weightData.weights.motor_weight),
         price: String(weightData.weights.price_weight),
@@ -174,6 +190,62 @@ export default function CompetitorMatchingAdminPage() {
       await load();
     } catch (err: any) {
       toast.error(err.message || "Failed to reorder");
+    }
+  }
+
+  async function handleAddBranded() {
+    if (!newBranded.brandName.trim() || !newBranded.brandedTerm.trim() || !newBranded.familyKey) {
+      toast.error("Brand, branded term, and family are all required");
+      return;
+    }
+    setSavingBranded(true);
+    try {
+      const res = await fetch("/api/admin/branded-motor-map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newBranded),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to add branded motor name");
+      setNewBranded({ brandName: "", brandedTerm: "", familyKey: "" });
+      toast.success(`Added ${newBranded.brandName} → ${newBranded.brandedTerm}`);
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to add branded motor name");
+    } finally {
+      setSavingBranded(false);
+    }
+  }
+
+  async function handleToggleBranded(entry: BrandedMotorName) {
+    setBusyId(entry.id);
+    try {
+      const res = await fetch(`/api/admin/branded-motor-map/${entry.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !entry.enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update branded motor name");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update branded motor name");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleRemoveBranded(id: string) {
+    setBusyId(id);
+    try {
+      const res = await fetch(`/api/admin/branded-motor-map/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove branded motor name");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to remove branded motor name");
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -333,6 +405,88 @@ export default function CompetitorMatchingAdminPage() {
                 </div>
               );
             })}
+          </div>
+
+          <div className="border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
+              <h2 className="text-xs font-bold text-text-primary">Branded Motor Names</h2>
+              <p className="text-[10px] text-text-muted mt-0.5">
+                A brand&apos;s own proprietary marketing name for a motor (e.g. &quot;IN3&quot; → Magnetic / Vector) — kept separate from the generic aliases above since a proprietary term only applies to the brand that owns it, never to every brand&apos;s products.
+              </p>
+            </div>
+            <div className="p-4 space-y-2">
+              {brandedNames.map(entry => {
+                const family = families.find(f => f.family_key === entry.family_key);
+                return (
+                  <div
+                    key={entry.id}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${
+                      entry.enabled ? "border-border bg-surface-1" : "border-border/50 bg-surface-3/20 opacity-60"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0 text-xs">
+                      <span className="font-semibold text-text-primary">{entry.brand_name}</span>
+                      <span className="text-text-muted"> — &quot;{entry.branded_term}&quot; → </span>
+                      <span className="font-semibold text-text-primary">{family?.label || entry.family_key}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleBranded(entry)}
+                      disabled={busyId === entry.id}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                        entry.enabled ? "border-success/30 text-success bg-success/10" : "border-border text-text-muted"
+                      }`}
+                    >
+                      {entry.enabled ? "Enabled" : "Disabled"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveBranded(entry.id)}
+                      disabled={busyId === entry.id}
+                      className="p-1 text-text-muted hover:text-danger transition-colors"
+                      title="Remove"
+                    >
+                      {busyId === entry.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                );
+              })}
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="text"
+                  value={newBranded.brandName}
+                  onChange={e => setNewBranded(prev => ({ ...prev, brandName: e.target.value }))}
+                  placeholder="Brand — e.g. Wahl"
+                  className="w-32 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                />
+                <input
+                  type="text"
+                  value={newBranded.brandedTerm}
+                  onChange={e => setNewBranded(prev => ({ ...prev, brandedTerm: e.target.value }))}
+                  placeholder="Branded term — e.g. IN3"
+                  className="flex-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                />
+                <select
+                  value={newBranded.familyKey}
+                  onChange={e => setNewBranded(prev => ({ ...prev, familyKey: e.target.value }))}
+                  className="px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                >
+                  <option value="">Family…</option>
+                  {families.map(f => (
+                    <option key={f.family_key} value={f.family_key}>{f.label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleAddBranded}
+                  disabled={savingBranded}
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {savingBranded ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                  <span>Add</span>
+                </button>
+              </div>
+            </div>
           </div>
 
           {misses.length > 0 && (

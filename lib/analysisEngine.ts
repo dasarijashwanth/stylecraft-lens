@@ -24,6 +24,8 @@ import { resolveLegacyBrandsForIdentity, type ResolvedLegacyRegistry } from "./l
 import { searchCuratedLegacyBrands, normalizeBrandToken, type BrandProgressEntry } from "./legacy-brand-discovery";
 import { listMotorFamilies } from "./db/motor-families";
 import type { MotorFamilyRow } from "./db/motor-families";
+import { listBrandedMotorNames } from "./db/branded-motor-names";
+import type { BrandedMotorNameRow } from "./db/branded-motor-names";
 import { getMatchingWeights } from "./db/competitor-matching-config";
 import { isMotorizedCategory, computeMotorMatchTier } from "./motor-taxonomy";
 import { extractCompetitorMotorType, resolveOurMotorType, type OurMotorResolution } from "./motor-extraction";
@@ -32,6 +34,7 @@ import {
   computeCompositeScore, dedupeToOnePerBrand, type MatchingWeights,
 } from "./competitor-scoring";
 import { buildIndieBrandLineups, computePercentileInLineup, type LineupProduct } from "./indie-brand-lineup";
+import { discoverBrandSiteCandidatesForEmerging } from "./brand-site-discovery";
 import { resolveOurLineupTier, percentileForManualTier, type LineupTier } from "./our-product-position";
 import { extractCompetitorSpecs, extractOurSpecsFromTds } from "./spec-extraction";
 import { getTdsFieldsForProject } from "./db/documents";
@@ -806,6 +809,9 @@ export function applyPriceBandGate(
 
 export interface CompositeScoringContext {
   motorFamilies: MotorFamilyRow[];
+  // Brand-scoped proprietary motor names (e.g. "IN3" -> vector) — optional/
+  // absent degrades gracefully to generic-alias-only matching.
+  brandedNames?: BrandedMotorNameRow[];
   ourMotor: OurMotorResolution | null;
   ourSpecs: import("./competitor-scoring").FeatureComparable;
   weights: MatchingWeights;
@@ -865,7 +871,7 @@ export function selectByCompositeScore(
   }
 
   const scored = accepted.map(c => {
-    const motorExtraction = extractCompetitorMotorType(c, ctx.motorFamilies);
+    const motorExtraction = extractCompetitorMotorType({ ...c, title: c.name }, ctx.motorFamilies, { brand: c.brand, brandedNames: ctx.brandedNames });
     const motorMatchTier = computeMotorMatchTier(ctx.ourMotor?.familyKey ?? null, motorExtraction?.familyKey ?? null, ctx.motorFamilies);
     const motorScore = computeMotorScore(motorMatchTier);
 
@@ -908,6 +914,15 @@ export function selectByCompositeScore(
       motor_family_key: motorExtraction?.familyKey ?? null,
       motor_modifier: motorExtraction?.modifierLabel ?? null,
       motor_source_quote: motorExtraction?.sourceQuote ?? null,
+      // Which cascade step actually resolved the match, and where to see it
+      // for yourself — surfaced next to motor_source_quote in the UI/PDF so
+      // "how do we know this" is answerable for motor type like every other
+      // section already is. url falls back to wherever the candidate's data
+      // came from (brand-site page when that's the source, else the Amazon
+      // listing itself) since a spec/bullet/title match doesn't have its
+      // own distinct URL.
+      motor_confirmed_via: motorExtraction?.confirmedVia ?? null,
+      motor_source_url: motorExtraction ? (c.sources?.brand_site?.url || c.amazon_url || null) : null,
       motor_match_tier: motorMatchTier,
       motor_score: motorScore,
       price_score: priceScore,
@@ -1319,6 +1334,7 @@ interface Phase2ResolvedContext {
   registryBrandTokens: Set<string> | null;
   brandHintOverride: string[] | undefined;
   motorFamilies: any;
+  brandedNames: BrandedMotorNameRow[];
   ourMotor: any;
   ourMotorLabel: string | null;
   weights: any;
@@ -1365,6 +1381,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   // Same motor resolution as Phase 1 (cheap re-read — already resolved
   // once, or already in context.motorTech from that phase's own pause).
   const motorFamilies = await listMotorFamilies();
+  const brandedNames = await listBrandedMotorNames();
   const motorRequired = isMotorizedCategory(identityCard);
   const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
   if (motorRequired && !ourMotor) {
@@ -1405,7 +1422,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
     };
   }
 
-  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
+  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
 }
 
 // Shared by Phase 1's and Phase 2a's multi-round fill loop (see the header
@@ -1609,6 +1626,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // already does; a genuinely unrelated product skips the requirement
       // entirely rather than being forced to answer an inapplicable question.
       const motorFamilies = await listMotorFamilies();
+      const brandedNames = await listBrandedMotorNames();
       const motorRequired = isMotorizedCategory(identityCard);
       const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
       if (motorRequired && !ourMotor) {
@@ -1627,6 +1645,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         : extractOurSpecsFromTds(null);
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
+        brandedNames,
         ourMotor,
         ourSpecs,
         weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
@@ -1888,7 +1907,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await setPendingQuestion(analysisId, resolved.pendingQuestion);
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: resolved.pendingQuestion };
       }
-      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
+      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
 
       if (record.phase2_result?.__phase2Stage !== "discovered") {
         // ----------------------------------------------------
@@ -1931,7 +1950,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // authoritative selection with full indie lineups happens in 2b
         // regardless of what this trial predicts.
         const trialCtx: CompositeScoringContext = {
-          motorFamilies, ourMotor, ourSpecs, ourLineupPercentile, indieLineups: new Map(),
+          motorFamilies, brandedNames, ourMotor, ourSpecs, ourLineupPercentile, indieLineups: new Map(),
           weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
           keyDiff: context.keyDiff ?? null,
         };
@@ -1964,6 +1983,40 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
       }
 
+      // Best-effort brand-site pass for emerging candidates — the curated
+      // legacy path has always had this (lib/legacy-brand-discovery.ts's
+      // official_domains lookup); emerging candidates never did, since
+      // indie/emerging brands aren't in that curated registry by
+      // definition. Deliberately scoped to ONLY candidates Rainforest left
+      // with zero grounding data at all (no specs/attributes/bullets/
+      // description — meaning motor type would otherwise resolve
+      // "unverified" for certain) — this is a genuinely added-latency
+      // operation, so it stays rare rather than running for every
+      // candidate. Folds straight into `description`, exactly like the
+      // legacy path, so the existing extractCompetitorMotorType call in
+      // selectByCompositeScore below picks it up for free — no new
+      // matching logic needed.
+      if (hasOpenAIKey && identityCard.toolType) {
+        const ungrounded = result.competitors.filter((c: any) =>
+          !c.specifications?.length && !c.attributes?.length && !c.feature_bullets?.length && !c.description && c.brand
+        );
+        if (ungrounded.length > 0) {
+          const brandSiteHits = await discoverBrandSiteCandidatesForEmerging(
+            ungrounded.map((c: any) => c.brand),
+            { toolType: identityCard.toolType, motorLabel: ourMotorLabel, analysisId }
+          );
+          result.competitors = result.competitors.map((c: any) => {
+            const hit = brandSiteHits.get(c.brand);
+            if (!hit) return c;
+            return {
+              ...c,
+              description: hit.description,
+              sources: { ...(c.sources || {}), brand_site: { url: hit.url, price: hit.price, price_raw: hit.price_raw, retrieved_at: hit.retrieved_at } },
+            };
+          });
+        }
+      }
+
       // Build each surviving candidate's brand's own price lineup (Part 4) —
       // the one genuinely new, costly operation this feature adds, so it's
       // scoped to only the distinct brands still in play at this point, not
@@ -1974,6 +2027,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
+        brandedNames,
         ourMotor,
         ourSpecs,
         weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },

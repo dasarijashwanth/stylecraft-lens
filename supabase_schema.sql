@@ -879,3 +879,25 @@ ON CONFLICT (flag_name) DO NOTHING;
 -- new entry tagged feature='buyer_sentiment' directly in the seed data
 -- (unlike Section 20's TDS backfill, there's no pre-existing row to
 -- retrofit here — re-run scripts/seed-faqs.ts to pick up the new entry).
+
+-- 24. BRANDED MOTOR NAMES — a brand's own proprietary marketing name for a
+-- motor (e.g. "IN3" -> the vector family). Deliberately its OWN table, not
+-- more motor_families.aliases entries: aliases there are a single GLOBAL
+-- namespace matched regardless of brand (lib/motor-taxonomy.ts's
+-- matchMotorFamily), so adding a proprietary term like "IN3" there would
+-- wrongly match every other brand's product containing that string too.
+-- Admin-editable at /dashboard/admin/competitor-matching alongside the
+-- existing motor-family taxonomy. Starts empty — real usage data, not a
+-- pre-seeded default (same precedent as legacy_brands.official_domains).
+CREATE TABLE IF NOT EXISTS branded_motor_names (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    brand_name VARCHAR(255) NOT NULL,
+    branded_term VARCHAR(255) NOT NULL,
+    family_key VARCHAR(50) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE branded_motor_names ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for branded_motor_names" ON branded_motor_names FOR ALL USING (true) WITH CHECK (true);

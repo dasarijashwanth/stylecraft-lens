@@ -161,6 +161,112 @@ export async function attemptBrandSite(brand: LegacyBrandRow, ctx: BrandSiteAtte
   return null;
 }
 
+// Emerging/indie brands aren't in the curated legacy_brands registry (by
+// definition — that's what makes them "emerging"), so there's no
+// admin-maintained official_domains list to search against the way
+// attemptBrandSite does for legacy brands. Best-effort alternative: search
+// for the brand's own official site directly, then verify the result's
+// hostname plausibly matches the brand name (never trust the query alone —
+// same discipline as urlMatchesDomain above, just fuzzy instead of an exact
+// registered-domain match since there's no admin-curated list here).
+function hostnameLooksLikeBrand(url: string, brandName: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  const domainWord = (hostname.split(".")[0] || "").replace(/[^a-z0-9]/g, "");
+  const brandWord = brandName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!domainWord || !brandWord) return false;
+  return domainWord.includes(brandWord) || brandWord.includes(domainWord);
+}
+
+// Only worth calling for a candidate that Rainforest enrichment left with
+// zero grounding data at all (see the caller in lib/analysisEngine.ts) —
+// keeps this rare, deliberately, since it's a real added-latency operation
+// and most candidates already resolve motor type from cheaper sources.
+export async function attemptBrandSiteForEmergingBrand(brandName: string, ctx: BrandSiteAttemptContext): Promise<BrandSiteResult | null> {
+  if (!hasOpenAIKey || !brandName) return null;
+  const toolTypeWord = (TOOL_TYPE_LABELS[ctx.toolType] || "product").toLowerCase();
+  const cacheKey = resolveCacheKey("", `brandsite-emerging:${brandName}:${ctx.toolType}:${ctx.motorLabel || ""}`);
+
+  const cached = await getCachedBrandSite(cacheKey);
+  if (cached) return cached;
+
+  const startedAt = Date.now();
+  const query = `${brandName} official site ${toolTypeWord}`;
+  try {
+    const { data, citations } = await searchAndExtractJson<{ urls?: string[] }>(
+      `Find the OFFICIAL brand website (never Amazon, never a retailer, never a review/roundup site) for the brand "${brandName}", specifically a product page for a ${toolTypeWord}${ctx.motorLabel ? ` using ${ctx.motorLabel} motor technology` : ""}. Never invent a URL — only ones you actually found via search. Return ONLY valid JSON: {"urls": ["https://...", ...]}`,
+      query,
+      6_000,
+      2
+    );
+    const candidateUrls = [...(data?.urls || []), ...citations.map(c => c.url)].filter(Boolean);
+    const brandUrl = candidateUrls.find(u => hostnameLooksLikeBrand(u, brandName));
+
+    if (!brandUrl) {
+      await logAttempt(cacheKey, brandName, ctx.analysisId, "web-search", query, "empty", startedAt);
+      return null;
+    }
+
+    const scraped = await scrapeProductPage(brandUrl, { aiFallback: false });
+    if (!scraped || (!scraped.title && !scraped.description)) {
+      await logAttempt(cacheKey, brandName, ctx.analysisId, "web-search", query, "empty", startedAt, brandUrl);
+      return null;
+    }
+
+    const description = [scraped.title, scraped.description, scraped.raw?.bodyTextSample].filter(Boolean).join(" ");
+    const result: BrandSiteResult = {
+      url: brandUrl,
+      title: scraped.title || brandName,
+      price: scraped.price || null,
+      price_raw: scraped.price ? parsePriceToNumber(scraped.price) : null,
+      description,
+      retrieved_at: new Date().toISOString(),
+    };
+
+    await setCachedBrandSite(cacheKey, result);
+    await logAttempt(cacheKey, brandName, ctx.analysisId, "web-search", query, "success", startedAt, brandUrl);
+    return result;
+  } catch (err: any) {
+    await logAttempt(cacheKey, brandName, ctx.analysisId, "web-search", query, "error", startedAt, undefined, err?.message || String(err));
+    return null;
+  }
+}
+
+// Batch entry point mirroring discoverBrandSiteCandidates — concurrency 4,
+// shared deadline, fail-open per brand.
+export async function discoverBrandSiteCandidatesForEmerging(
+  brandNames: string[],
+  ctx: BrandSiteAttemptContext,
+  timeBudgetMsOverride?: number
+): Promise<Map<string, BrandSiteResult>> {
+  const timeBudgetMs = timeBudgetMsOverride ?? BRAND_SITE_PASS_TIME_BUDGET_MS;
+  const deadline = Date.now() + timeBudgetMs;
+  const distinctNames = Array.from(new Set(brandNames.filter(Boolean)));
+  if (distinctNames.length === 0 || !hasOpenAIKey) return new Map();
+
+  async function attemptWithDeadline(brandName: string): Promise<BrandSiteResult | null> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), remaining));
+    return Promise.race([attemptBrandSiteForEmergingBrand(brandName, ctx), timeout]);
+  }
+
+  const results = await mapWithConcurrency(distinctNames, 4, async brandName => ({
+    brandName,
+    result: await attemptWithDeadline(brandName),
+  }));
+
+  const out = new Map<string, BrandSiteResult>();
+  for (const { brandName, result } of results) {
+    if (result) out.set(brandName, result);
+  }
+  return out;
+}
+
 async function logAttempt(
   cacheKey: string, brandName: string, analysisId: string | null | undefined, domain: string, query: string,
   outcome: "success" | "empty" | "error", startedAt: number, sourceUrl?: string, errorMessage?: string

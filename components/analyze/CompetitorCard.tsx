@@ -17,6 +17,12 @@ interface Competitor {
   name:               string;
   brand:              string;
   tier:               "legacy" | "emerging";
+  // Set by lib/analysisEngine.ts's fill loop when a slot genuinely
+  // couldn't be filled after exhausting the full search/relaxation ladder
+  // — render EmptySlotCard instead of CompetitorCard for these, never treat
+  // as a real competitor (counts, PDF, exports).
+  empty_slot?:        boolean;
+  reason?:            string;
   asin:               string;
   price:              string;
   rating:             string;
@@ -300,6 +306,20 @@ async function safeJson(res: Response): Promise<any> {
   } catch {
     return { error: res.ok ? "Unexpected response — retry" : `Live data unavailable (server error) — retry` };
   }
+}
+
+// Rendered instead of a real CompetitorCard for a slot the fill loop
+// genuinely could not fill after exhausting the full round/relaxation
+// ladder (lib/analysisEngine.ts's buildEmptySlotPlaceholder) — an honest,
+// visibly-different empty state rather than silently showing fewer
+// competitors, with the exact reason (how much was actually searched)
+// always visible, not just in a log.
+export function EmptySlotCard({ reason }: { reason: string }) {
+  return (
+    <div className="competitor-card border border-dashed border-border rounded-xl p-5 flex items-center justify-center text-center min-h-[140px]">
+      <p className="text-[11px] text-text-muted italic max-w-xs">{reason}</p>
+    </div>
+  );
 }
 
 export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true }: CompetitorCardProps) {

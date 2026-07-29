@@ -16,7 +16,7 @@ import {
   Trash2,
   AlertTriangle
 } from "lucide-react";
-import { CompetitorCard } from "@/components/analyze/CompetitorCard";
+import { CompetitorCard, EmptySlotCard } from "@/components/analyze/CompetitorCard";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -153,11 +153,18 @@ export default function ReportDetailPage() {
       // disabled. Old saved reports may carry these rows from before the
       // flag existed; hiding them at export time (not deleting them) means
       // flipping the flag back on restores the appendix with no re-save.
-      const exportReport = newsUpdatesEnabled ? report : {
+      // Also drop any empty_slot placeholder (lib/analysisEngine.ts's fill
+      // loop) — never a real competitor, never belongs in an export.
+      const dropNews = !newsUpdatesEnabled;
+      const exportReport = {
         ...report,
         competitive_analysis: {
           ...report.competitive_analysis,
-          section_provenance: (report.competitive_analysis?.section_provenance || []).filter((r: any) => r.section !== "news"),
+          large_brand_competitors: (report.competitive_analysis?.large_brand_competitors || []).filter((c: any) => !c.empty_slot),
+          indie_emerging_competitors: (report.competitive_analysis?.indie_emerging_competitors || []).filter((c: any) => !c.empty_slot),
+          section_provenance: dropNews
+            ? (report.competitive_analysis?.section_provenance || []).filter((r: any) => r.section !== "news")
+            : report.competitive_analysis?.section_provenance,
         },
       };
       await downloadReportPDF(exportReport);
@@ -417,10 +424,14 @@ export default function ReportDetailPage() {
               <h3 className="text-sm font-bold text-text-primary">Discovered Competitor Mappings (10 total)</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(ca.large_brand_competitors || []).map((c: any, i: number) => (
-                  <CompetitorCard key={`large_${i}`} competitor={{ ...c, tier: "legacy" }} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} />
+                  c.empty_slot
+                    ? <EmptySlotCard key={`large_${i}`} reason={c.reason || "No additional legacy competitor found."} />
+                    : <CompetitorCard key={`large_${i}`} competitor={{ ...c, tier: "legacy" }} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} />
                 ))}
                 {(ca.indie_emerging_competitors || []).map((c: any, i: number) => (
-                  <CompetitorCard key={`indie_${i}`} competitor={{ ...c, tier: "emerging" }} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} />
+                  c.empty_slot
+                    ? <EmptySlotCard key={`indie_${i}`} reason={c.reason || "No additional emerging competitor found."} />
+                    : <CompetitorCard key={`indie_${i}`} competitor={{ ...c, tier: "emerging" }} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} />
                 ))}
               </div>
             </div>
