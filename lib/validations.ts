@@ -3,18 +3,18 @@ import { z } from "zod";
 
 // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — required on
 // every form that seeds an analysis, so a trimmer analysis can never pull
-// in clipper data (or vice versa). Kept as a literal tuple here (rather
-// than importing ToolType) since zod needs the literal values at schema-
-// definition time; lib/tool-type-taxonomy.ts's ToolType type is the
-// single source of truth these must stay in sync with.
-export const TOOL_TYPE_VALUES = [
-  "clipper", "trimmer", "shaver", "dryer", "flat_iron", "curling_iron", "hot_brush", "other_styling", "combo",
-] as const;
+// in clipper data (or vice versa). Tool Type is now DB-backed and user-
+// editable (lib/db/tool-types.ts's tool_types table) rather than a fixed
+// set, so this can no longer be a zod enum of literal values — real
+// membership/strictness checking happens server-side against the live
+// tool_types table when the analysis pipeline actually runs
+// (assertToolType), not at this schema boundary.
+const ToolTypeValue = z.string().min(1, "Select the exact tool type");
 
 // The 7 canonical motor families, fixed by design (unlike Tool Type, this
 // list is NOT user-extensible) — every motor-entry point (form, extraction,
 // matching, display, GTM/TDS) normalizes to exactly one of these. Kept as a
-// literal tuple here for the same reason as TOOL_TYPE_VALUES above; must
+// literal tuple (zod needs literal values at schema-definition time); must
 // stay in sync with the 7 enabled rows seeded by supabase_schema.sql's
 // Section 25 migration / lib/memoryDb.ts's seedMotorFamilyDefaults.
 export const MOTOR_FAMILY_VALUES = [
@@ -67,7 +67,7 @@ export const ProjectSchema = z.object({
   productName:     z.string().min(3).max(100),
   description:     z.string().min(10).max(2000),
   category:        z.string().max(100).optional(),
-  toolType:        z.enum(TOOL_TYPE_VALUES),
+  toolType:        ToolTypeValue,
   companyContext:  z.string().max(1000).optional(),
   motorFamily:     z.enum(MOTOR_FAMILY_VALUES).optional(),
   motorBrandedName: z.string().max(150).optional(),
@@ -85,7 +85,7 @@ export const AnalysisFormSchema = z.object({
   productName: z.string().min(3, "Product name must be at least 3 characters").max(100),
   description: z.string().min(10, "Add at least 10 characters for sharper results").max(2000),
   category: z.string().optional(),
-  toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
+  toolType: ToolTypeValue,
   companyContext: z.string().max(1000).optional(),
   motorFamily: z.enum(MOTOR_FAMILY_VALUES).optional(),
   motorBrandedName: z.string().max(150).optional(),
@@ -101,7 +101,7 @@ export const NewProjectSchema = z.object({
   productName: z.string().min(3, "Product name must be at least 3 characters").max(100),
   description: z.string().min(10, "Add at least 10 characters for sharper results").max(2000),
   category: z.string().optional(),
-  toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
+  toolType: ToolTypeValue,
   companyContext: z.string().max(1000).optional(),
   motorFamily: z.enum(MOTOR_FAMILY_VALUES).optional(),
   motorBrandedName: z.string().max(150).optional(),

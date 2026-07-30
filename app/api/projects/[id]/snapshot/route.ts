@@ -8,6 +8,7 @@ import { TDS_FIELD_SCHEMA } from "@/lib/tds-field-schema";
 import { reconcileTdsFromGtm } from "@/lib/tds-gtm-reconcile";
 import { isRealAnswer } from "@/lib/field-answer-state";
 import { isTdsEnabled } from "@/lib/feature-flags";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 export const maxDuration = 60;
 
@@ -41,7 +42,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: "This project has no product URL or ASIN to capture — add one first" }, { status: 400 });
     }
 
-    const { snapshot, projection } = await captureProductSnapshot({ projectId: params.id, productUrl, asin, requiredToolType: projectAny.toolType });
+    const toolTypes = await listToolTypes();
+    const { snapshot, projection } = await captureProductSnapshot({ projectId: params.id, productUrl, asin, requiredToolType: projectAny.toolType, toolTypes });
 
     const productTitle = projection.title || project.productName;
     const fields = await generateTdsFields(productTitle, snapshot.raw_data, {

@@ -61,6 +61,29 @@ const TARGET_PRICE = 259.95;
 const IDENTITY = { category: "Clippers", subcategory: "Professional Trimmer", toolType: "trimmer" as const };
 const CATEGORY_SLUG = "legacy_professional_clippers" as const;
 
+// Mirrors lib/memoryDb.ts's seedToolTypeDefaults exactly (the real
+// production seed) — covers at least clipper/trimmer/shaver, the types this
+// script's fixtures actually exercise.
+function makeToolTypesFixture(): any[] {
+  const now = new Date().toISOString();
+  const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+    { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+    { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+    { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+    { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+    { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+    { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+    { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+    { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+    { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+  ];
+  return defs.map((d, i) => ({
+    id: `ttype_${d.key}`, type_key: d.key, label: d.label, aliases: d.aliases, family: d.family,
+    enabled: true, custom: false, sort_order: i, created_at: now, updated_at: now,
+  }));
+}
+const TOOL_TYPES = makeToolTypesFixture();
+
 let scenario: "widen" | "time_budget" = "widen";
 let sawSearchTerms: string[] = [];
 
@@ -109,6 +132,7 @@ async function main() {
     IDENTITY,
     TARGET_PRICE,
     CATEGORY_SLUG,
+    TOOL_TYPES,
     async (entries) => { progressSnapshots.push(JSON.parse(JSON.stringify(entries))); }
   );
 
@@ -134,6 +158,7 @@ async function main() {
     IDENTITY,
     TARGET_PRICE,
     CATEGORY_SLUG,
+    TOOL_TYPES,
     undefined,
     10 // 10ms override — the mock's 50ms delay guarantees this trips before step 2
   );
@@ -152,10 +177,10 @@ async function main() {
   // Zero real candidates — a category where getCategoryFallbackCompetitors
   // DOES have static mock data (dryers), so the bug (if present) would show
   // up as Parlux/Zuvi/Laifen/etc. appearing despite allowStaticFallbackTopup:false.
-  const gatedNoTopup = applyPriceBandGate([], 150, "legacy", identityForGate, 5, { allowStaticFallbackTopup: false });
+  const gatedNoTopup = applyPriceBandGate([], 150, "legacy", identityForGate, TOOL_TYPES, 5, { allowStaticFallbackTopup: false });
   assert(gatedNoTopup.length === 0, `allowStaticFallbackTopup:false returns zero results instead of static mock data (got ${gatedNoTopup.length}: ${gatedNoTopup.map((c: any) => c.name).join(", ")})`);
 
-  const gatedWithTopup = applyPriceBandGate([], 150, "legacy", identityForGate, 5);
+  const gatedWithTopup = applyPriceBandGate([], 150, "legacy", identityForGate, TOOL_TYPES, 5);
   assert(gatedWithTopup.length > 0, `default behavior (allowStaticFallbackTopup unset, i.e. true) is UNCHANGED — still tops up from static data (got ${gatedWithTopup.length})`);
 
   console.log(`\n${passes} passed, ${failures} failed`);

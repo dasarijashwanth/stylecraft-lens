@@ -67,6 +67,30 @@ const FAMILIES = [
   makeFamily({ family_key: "vector", label: "Vector Motor", aliases: ["vector", "in3", "electromagnetic vector"], sort_order: 1 }),
 ];
 
+// Mirrors lib/memoryDb.ts's seedToolTypeDefaults exactly (the real
+// production seed) — this script's own identity fixture has no toolType set,
+// so nothing here actually exercises tool-type filtering, but
+// CompositeScoringContext now requires the field regardless.
+function makeToolTypesFixture(): any[] {
+  const now = new Date().toISOString();
+  const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+    { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+    { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+    { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+    { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+    { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+    { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+    { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+    { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+    { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+  ];
+  return defs.map((d, i) => ({
+    id: `ttype_${d.key}`, type_key: d.key, label: d.label, aliases: d.aliases, family: d.family,
+    enabled: true, custom: false, sort_order: i, created_at: now, updated_at: now,
+  }));
+}
+const TOOL_TYPES = makeToolTypesFixture();
+
 function makeIdentity(): any {
   return {
     productName: "Test Trimmer", brand: null, category: "Trimmers", subcategory: "Professional Trimmer",
@@ -111,6 +135,7 @@ async function main() {
   const ourMotor = { familyKey: "rotary", label: "Rotary", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
   const ctx = {
     motorFamilies: FAMILIES,
+    toolTypes: TOOL_TYPES,
     ourMotor,
     ourSpecs: { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null },
     weights: { motor: 0.45, price: 0.35, feature: 0.2 },

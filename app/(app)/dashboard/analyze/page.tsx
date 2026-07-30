@@ -7,10 +7,15 @@ import { toast } from "sonner";
 import { ProgressPanel } from "@/components/analyze/ProgressPanel";
 import { ResultsPanel } from "@/components/analyze/ResultsPanel";
 import { STYLECRAFT_PRODUCTS, PRODUCT_CATEGORIES } from "@/lib/stylecraft-products";
-import { ToolType, TOOL_TYPE_LABELS, toolTypesForIndustry, deriveToolTypeFromCatalogProduct } from "@/lib/tool-type-taxonomy";
+import { ToolType, getToolTypeLabel, toolTypesForIndustry, deriveToolTypeFromCatalogProduct } from "@/lib/tool-type-taxonomy";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { parsePriceToNumber } from "@/lib/pricing-analysis";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both" };
+
+// Sentinel select value that opens the inline "add new tool type" mini-form
+// below, instead of being a real tool type itself.
+const ADD_NEW_TOOL_TYPE = "__add_new__";
 
 interface MotorFamilyOption {
   family_key: string;
@@ -79,6 +84,13 @@ export default function AnalyzePage() {
   const [motorBrandedName, setMotorBrandedName] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
   const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
+  const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
+  // "+ Add new tool type…" inline mini-form state.
+  const [showAddToolType, setShowAddToolType] = useState(false);
+  const [newToolTypeName, setNewToolTypeName] = useState("");
+  const [newToolTypeSynonyms, setNewToolTypeSynonyms] = useState("");
+  const [addingToolType, setAddingToolType] = useState(false);
+  const [toolTypeDupSuggestion, setToolTypeDupSuggestion] = useState<{ label: string; type_key: string } | null>(null);
 
   // Populates the Motor Type <select> with the real, fixed 7-family
   // taxonomy (lib/motor-taxonomy.ts).
@@ -88,6 +100,50 @@ export default function AnalyzePage() {
       .then(data => setMotorFamilies(data.families || []))
       .catch(() => {});
   }, []);
+
+  // Populates the Tool Type <select> with the real, DB-backed taxonomy
+  // (built-ins + any admin/user-added custom types) — lib/db/tool-types.ts.
+  useEffect(() => {
+    fetch("/api/tool-types")
+      .then(r => r.json())
+      .then(data => setToolTypes(data.toolTypes || []))
+      .catch(() => {});
+  }, []);
+
+  async function handleAddToolType() {
+    const label = newToolTypeName.trim();
+    if (label.length < 3) {
+      toast.error("Name must be at least 3 characters");
+      return;
+    }
+    const aliases = newToolTypeSynonyms.split(",").map(s => s.trim()).filter(Boolean);
+    const family = industry === "haircare-styling" ? "beauty" : "clipper_trimmer_shaver";
+    setAddingToolType(true);
+    try {
+      const res = await fetch("/api/tool-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, aliases, family, confirmDuplicate: !!toolTypeDupSuggestion }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.suggestion) {
+        setToolTypeDupSuggestion(data.suggestion);
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || "Failed to add tool type");
+      setToolTypes(prev => [...prev, data.toolType]);
+      setToolType(data.toolType.type_key);
+      setShowAddToolType(false);
+      setNewToolTypeName("");
+      setNewToolTypeSynonyms("");
+      setToolTypeDupSuggestion(null);
+      toast.success(`Added "${data.toolType.label}" as a new tool type`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to add tool type");
+    } finally {
+      setAddingToolType(false);
+    }
+  }
 
   // Live auto-detect: as soon as the branded-name text resolves to a real
   // family (e.g. pasting "EON Digital Brushless Motor" matches Brushless
@@ -131,7 +187,7 @@ export default function AnalyzePage() {
     setProductName(product.name);
     setDescription(product.description);
     setCategory(product.amazonCategory);
-    setToolType(deriveToolTypeFromCatalogProduct(product) || "");
+    setToolType(deriveToolTypeFromCatalogProduct(product, toolTypes) || "");
     // Same reasoning as the "custom" branch above — the StyleCraft catalog
     // has no real BSR/target-customer data per product, so there's nothing
     // genuine to prefill; leave it for the user to fill in per-product.
@@ -463,7 +519,7 @@ export default function AnalyzePage() {
                     // toolTypesForIndustry) — a Tool Type valid under the
                     // old Industry (e.g. "Trimmer") is meaningless once the
                     // Industry no longer offers it.
-                    setToolType(prev => (toolTypesForIndustry(e.target.value).includes(prev as ToolType) ? prev : ""));
+                    setToolType(prev => (toolTypesForIndustry(e.target.value, toolTypes).some(t => t.type_key === prev) ? prev : ""));
                   }}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                   required
@@ -526,6 +582,10 @@ export default function AnalyzePage() {
                   <select
                     value={toolType}
                     onChange={(e) => {
+                      if (e.target.value === ADD_NEW_TOOL_TYPE) {
+                        setShowAddToolType(true);
+                        return;
+                      }
                       setToolType(e.target.value as ToolType);
                       if (errors.toolType) setErrors(prev => { const n = { ...prev }; delete n.toolType; return n; });
                     }}
@@ -534,11 +594,59 @@ export default function AnalyzePage() {
                     }`}
                   >
                     <option value="" disabled>Select exact tool type…</option>
-                    {toolTypesForIndustry(industry).map((value) => (
-                      <option key={value} value={value}>{TOOL_TYPE_LABELS[value]}</option>
+                    {toolTypesForIndustry(industry, toolTypes).map((t) => (
+                      <option key={t.type_key} value={t.type_key}>{t.label}</option>
                     ))}
+                    <option value={ADD_NEW_TOOL_TYPE}>+ Add new tool type…</option>
                   </select>
                   {errors.toolType && <p className="text-[10px] text-danger">{errors.toolType}</p>}
+                  {showAddToolType && (
+                    <div className="mt-2 p-3 border border-border rounded-lg bg-surface-3/30 space-y-2">
+                      <input
+                        type="text"
+                        value={newToolTypeName}
+                        onChange={(e) => { setNewToolTypeName(e.target.value); setToolTypeDupSuggestion(null); }}
+                        placeholder="New tool type name — e.g. Foil Shaper"
+                        className="w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                      />
+                      <input
+                        type="text"
+                        value={newToolTypeSynonyms}
+                        onChange={(e) => setNewToolTypeSynonyms(e.target.value)}
+                        placeholder="Also called (comma-separated, optional)"
+                        className="w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                      />
+                      {toolTypeDupSuggestion && (
+                        <p className="text-[10px] text-warning">
+                          Did you mean &quot;{toolTypeDupSuggestion.label}&quot;?{" "}
+                          <button type="button" className="underline font-semibold" onClick={() => { setToolType(toolTypeDupSuggestion.type_key); setShowAddToolType(false); setNewToolTypeName(""); setNewToolTypeSynonyms(""); setToolTypeDupSuggestion(null); }}>
+                            Use this instead
+                          </button>
+                          {" · "}
+                          <button type="button" className="underline font-semibold" onClick={handleAddToolType} disabled={addingToolType}>
+                            Add anyway
+                          </button>
+                        </p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleAddToolType}
+                          disabled={addingToolType}
+                          className="flex items-center gap-1 px-2.5 py-1 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {addingToolType ? "Adding…" : "Add"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setShowAddToolType(false); setNewToolTypeName(""); setNewToolTypeSynonyms(""); setToolTypeDupSuggestion(null); }}
+                          className="px-2.5 py-1 text-[11px] font-semibold text-text-muted hover:text-text-primary transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <label className="font-semibold text-text-primary block">Market Category</label>
@@ -671,7 +779,7 @@ export default function AnalyzePage() {
               real value right before the run starts (no new state). */}
           {productName.trim() && toolType && (
             <p className="text-[11px] text-text-secondary bg-surface-3/30 border border-border rounded-lg px-4 py-2.5">
-              Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {TOOL_TYPE_LABELS[toolType]}, {motorSummaryLabel || "motor type unspecified"}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
+              Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {getToolTypeLabel(toolType, toolTypes)}, {motorSummaryLabel || "motor type unspecified"}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
               {keyDiff.trim() && <> · differentiator: {keyDiff.trim()}</>}
             </p>
           )}

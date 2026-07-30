@@ -34,6 +34,29 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Mirrors lib/memoryDb.ts's seedToolTypeDefaults exactly (the real
+// production seed) — a minimal fixture is enough here since none of this
+// script's assertions turn on a specific tool-type match/mismatch.
+function makeToolTypesFixture(): any[] {
+  const now = new Date().toISOString();
+  const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+    { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+    { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+    { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+    { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+    { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+    { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+    { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+    { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+    { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+  ];
+  return defs.map((d, i) => ({
+    id: `ttype_${d.key}`, type_key: d.key, label: d.label, aliases: d.aliases, family: d.family,
+    enabled: true, custom: false, sort_order: i, created_at: now, updated_at: now,
+  }));
+}
+const TOOL_TYPES = makeToolTypesFixture();
+
 async function main() {
   const provenanceDb = await import("../lib/db/section-provenance");
   const { buildPricingProvenanceTier } = await import("../lib/section-provenance");
@@ -69,7 +92,7 @@ async function main() {
   const shortTextResult = await keyFeatures.extractFeaturesFromText("Test Product", "short", "Brand site", "https://example.com", "Example");
   assert(shortTextResult.features.length === 0 && shortTextResult.rejectedCount === 1 && shortTextResult.rejectedReasons.length === 1, "extractFeaturesFromText rejects text under 50 chars with a populated reason");
 
-  const kfResult = await keyFeatures.resolveKeyFeatures("Totally Fictional Product Xyzzy", null);
+  const kfResult = await keyFeatures.resolveKeyFeatures("Totally Fictional Product Xyzzy", null, TOOL_TYPES);
   const amazonTier = kfResult.provenance?.tiers.find(t => t.tier === "Amazon");
   assert(amazonTier?.attempted === false && amazonTier?.outcome === "skipped", "Amazon tier reports attempted:false, outcome:'skipped' when no ASIN is available");
   const brandTier = kfResult.provenance?.tiers.find(t => t.tier === "Brand site");
@@ -88,7 +111,7 @@ async function main() {
   const parsedNone = productNews.parseExcludedSources(noExclusions);
   assert(parsedNone.rejectedCount === 0, "parseExcludedSources treats 'Excluded sources: none' as zero rejections");
 
-  const newsResult = await productNews.findProductNews("Totally Fictional Product Xyzzy", null);
+  const newsResult = await productNews.findProductNews("Totally Fictional Product Xyzzy", null, TOOL_TYPES);
   assert(newsResult.provenance?.tiers[0]?.attempted === false && newsResult.provenance?.tiers[0]?.outcome === "skipped", "news tier reports attempted:false, outcome:'skipped' when OpenAI isn't configured");
 
   // ---- Section 4: pricing ----

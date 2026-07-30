@@ -6,6 +6,7 @@ import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
 import type { ToolType } from "@/lib/tool-type-taxonomy";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 // Duplicated deliberately (matches the reviews-analysis/product-news route's
 // own copies) — a tiny, DB-touching helper, same precedent
@@ -90,7 +91,8 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     }
 
     const requiredToolType = await resolveAnalysisToolType(analysisId);
-    const result = await resolveKeyFeatures(productName, isRealAsin ? rawAsin : null, requiredToolType);
+    const toolTypes = await listToolTypes();
+    const result = await resolveKeyFeatures(productName, isRealAsin ? rawAsin : null, toolTypes, requiredToolType);
     await setCachedFeatures(cacheKey, result);
 
     if (result.provenance) {

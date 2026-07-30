@@ -22,6 +22,7 @@ import { getActiveDeckTemplate } from "./db/deck-templates";
 import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
 import { isTdsEnabled } from "./feature-flags";
+import { listToolTypes } from "./db/tool-types";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
@@ -58,7 +59,8 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       // This is what makes generation fully automatic for every project,
       // not only ones created with a URL/ASIN.
       if (productUrl || asin) {
-        const { projection } = await captureProductSnapshot({ projectId, productUrl, asin, requiredToolType: (project as any).toolType });
+        const toolTypes = await listToolTypes();
+        const { projection } = await captureProductSnapshot({ projectId, productUrl, asin, requiredToolType: (project as any).toolType, toolTypes });
 
         // Auto-fill only fields the user left blank — never overwrite what
         // they typed. Category isn't auto-filled: nothing scraped gives a

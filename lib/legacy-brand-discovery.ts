@@ -15,11 +15,12 @@
 // source(s) actually contributed.
 import { searchAmazonCategory, CategorySearchResult } from "./rainforest";
 import { computePriceBand, isWithinBand } from "./price-band";
-import { assertToolType, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
+import { assertToolType, getToolTypeLabel } from "./tool-type-taxonomy";
 import { discoverBrandSiteCandidates, BrandSiteResult, BRAND_SITE_PASS_TIME_BUDGET_MS } from "./brand-site-discovery";
 import type { IdentityCard } from "./product-identification";
 import type { LegacyBrandRow } from "./db/legacy-brands";
 import type { CategorySlug, ResolvedLegacyBrand } from "./legacy-brand-registry";
+import type { ToolTypeRow } from "./db/tool-types";
 
 // Hard ceiling on the Amazon widen-loop leg specifically — inserted BEFORE
 // Phase 1's existing AI call, which itself has no time-budget gate on its
@@ -225,6 +226,7 @@ export async function searchCuratedLegacyBrands(
   identity: IdentityForDiscovery,
   targetPriceRaw: number,
   categorySlug: CategorySlug,
+  toolTypes: ToolTypeRow[],
   onBrandProgress?: (entries: BrandProgressEntry[]) => Promise<void> | void,
   // Testability hook only — production callers never pass this, always
   // getting the real CURATED_BRAND_SEARCH_TIME_BUDGET_MS. Lets offline
@@ -261,7 +263,7 @@ export async function searchCuratedLegacyBrands(
   // discovery is a one-shot "find the official page" per brand, it
   // doesn't need to repeat per price-widen-step the way Amazon search does.
   const brandSitePromise = identity.toolType && identity.toolType !== "combo"
-    ? discoverBrandSiteCandidates(brands, { toolType: identity.toolType, motorLabel: ourMotorLabel }, brandSiteTimeBudgetMsOverride ?? BRAND_SITE_PASS_TIME_BUDGET_MS)
+    ? discoverBrandSiteCandidates(brands, { toolType: identity.toolType, toolTypes, motorLabel: ourMotorLabel }, brandSiteTimeBudgetMsOverride ?? BRAND_SITE_PASS_TIME_BUDGET_MS)
     : Promise.resolve(new Map<string, BrandSiteResult>());
 
   const amazonWidenLoopPromise = (async () => {
@@ -291,7 +293,7 @@ export async function searchCuratedLegacyBrands(
         // original contamination bug showed can be ambiguous/combined
         // ("Hair Clippers & Trimmers"). Motor-first query still tried first
         // when known, each variant now carrying the tool-type word too.
-        const toolTypeWord = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType].toLowerCase() : "";
+        const toolTypeWord = identity.toolType && identity.toolType !== "combo" ? getToolTypeLabel(identity.toolType, toolTypes).toLowerCase() : "";
         const queries = ourMotorLabel
           ? [`${alias} ${ourMotorLabel} ${toolTypeWord} ${subcategory}`.trim(), `${alias} ${toolTypeWord} ${subcategory}`.trim()]
           : [`${alias} ${toolTypeWord} ${subcategory}`.trim()];
@@ -305,7 +307,7 @@ export async function searchCuratedLegacyBrands(
             if (!brandMatchesTitle(r.title, brand.brand_name, brand.aliases)) return false;
             // No identity.toolType (legacy analysis pre-dating this field)
             // — nothing strict to validate against, don't block.
-            if (identity.toolType && !assertToolType(r.title, identity.toolType).ok) return false;
+            if (identity.toolType && !assertToolType(r.title, identity.toolType, toolTypes).ok) return false;
             return true;
           });
           if (inBand.length > 0) {

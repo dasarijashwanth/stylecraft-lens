@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { CompetitorCard, EmptySlotCard } from "@/components/analyze/CompetitorCard";
 import { downloadReportPDF } from "@/lib/export-pdf";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
@@ -62,6 +63,17 @@ export default function ReportDetailPage() {
         if (typeof data.buyer_sentiment_enabled === "boolean") setBuyerSentimentEnabled(data.buyer_sentiment_enabled);
         if (typeof data.news_updates_enabled === "boolean") setNewsUpdatesEnabled(data.news_updates_enabled);
       })
+      .catch(() => {});
+  }, []);
+
+  // Fetched once here and threaded into downloadReportPDF (lib/export-pdf.ts)
+  // — that module renders client-side, with no other existing tool-types
+  // fetch to reuse.
+  const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
+  useEffect(() => {
+    fetch("/api/tool-types")
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data.toolTypes)) setToolTypes(data.toolTypes); })
       .catch(() => {});
   }, []);
 
@@ -167,7 +179,7 @@ export default function ReportDetailPage() {
             : report.competitive_analysis?.section_provenance,
         },
       };
-      await downloadReportPDF(exportReport);
+      await downloadReportPDF(exportReport, toolTypes);
       
       // Update status to EXPORTED
       const res = await fetch(`/api/reports/${id}`, {

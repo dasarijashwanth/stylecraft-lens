@@ -37,6 +37,8 @@ import { fetchPageText, quoteAppearsInText } from "./citations";
 import { logCall } from "./obs";
 import { SectionProvenanceData, ProvenanceTier, ProvenanceQuery, fromTierResult } from "./section-provenance";
 import { assertToolType, ToolType } from "./tool-type-taxonomy";
+import { listToolTypes } from "./db/tool-types";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export type ReviewSourceType = "customer_reviews" | "amazon_listing" | "expert_review" | "forum";
 
@@ -394,7 +396,7 @@ Return ONLY valid JSON, no markdown, one entry per quote in order:
   return { strengths: finalize(strengthsCopy, "strengths"), weaknesses: finalize(weaknessesCopy, "weaknesses") };
 }
 
-async function resolveWebReviewThemes(productName: string, requiredToolType?: ToolType | null): Promise<{
+async function resolveWebReviewThemes(productName: string, toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null): Promise<{
   strengths: ReviewTheme[];
   weaknesses: ReviewTheme[];
   expertReviewCount: number;
@@ -416,7 +418,7 @@ async function resolveWebReviewThemes(productName: string, requiredToolType?: To
   // mismatch, never invents one from missing information.
   const rejectWrongType = (h: SearchHit) => {
     if (!requiredToolType) return true;
-    const ok = assertToolType(h.title, requiredToolType).ok;
+    const ok = assertToolType(h.title, requiredToolType, toolTypes).ok;
     if (!ok) console.warn(`[tool-type] rejected review-web-search hit "${h.title}" — mismatched tool type for ${requiredToolType}`);
     return ok;
   };
@@ -631,7 +633,11 @@ export async function analyzeReviews(
 
   if (strengths.length + weaknesses.length === 0) {
     tierCAttempted = true;
-    const web = await resolveWebReviewThemes(productTitle, requiredToolType);
+    // Fetched locally here (analyzeReviews's own natural async boundary) —
+    // never pushed up to its callers, and never module-level state (see
+    // lib/tool-type-taxonomy.ts's header for why).
+    const toolTypes = await listToolTypes();
+    const web = await resolveWebReviewThemes(productTitle, toolTypes, requiredToolType);
     strengths = [...strengths, ...web.strengths];
     weaknesses = [...weaknesses, ...web.weaknesses];
     expertReviewCount = web.expertReviewCount;

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis, mergeAnalysisContext } from "@/lib/db/analyses";
-import { resolveToolType, TOOL_TYPE_LABELS, type ToolType } from "@/lib/tool-type-taxonomy";
+import { resolveToolType, type ToolType } from "@/lib/tool-type-taxonomy";
+import { listToolTypes } from "@/lib/db/tool-types";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 
 // Free-text -> one of the 3 tiers lib/our-product-position.ts's
 // percentileForManualTier expects — accepts "flagship"/"premium", "entry"/
@@ -19,8 +21,8 @@ function normalizeLineupTierAnswer(answer: string): "flagship" | "mid" | "entry"
 // silent guess, since a wrong guess here is exactly the clipper/trimmer
 // contamination lib/tool-type-taxonomy.ts exists to prevent. A null
 // result is rejected below with a 400 asking the user to be specific.
-function normalizeToolTypeAnswer(answer: string): ToolType | null {
-  const resolved = resolveToolType(answer);
+function normalizeToolTypeAnswer(answer: string, toolTypes: ToolTypeRow[]): ToolType | null {
+  const resolved = resolveToolType(answer, toolTypes);
   if (resolved && !resolved.ambiguous && resolved.type) return resolved.type;
   return null;
 }
@@ -67,10 +69,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (field === "lineupTier") {
       value = normalizeLineupTierAnswer(answer.trim());
     } else if (field === "toolType") {
-      const resolved = normalizeToolTypeAnswer(answer.trim());
+      const toolTypes = await listToolTypes();
+      const resolved = normalizeToolTypeAnswer(answer.trim(), toolTypes);
       if (!resolved) {
         return NextResponse.json(
-          { error: "VALIDATION_FAILED", message: `Please answer with one exact tool type: ${Object.values(TOOL_TYPE_LABELS).join(", ")}` },
+          { error: "VALIDATION_FAILED", message: `Please answer with one exact tool type: ${toolTypes.filter(t => t.enabled).map(t => t.label).join(", ")}` },
           { status: 400 }
         );
       }

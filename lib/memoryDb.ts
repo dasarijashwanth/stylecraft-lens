@@ -274,6 +274,19 @@ export interface MockMotorFamily {
   updatedAt: Date;
 }
 
+export interface MockToolType {
+  id: string;
+  typeKey: string;
+  label: string;
+  aliases: string[];
+  family: string | null; // 'clipper_trimmer_shaver' | 'beauty' | null (either)
+  enabled: boolean;
+  custom: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockBrandedMotorName {
   id: string;
   brandName: string;
@@ -429,6 +442,11 @@ class MemoryDatabase {
   // legacyBrands above — real default competitor-matching config, not an
   // empty admin table.
   motorFamilies: MockMotorFamily[] = [];
+  // Same always-seeded (not snapshot-gated) precedent as motorFamilies above
+  // — real default Tool Type configuration (the 9 built-ins), not an empty
+  // admin table. Custom admin/user-added types start absent, added via
+  // lib/db/tool-types.ts's addToolType.
+  toolTypes: MockToolType[] = [];
   // Real usage data (an analysis' free-text Motor Technology that didn't
   // match any taxonomy family) — same non-seeded, non-persisted-across-
   // restart precedent as faqSearchMisses just below.
@@ -461,6 +479,7 @@ class MemoryDatabase {
     }
     this.seedBrandRegistryDefaults();
     this.seedMotorFamilyDefaults();
+    this.seedToolTypeDefaults();
     this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
@@ -708,6 +727,38 @@ class MemoryDatabase {
         modifier: d.modifier ?? false,
         adjacentFamilies: d.adjacent ?? [],
         enabled: d.enabled ?? true,
+        sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 28 tool_types seed INSERT exactly
+  // — the 9 built-in types Tool Type used to be a fixed TS union of.
+  seedToolTypeDefaults() {
+    if (this.toolTypes.length > 0) return;
+    const now = new Date();
+    const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+      { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+      { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+      { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+      { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+      { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+      { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+      { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+      { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+      { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+    ];
+    defs.forEach((d, i) => {
+      this.toolTypes.push({
+        id: `ttype_${d.key}`,
+        typeKey: d.key,
+        label: d.label,
+        aliases: d.aliases,
+        family: d.family,
+        enabled: true,
+        custom: false,
         sortOrder: i,
         createdAt: now,
         updatedAt: now,

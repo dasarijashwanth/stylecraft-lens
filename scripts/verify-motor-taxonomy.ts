@@ -97,9 +97,13 @@ async function main() {
   assert(computeMotorMatchTier(null, null, FAMILIES) === "unverified", "both unknown -> unverified");
 
   console.log("\n[3] isMotorizedCategory — reuses the legacy-registry category resolution");
-  assert(isMotorizedCategory({ category: "Clippers", subcategory: "Trimmer", targetUser: "pro" }) === true, "clipper/trimmer category is motorized");
-  assert(isMotorizedCategory({ category: "Hair Dryers", subcategory: "Blow Dryer", targetUser: "consumer" }) === true, "beauty/dryer category is motorized");
-  assert(isMotorizedCategory({ category: "Hair Oil Dispenser", subcategory: "Bottle", targetUser: "pro" }) === false, "a genuinely unrelated category is NOT motorized — never forces the requirement");
+  const toolTypes: any[] = [
+    { id: "t1", type_key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver", enabled: true, custom: false, sort_order: 0 },
+    { id: "t2", type_key: "dryer", label: "Hair Dryer", aliases: ["dryer"], family: "beauty", enabled: true, custom: false, sort_order: 1 },
+  ];
+  assert(isMotorizedCategory({ category: "Clippers", subcategory: "Trimmer", targetUser: "pro", toolType: "clipper" }, toolTypes) === true, "clipper/trimmer category is motorized");
+  assert(isMotorizedCategory({ category: "Hair Dryers", subcategory: "Blow Dryer", targetUser: "consumer", toolType: "dryer" }, toolTypes) === true, "beauty/dryer category is motorized");
+  assert(isMotorizedCategory({ category: "Hair Oil Dispenser", subcategory: "Bottle", targetUser: "pro", toolType: null }, toolTypes) === false, "a genuinely unrelated category is NOT motorized — never forces the requirement");
 
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);

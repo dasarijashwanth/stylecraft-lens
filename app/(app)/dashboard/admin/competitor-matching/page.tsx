@@ -38,6 +38,21 @@ interface BrandedMotorName {
   enabled: boolean;
 }
 
+interface ToolTypeAdmin {
+  id: string;
+  type_key: string;
+  label: string;
+  aliases: string[];
+  family: string | null;
+  enabled: boolean;
+  custom: boolean;
+}
+
+const TOOL_TYPE_FAMILY_LABELS: Record<string, string> = {
+  clipper_trimmer_shaver: "Clippers, Trimmers & Shavers",
+  beauty: "Beauty Tools",
+};
+
 interface BrandedMotorMiss {
   brand_name: string;
   term: string;
@@ -68,17 +83,20 @@ export default function CompetitorMatchingAdminPage() {
   const [brandedMisses, setBrandedMisses] = useState<BrandedMotorMiss[]>([]);
   const [classifying, setClassifying] = useState(false);
   const [dismissingMiss, setDismissingMiss] = useState<string | null>(null);
+  const [toolTypesAdmin, setToolTypesAdmin] = useState<ToolTypeAdmin[]>([]);
+  const [busyToolTypeId, setBusyToolTypeId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [famRes, weightRes, missRes, brandedRes, brandedMissRes] = await Promise.all([
+      const [famRes, weightRes, missRes, brandedRes, brandedMissRes, toolTypesRes] = await Promise.all([
         fetch("/api/admin/motor-families"),
         fetch("/api/admin/competitor-matching-config"),
         fetch("/api/admin/motor-families/misses"),
         fetch("/api/admin/branded-motor-map"),
         fetch("/api/admin/motor-families/branded-misses"),
+        fetch("/api/admin/tool-types"),
       ]);
       const famData = await famRes.json();
       const weightData = await weightRes.json();
@@ -95,6 +113,10 @@ export default function CompetitorMatchingAdminPage() {
       if (brandedMissRes.ok) {
         const brandedMissData = await brandedMissRes.json();
         setBrandedMisses(brandedMissData.misses || []);
+      }
+      if (toolTypesRes.ok) {
+        const toolTypesData = await toolTypesRes.json();
+        setToolTypesAdmin(toolTypesData.toolTypes || []);
       }
       setWeightInputs({
         motor: String(weightData.weights.motor_weight),
@@ -307,6 +329,38 @@ export default function CompetitorMatchingAdminPage() {
     }
   }
 
+  async function handleToggleToolType(toolType: ToolTypeAdmin) {
+    setBusyToolTypeId(toolType.id);
+    try {
+      const res = await fetch(`/api/admin/tool-types/${toolType.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !toolType.enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update tool type");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update tool type");
+    } finally {
+      setBusyToolTypeId(null);
+    }
+  }
+
+  async function handleRemoveToolType(id: string) {
+    setBusyToolTypeId(id);
+    try {
+      const res = await fetch(`/api/admin/tool-types/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove tool type");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to remove tool type");
+    } finally {
+      setBusyToolTypeId(null);
+    }
+  }
+
   if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-[300px]">
@@ -459,6 +513,60 @@ export default function CompetitorMatchingAdminPage() {
                         <Plus className="w-3.5 h-3.5" /> Add
                       </button>
                     </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="space-y-5">
+            <h2 className="text-sm font-bold text-text-primary">Tool Types</h2>
+            <p className="text-xs text-text-muted -mt-3">
+              The strict tool-type isolation vocabulary (lib/tool-type-taxonomy.ts) — built-ins plus any custom type added inline from the analyze/new-project forms. Disabling a type removes it from both forms&apos; selects without deleting its history.
+            </p>
+            {Array.from(new Set(toolTypesAdmin.map(t => t.family || "either"))).map(familyKey => {
+              const familyTypes = toolTypesAdmin.filter(t => (t.family || "either") === familyKey);
+              return (
+                <div key={familyKey} className="border border-border rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
+                    <h3 className="text-xs font-bold text-text-primary">{familyKey === "either" ? "Either Industry" : (TOOL_TYPE_FAMILY_LABELS[familyKey] || familyKey)}</h3>
+                  </div>
+                  <div className="p-4 space-y-2">
+                    {familyTypes.map(t => (
+                      <div
+                        key={t.id}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${
+                          t.enabled ? "border-border bg-surface-1" : "border-border/50 bg-surface-3/20 opacity-60"
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-semibold text-text-primary">{t.label}</span>
+                          {t.custom && <span className="ml-2 text-[10px] text-accent">custom</span>}
+                          {t.aliases.length > 0 && <span className="ml-2 text-[10px] text-text-muted">aka {t.aliases.join(", ")}</span>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleToolType(t)}
+                          disabled={busyToolTypeId === t.id}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                            t.enabled ? "border-success/30 text-success bg-success/10" : "border-border text-text-muted"
+                          }`}
+                        >
+                          {t.enabled ? "Enabled" : "Disabled"}
+                        </button>
+                        {t.custom && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveToolType(t.id)}
+                            disabled={busyToolTypeId === t.id}
+                            className="p-1 text-text-muted hover:text-danger transition-colors"
+                            title="Remove custom tool type"
+                          >
+                            {busyToolTypeId === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               );

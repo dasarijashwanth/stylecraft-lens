@@ -21,63 +21,40 @@
 // genuinely combined/multi-tool product (a clipper+trimmer kit) gets its
 // own explicit "combo" bucket instead of falsely resolving to one of its
 // constituent types.
-export type ToolType =
-  | "clipper"
-  | "trimmer"
-  | "shaver"
-  | "dryer"
-  | "flat_iron"
-  | "curling_iron"
-  | "hot_brush"
-  | "other_styling"
-  | "combo";
+//
+// Tool Type is now DB-backed (lib/db/tool-types.ts's tool_types table,
+// mirroring lib/motor-taxonomy.ts's motor_families pattern exactly) rather
+// than a fixed compile-time union — a new tool category can be added
+// inline from the analyze/new-project forms without a code deploy. Every
+// function below takes the current `toolTypes: ToolTypeRow[]` list
+// explicitly (fetched once via `await listToolTypes()` at whatever async
+// boundary is natural for the caller — never module-level mutable state,
+// which would be a real cross-tenant data-leak risk in this app's
+// Vercel serverless environment, where a warm lambda instance can
+// interleave requests from different orgs). `ToolType` itself loosens from
+// a fixed union to `string` so every existing call site's type annotations
+// keep compiling — only genuinely-exhaustive logic (switch statements over
+// every type) needed to change.
+import type { ToolTypeRow } from "./db/tool-types";
 
-export const TOOL_TYPE_LABELS: Record<ToolType, string> = {
-  clipper: "Clipper",
-  trimmer: "Trimmer",
-  shaver: "Shaver",
-  dryer: "Hair Dryer",
-  flat_iron: "Flat Iron",
-  curling_iron: "Curling Iron",
-  hot_brush: "Hot Brush",
-  other_styling: "Other Styling Tool",
-  combo: "Combo / Multi-Tool Kit",
-};
+export type ToolType = string;
+
+export function getToolTypeLabel(key: string | null | undefined, toolTypes: ToolTypeRow[]): string {
+  if (!key) return "—";
+  return toolTypes.find(t => t.type_key === key)?.label || key;
+}
 
 // Which tool types are selectable for each of the analyze/new-project
 // forms' 2 Industry options — the form previously showed all 9 ToolType
 // options regardless of Industry, letting a Hair Care & Styling analysis
-// select "Clipper" (and vice versa). Combo is valid either way, since a
-// multi-tool kit can combine tools from either domain.
-export const GROOMING_TOOL_TYPES: ToolType[] = ["clipper", "trimmer", "shaver", "combo"];
-export const BEAUTY_TOOL_TYPES: ToolType[] = ["dryer", "flat_iron", "curling_iron", "hot_brush", "other_styling", "combo"];
-
-export function toolTypesForIndustry(industry: string): ToolType[] {
-  return industry === "haircare-styling" ? BEAUTY_TOOL_TYPES : GROOMING_TOOL_TYPES;
+// select "Clipper" (and vice versa). Combo is valid either way (family:
+// null in the seed data), since a multi-tool kit can combine tools from
+// either domain. A custom type's own `family` (set when it's added, per
+// the form's industry-family prompt) determines which Industry offers it.
+export function toolTypesForIndustry(industry: string, toolTypes: ToolTypeRow[]): ToolTypeRow[] {
+  const wantedFamily = industry === "haircare-styling" ? "beauty" : "clipper_trimmer_shaver";
+  return toolTypes.filter(t => t.enabled && (t.family === wantedFamily || t.family === null));
 }
-
-type SingleToolType = Exclude<ToolType, "combo" | "other_styling">;
-
-interface ToolTypeAliasEntry {
-  type: SingleToolType;
-  aliases: string[];
-}
-
-// Ordered SPECIFIC types before the generic "clipper" bucket — copies the
-// already-correct ordering lib/market-data.ts's getMarketData uses
-// (trimmer/shaver/dryer/styling checked before the clipper/barber/
-// grooming fallback). Order only matters for readability here (every
-// entry is checked regardless of order, never "first match wins"), but
-// keeping it matches the established convention.
-const TOOL_TYPE_ALIASES: ToolTypeAliasEntry[] = [
-  { type: "trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"] },
-  { type: "shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"] },
-  { type: "dryer", aliases: ["dryer", "blow dryer", "diffuser"] },
-  { type: "flat_iron", aliases: ["flat iron", "straightener", "hair iron"] },
-  { type: "curling_iron", aliases: ["curling iron", "curling wand", "curler", "wand"] },
-  { type: "hot_brush", aliases: ["hot brush", "styling brush", "heated brush"] },
-  { type: "clipper", aliases: ["clipper"] },
-];
 
 // Explicit combo/multi-groomer signal phrases — deliberately specific
 // (not bare "kit"/"set", which also show up in unrelated product names
@@ -130,12 +107,12 @@ function textContainsPhrase(text: string, phrase: string): boolean {
 }
 
 export interface ToolTypeResolution {
-  type: ToolType | null;
+  type: string | null;
   ambiguous: boolean;
   // Populated only when ambiguous — every distinct type whose aliases
   // matched, so a caller (e.g. the pause-and-ask question) can show the
   // user exactly what was found.
-  candidates?: SingleToolType[];
+  candidates?: string[];
 }
 
 // Resolves free text (a product title, an identity card's category+
@@ -144,8 +121,11 @@ export interface ToolTypeResolution {
 // this is the actual bug fix (see file header). Returns null when NO
 // known tool-type vocabulary appears at all (nothing to resolve from,
 // not even an "other_styling" guess — an explicit unmatched text is
-// never coerced into a type).
-export function resolveToolType(text: string | null | undefined): ToolTypeResolution | null {
+// never coerced into a type). "combo"/"other_styling" (and any custom
+// type with no aliases) never match via the alias loop below — combo is
+// resolved exclusively via COMBO_SIGNALS, other_styling never resolves
+// from text at all (it's the "none of the concrete types" catch-all).
+export function resolveToolType(text: string | null | undefined, toolTypes: ToolTypeRow[]): ToolTypeResolution | null {
   const lower = (text || "").toLowerCase().trim();
   if (!lower) return null;
 
@@ -153,10 +133,11 @@ export function resolveToolType(text: string | null | undefined): ToolTypeResolu
     return { type: "combo", ambiguous: false };
   }
 
-  const matched: SingleToolType[] = [];
-  for (const entry of TOOL_TYPE_ALIASES) {
-    if (entry.aliases.some(alias => textContainsPhrase(lower, alias))) {
-      matched.push(entry.type);
+  const matched: string[] = [];
+  for (const t of toolTypes) {
+    if (!t.enabled) continue;
+    if (t.aliases.some(alias => textContainsPhrase(lower, alias))) {
+      matched.push(t.type_key);
     }
   }
 
@@ -184,10 +165,10 @@ export interface AssertToolTypeResult {
 // NEVER fill a single-type slot (a trimmer analysis showing a "clipper &
 // trimmer kit" as a "trimmer competitor" is exactly the kind of
 // contamination this whole module exists to stop).
-export function assertToolType(candidateTitleOrText: string, requiredToolType: ToolType): AssertToolTypeResult {
+export function assertToolType(candidateTitleOrText: string, requiredToolType: string, toolTypes: ToolTypeRow[]): AssertToolTypeResult {
   if (requiredToolType === "combo") return { ok: true };
 
-  const resolved = resolveToolType(candidateTitleOrText);
+  const resolved = resolveToolType(candidateTitleOrText, toolTypes);
   // Unrecognized text (no tool-type vocabulary at all) isn't rejected —
   // this validator's job is to catch a KNOWN mismatch, never to invent a
   // rejection from missing information (a candidate's title might simply
@@ -206,14 +187,16 @@ export function assertToolType(candidateTitleOrText: string, requiredToolType: T
 // synthesis, GTM generation, web-search fallback, key-features
 // extraction, review/news theme extraction) — a single place to tune the
 // exact wording rather than re-writing similar guard text per call site.
-const ALL_SINGLE_TYPES: SingleToolType[] = TOOL_TYPE_ALIASES.map(e => e.type);
-
-export function buildToolTypePromptGuard(toolType: ToolType): string {
-  const label = TOOL_TYPE_LABELS[toolType];
+export function buildToolTypePromptGuard(toolType: string, toolTypes: ToolTypeRow[]): string {
+  const label = getToolTypeLabel(toolType, toolTypes);
   if (toolType === "combo") {
     return `The product is a ${label.toLowerCase()} — it genuinely combines multiple tool types in one kit. Use ONLY information about this exact combo product or other combo/multi-tool kits. Do NOT substitute data about a single-type sibling product (e.g. just the brand's standalone clipper or standalone trimmer) as if it described this combo.`;
   }
-  const conflicting = ALL_SINGLE_TYPES.filter(t => t !== toolType).map(t => TOOL_TYPE_LABELS[t]).join(", ");
+  // Excludes combo/other_styling/any alias-less type — same "concrete,
+  // resolvable types only" set resolveToolType's alias loop itself matches
+  // against, so the guard never warns against a type that could never
+  // have been confused with this one in the first place.
+  const conflicting = toolTypes.filter(t => t.enabled && t.type_key !== toolType && t.aliases.length > 0).map(t => t.label).join(", ");
   return `The product is a ${label}. Use ONLY ${label.toLowerCase()} information. Do NOT use, reference, or borrow data about ${conflicting} or any other conflicting tool type — including sibling products from the same brand or collection, even ones sharing the same motor technology or model line. If provided source material describes a different tool type, ignore that material entirely. If you cannot complete the task with ${label.toLowerCase()}-specific data, say so rather than substituting data from a different tool type.`;
 }
 
@@ -225,8 +208,8 @@ export function buildToolTypePromptGuard(toolType: ToolType): string {
 // (e.g. "Professional Foil Shavers" resolves cleanly to "shaver"), since
 // the coarse catalog bucket alone can't distinguish flat iron/curling
 // iron/hot brush within "Styling Tools".
-export function deriveToolTypeFromCatalogProduct(product: { category: string; amazonCategory?: string }): ToolType | null {
-  const fromAmazonCategory = product.amazonCategory ? resolveToolType(product.amazonCategory) : null;
+export function deriveToolTypeFromCatalogProduct(product: { category: string; amazonCategory?: string }, toolTypes: ToolTypeRow[]): string | null {
+  const fromAmazonCategory = product.amazonCategory ? resolveToolType(product.amazonCategory, toolTypes) : null;
   if (fromAmazonCategory && !fromAmazonCategory.ambiguous && fromAmazonCategory.type) return fromAmazonCategory.type;
 
   switch (product.category) {

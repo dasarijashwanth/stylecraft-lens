@@ -25,6 +25,7 @@ import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similar
 import { meetsElaborationBar } from "./gtm-elaboration";
 import { GENERIC_EXEMPLARS } from "./gtm-reference-exemplars";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
+import { listToolTypes } from "./db/tool-types";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
 // Confirmed live that a 45s/45s split here still produced a hard 504 (the
@@ -219,6 +220,7 @@ function applyCategoryDefaults(fields: Record<string, GtmFieldAnswer>, schema: G
 // sub-fields (e.g. warranty duration + coverage joined with " — ").
 export async function generateAllFields(productName: string, sources: GtmSources, projectId: string): Promise<Record<string, GtmFieldAnswer>> {
   const pipelineStart = Date.now();
+  const toolTypes = await listToolTypes();
   const schema = GTM_FIELD_SCHEMA;
   const sourceTexts = buildSourceTexts(sources);
   const userContent = buildUserContent(sourceTexts);
@@ -264,7 +266,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // quality guard runs, so a web-sourced answer still gets checked for
   // depth/genericness like any other written-field answer. Internal fields
   // are excluded from the eligible schema, same reasoning as the AI call.
-  await applyWebSearchFallback(grounded, aiEligibleSchema, productName, pipelineStart, PIPELINE_TIME_BUDGET_MS, sources.project?.toolType as any);
+  await applyWebSearchFallback(grounded, aiEligibleSchema, productName, pipelineStart, PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any);
 
   // Tier 6 (computed derivation, e.g. good_better_best/hair_type) runs
   // strictly after the web-search tier — these are pure/free to compute
@@ -289,6 +291,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
 
 // Regenerates exactly one field through the same pipeline.
 export async function generateSingleField(fieldId: string, sources: GtmSources, projectId: string): Promise<GtmFieldAnswer> {
+  const toolTypes = await listToolTypes();
   const productName = sources.project.productName;
   const schemaField = GTM_FIELD_SCHEMA.find(f => f.id === fieldId);
   if (!schemaField) throw new Error(`Unknown field id: ${fieldId}`);
@@ -327,7 +330,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // field kind — a single regenerated "grounded" field deserves the same
   // second-chance tiers the full 77-field sweep already gives it above.
   const guarded = { [fieldId]: grounded };
-  await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, sources.project?.toolType as any);
+  await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any);
   applyTier6Inference(guarded, [schemaField], {
     pricingAnalysis: sources.activeReport?.pricing_analysis || null,
     hairTypeSourceText: buildHairTypeSourceText(sources),

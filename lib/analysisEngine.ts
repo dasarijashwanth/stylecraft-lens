@@ -12,8 +12,10 @@ import { getMarketData } from "./market-data";
 import { buildOverviewParagraph } from "./build-overview-paragraph";
 import { identifyProduct, needsUserInput, IdentityCard } from "./product-identification";
 import { getKnownBrandsHint } from "./known-brands-by-category";
-import { assertToolType, buildToolTypePromptGuard, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
+import { assertToolType, buildToolTypePromptGuard, getToolTypeLabel } from "./tool-type-taxonomy";
 import type { ToolType } from "./tool-type-taxonomy";
+import { listToolTypes } from "./db/tool-types";
+import type { ToolTypeRow } from "./db/tool-types";
 import { finalizeCitations } from "./citations";
 import { insertProvenance } from "./db/section-provenance";
 import { resolveCacheKey } from "./product-cache-key";
@@ -613,7 +615,7 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
 // search actually returned (up to 8 per the bumped prompt count), producing
 // a clean candidate pool for applyPriceBandGate (below) to price-filter,
 // widen, and truncate AFTER Rainforest enrichment resolves real live prices.
-export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard): any[] {
+export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard, toolTypes: ToolTypeRow[]): any[] {
   const incomingList = Array.isArray(competitors) ? competitors : [];
   const cleaned: any[] = [];
   // Well above the 8 the prompt now requests — just a runaway-response cap,
@@ -642,7 +644,7 @@ export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaul
     // nothing strict to validate against, don't block. Otherwise this is
     // THE gate that stops a clipper from ever surviving into a trimmer
     // analysis (or vice versa), even if the AI itself proposed one.
-    if (identity.toolType && !assertToolType(candidateText, identity.toolType).ok) {
+    if (identity.toolType && !assertToolType(candidateText, identity.toolType, toolTypes).ok) {
       console.warn(`[tool-type] rejected candidate "${rawIncoming.name}" — mismatched tool type for ${identity.toolType}`);
       continue;
     }
@@ -705,6 +707,7 @@ export function applyPriceBandGate(
   targetPriceRaw: number,
   tier: CompetitorTier,
   identity: IdentityCard,
+  toolTypes: ToolTypeRow[],
   limit = 5,
   opts: { allowStaticFallbackTopup?: boolean } = {}
 ): any[] {
@@ -785,7 +788,7 @@ export function applyPriceBandGate(
       // original clipper-into-trimmer contamination bug was found (it
       // checked only price-band membership, never category), so it gets
       // its own explicit re-check rather than trusting the pool blindly.
-      if (identity.toolType && !assertToolType(fb.name || "", identity.toolType).ok) {
+      if (identity.toolType && !assertToolType(fb.name || "", identity.toolType, toolTypes).ok) {
         console.warn(`[tool-type] rejected fallback candidate "${fb.name}" — mismatched tool type for ${identity.toolType}`);
         continue;
       }
@@ -823,6 +826,10 @@ export function applyPriceBandGate(
 
 export interface CompositeScoringContext {
   motorFamilies: MotorFamilyRow[];
+  // Strict tool-type isolation (lib/tool-type-taxonomy.ts) — read by the
+  // static-fallback-topup branch below (assertToolType), fetched the same
+  // way motorFamilies is (await listToolTypes(), never module-level state).
+  toolTypes: ToolTypeRow[];
   // Brand-scoped proprietary motor names (e.g. "IN3" -> vector) — optional/
   // absent degrades gracefully to generic-alias-only matching.
   brandedNames?: BrandedMotorNameRow[];
@@ -1005,7 +1012,7 @@ export function selectByCompositeScore(
       // original clipper-into-trimmer contamination bug was found (it
       // checked only price-band membership, never category), so it gets
       // its own explicit re-check rather than trusting the pool blindly.
-      if (identity.toolType && !assertToolType(fb.name || "", identity.toolType).ok) {
+      if (identity.toolType && !assertToolType(fb.name || "", identity.toolType, ctx.toolTypes).ok) {
         console.warn(`[tool-type] rejected fallback candidate "${fb.name}" — mismatched tool type for ${identity.toolType}`);
         continue;
       }
@@ -1079,7 +1086,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 // (a brand-site-only curated find, see lib/legacy-brand-discovery.ts's
 // buildHybridCandidate) can still attempt this exact same cross-check for
 // its own `sources.amazon`, without duplicating the resolution logic.
-async function resolveAmazonProductForCandidate(asin: string | undefined | null, name: string, brand: string | undefined, requiredToolType?: ToolType | null) {
+async function resolveAmazonProductForCandidate(asin: string | undefined | null, name: string, brand: string | undefined, toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null) {
   let product = asin ? await getAmazonProduct(asin) : null;
 
   // A syntactically-valid, real ASIN can still be the WRONG product — the
@@ -1089,7 +1096,7 @@ async function resolveAmazonProductForCandidate(asin: string | undefined | null,
   // different tool type's real data while the displayed name stayed
   // unchanged (an invisible mismatch). Discard it exactly like a failed
   // lookup rather than trusting a wrong-type product.
-  if (product && requiredToolType && !assertToolType(product.title, requiredToolType).ok) {
+  if (product && requiredToolType && !assertToolType(product.title, requiredToolType, toolTypes).ok) {
     console.warn(`[tool-type] discarded direct-ASIN Rainforest match for "${name}" — "${product.title}" doesn't match required type ${requiredToolType}`);
     product = null;
   }
@@ -1104,7 +1111,7 @@ async function resolveAmazonProductForCandidate(asin: string | undefined | null,
       // whose title differs only in the type word (e.g. "clipper" vs
       // "trimmer"), so tool-type agreement is required IN ADDITION to
       // that similarity score, not instead of it.
-      if (candidateProduct && requiredToolType && !assertToolType(candidateProduct.title, requiredToolType).ok) {
+      if (candidateProduct && requiredToolType && !assertToolType(candidateProduct.title, requiredToolType, toolTypes).ok) {
         console.warn(`[tool-type] discarded fallback title-search match for "${name}" — "${candidateProduct.title}" doesn't match required type ${requiredToolType}`);
       } else {
         product = candidateProduct;
@@ -1115,7 +1122,7 @@ async function resolveAmazonProductForCandidate(asin: string | undefined | null,
   return product;
 }
 
-async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolType?: ToolType | null): Promise<any[]> {
+async function enrichCompetitorsWithRainforest(competitors: any[], toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null): Promise<any[]> {
   if (!hasRainforestKey) return competitors;
 
   return mapWithConcurrency(competitors, 3, async (c) => {
@@ -1134,7 +1141,7 @@ async function enrichCompetitorsWithRainforest(competitors: any[], requiredToolT
       const hasGroundingData = (c.specifications?.length > 0) || (c.attributes?.length > 0) || (c.feature_bullets?.length > 0) || !!c.description;
       if (c.verified_by_rainforest === true && hasGroundingData) return c;
 
-      const product = await resolveAmazonProductForCandidate(c.asin, c.name, c.brand, requiredToolType);
+      const product = await resolveAmazonProductForCandidate(c.asin, c.name, c.brand, toolTypes, requiredToolType);
 
       if (!product) {
         // This candidate was already trusted (a real type=search
@@ -1353,6 +1360,7 @@ interface Phase2ResolvedContext {
   brandHintOverride: string[] | undefined;
   motorFamilies: any;
   brandedNames: BrandedMotorNameRow[];
+  toolTypes: ToolTypeRow[];
   ourMotor: any;
   ourMotorLabel: string | null;
   weights: any;
@@ -1390,17 +1398,21 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   // of the static getKnownBrandsHint list, AND registry brands are hard-
   // filtered out of the results below — a real guarantee, not just a
   // prompt-level request the model could ignore.
-  const registry = await resolveLegacyBrandsForIdentity(identityCard);
+  // Same motor resolution as Phase 1 (cheap re-read — already resolved
+  // once, or already in context.motorTech from that phase's own pause).
+  const motorFamilies = await listMotorFamilies();
+  const brandedNames = await listBrandedMotorNames();
+  // Same "cheap re-read" precedent as motorFamilies/brandedNames above —
+  // never module-level state (see this file's own header on why).
+  const toolTypes = await listToolTypes();
+
+  const registry = await resolveLegacyBrandsForIdentity(identityCard, toolTypes);
   const registryBrandTokens = registry
     ? new Set(registry.brands.flatMap(b => [b.brand_name, ...b.aliases].map(normalizeBrandToken)))
     : null;
   const brandHintOverride = registry ? registry.brands.flatMap(b => [b.brand_name, ...b.aliases]) : undefined;
 
-  // Same motor resolution as Phase 1 (cheap re-read — already resolved
-  // once, or already in context.motorTech from that phase's own pause).
-  const motorFamilies = await listMotorFamilies();
-  const brandedNames = await listBrandedMotorNames();
-  const motorRequired = isMotorizedCategory(identityCard);
+  const motorRequired = isMotorizedCategory(identityCard, toolTypes);
   const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
   if (motorRequired && !ourMotor) {
     return {
@@ -1440,7 +1452,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
     };
   }
 
-  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
+  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
 }
 
 // Shared by Phase 1's and Phase 2a's multi-round fill loop (see the header
@@ -1496,9 +1508,9 @@ function mergeNewCandidatesIntoPool(pool: any[], incoming: any[]): any[] {
 // round/relaxation ladder — rendered as an honest labeled empty rather than
 // silently returning fewer than 5. `reason` names how much was actually
 // searched, per the "never silently show fewer and move on" requirement.
-function buildEmptySlotPlaceholder(tier: CompetitorTier, identity: IdentityCard, ourMotorLabel: string | null, searchesSoFar: number): any {
+function buildEmptySlotPlaceholder(tier: CompetitorTier, identity: IdentityCard, toolTypes: ToolTypeRow[], ourMotorLabel: string | null, searchesSoFar: number): any {
   const motorPart = ourMotorLabel ? `${ourMotorLabel} ` : "";
-  const typeLabel = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType] : (identity.subcategory || identity.category);
+  const typeLabel = identity.toolType && identity.toolType !== "combo" ? getToolTypeLabel(identity.toolType, toolTypes) : (identity.subcategory || identity.category);
   return {
     empty_slot: true,
     tier,
@@ -1558,6 +1570,12 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
   const identityCard: IdentityCard | null = hasResult(record.phase0_result) ? record.phase0_result : null;
   const phase1Result = hasResult(record.phase1_result) ? record.phase1_result : null;
   const phase2Result = hasResult(record.phase2_result) ? record.phase2_result : null;
+
+  // Fetched once here (the natural async boundary for every phase branch
+  // below) and threaded explicitly through every downstream call — never
+  // module-level state (this app runs on Vercel serverless, where a warm
+  // lambda can interleave requests from different orgs on the same process).
+  const toolTypes = await listToolTypes();
 
   let webSearchCount = 0;
   const onSearchUsed = () => { webSearchCount += 1; };
@@ -1645,7 +1663,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // entirely rather than being forced to answer an inapplicable question.
       const motorFamilies = await listMotorFamilies();
       const brandedNames = await listBrandedMotorNames();
-      const motorRequired = isMotorizedCategory(identityCard);
+      const motorRequired = isMotorizedCategory(identityCard, toolTypes);
       const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
       if (motorRequired && !ourMotor) {
         const question = {
@@ -1664,6 +1682,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
         brandedNames,
+        toolTypes,
         ourMotor,
         ourSpecs,
         weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
@@ -1677,7 +1696,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // Falls back to today's unmodified AI-discovery flow entirely when
       // there's no registry match (an out-of-registry category) or the
       // registry category has zero enabled brands.
-      const registry = await resolveLegacyBrandsForIdentity(identityCard);
+      const registry = await resolveLegacyBrandsForIdentity(identityCard, toolTypes);
 
       // ----------------------------------------------------
       // PHASE 1a: MULTI-ROUND FILL LOOP
@@ -1720,7 +1739,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
               category_name: registry.categoryName,
               brands: entries,
               motor_label: ourMotorLabel || null,
-              tool_type_label: identityCard.toolType && identityCard.toolType !== "combo" ? TOOL_TYPE_LABELS[identityCard.toolType] : null,
+              tool_type_label: identityCard.toolType && identityCard.toolType !== "combo" ? getToolTypeLabel(identityCard.toolType, toolTypes) : null,
               target_market_label: context.targetMarket,
               price_band_low: legacyBand.min,
               price_band_high: legacyBand.max,
@@ -1733,12 +1752,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             identityCard,
             targetPriceRaw,
             registry.categorySlug,
+            toolTypes,
             writeBrandProgress,
             undefined,
             ourMotorLabel
           );
 
-          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard);
+          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard, toolTypes);
 
           // Real motor-grounding fix — curated candidates from the Amazon leg
           // (lib/legacy-brand-discovery.ts's toCandidate, a type=search result
@@ -1751,7 +1771,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           // short-circuit) so this only re-fetches the ones that actually
           // still need it (pure Amazon-leg hits with no brand-site data).
           if (hasRainforestKey) {
-            competitors = await enrichCompetitorsWithRainforest(competitors, identityCard.toolType);
+            competitors = await enrichCompetitorsWithRainforest(competitors, toolTypes, identityCard.toolType);
           }
 
           // Brand-site-only candidates (no Amazon match from the concurrent
@@ -1765,7 +1785,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           if (hasRainforestKey) {
             competitors = await mapWithConcurrency(competitors, 3, async (c: any) => {
               if (!c.sources?.brand_site || c.sources?.amazon) return c;
-              const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, identityCard.toolType);
+              const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, toolTypes, identityCard.toolType);
               if (!product) return c;
 
               const sitePriceRaw = c.sources.brand_site.price_raw;
@@ -1802,15 +1822,15 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         } else {
           const aiResult: any = await withAiFallback(
             "Phase 1",
-            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
-            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel) : null,
-            () => generateMockPhase1(context, identityCard, targetPriceRaw),
+            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel) : null,
+            () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
             startTime
           );
           webSearchCount += aiResult.web_searches_performed || 0;
-          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard);
+          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes);
           if (hasRainforestKey) {
-            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, identityCard.toolType);
+            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType);
           }
           pool = mergeNewCandidatesIntoPool(pool, aiCompetitors);
         }
@@ -1825,18 +1845,18 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         const extraInstruction = fillRoundExtraInstruction(fill.round, "legacy");
         const aiResult: any = await withAiFallback(
           `Phase 1 (fill round ${fill.round})`,
-          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel, extraInstruction) : null,
-          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, ourMotorLabel, extraInstruction) : null,
-          () => generateMockPhase1(context, identityCard, targetPriceRaw),
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction) : null,
+          () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
           startTime
         );
         webSearchCount += aiResult.web_searches_performed || 0;
 
-        let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard)
+        let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes)
           .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
           .map((c: any) => (registry ? { ...c, curated_brand: false, brand_list_status: "not_curated" } : c));
         if (hasRainforestKey) {
-          aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, identityCard.toolType);
+          aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType);
         }
         pool = mergeNewCandidatesIntoPool(pool, aiCompetitors);
       }
@@ -1866,7 +1886,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       let competitors = selectByCompositeScore(pool, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: true, requireMotorEvidenceFirst: true });
       const stillShort = 5 - competitors.length;
       for (let i = 0; i < stillShort; i++) {
-        competitors.push(buildEmptySlotPlaceholder("legacy", identityCard, ourMotorLabel, updatedFill.searchesSoFar));
+        competitors.push(buildEmptySlotPlaceholder("legacy", identityCard, toolTypes, ourMotorLabel, updatedFill.searchesSoFar));
       }
 
       const result: any = {
@@ -1925,7 +1945,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await setPendingQuestion(analysisId, resolved.pendingQuestion);
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: resolved.pendingQuestion };
       }
-      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
+      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
 
       if (record.phase2_result?.__phase2Stage !== "discovered") {
         // ----------------------------------------------------
@@ -1946,13 +1966,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         const extraInstruction = fill.round === 1 ? undefined : fillRoundExtraInstruction(fill.round, "emerging");
         const result: any = await withAiFallback(
           fill.round === 1 ? "Phase 2" : `Phase 2 (fill round ${fill.round})`,
-          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel, extraInstruction) : null,
-          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, brandHintOverride, ourMotorLabel, extraInstruction) : null,
-          () => generateMockPhase2(context, identityCard, targetPriceRaw, phase1Result),
+          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction) : null,
+          () => generateMockPhase2(context, identityCard, targetPriceRaw, toolTypes, phase1Result),
           startTime
         );
 
-        let newCompetitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard);
+        let newCompetitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard, toolTypes);
         if (registryBrandTokens) {
           newCompetitors = newCompetitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
         }
@@ -1968,7 +1988,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // authoritative selection with full indie lineups happens in 2b
         // regardless of what this trial predicts.
         const trialCtx: CompositeScoringContext = {
-          motorFamilies, brandedNames, ourMotor, ourSpecs, ourLineupPercentile, indieLineups: new Map(),
+          motorFamilies, brandedNames, toolTypes, ourMotor, ourSpecs, ourLineupPercentile, indieLineups: new Map(),
           weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
           keyDiff: context.keyDiff ?? null,
         };
@@ -1998,7 +2018,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       delete result.__phase2SearchesSoFar;
 
       if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors, identityCard.toolType);
+        result.competitors = await enrichCompetitorsWithRainforest(result.competitors, toolTypes, identityCard.toolType);
       }
 
       // Best-effort brand-site pass for emerging candidates — the curated
@@ -2021,7 +2041,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         if (ungrounded.length > 0) {
           const brandSiteHits = await discoverBrandSiteCandidatesForEmerging(
             ungrounded.map((c: any) => c.brand),
-            { toolType: identityCard.toolType, motorLabel: ourMotorLabel, analysisId }
+            { toolType: identityCard.toolType, toolTypes, motorLabel: ourMotorLabel, analysisId }
           );
           result.competitors = result.competitors.map((c: any) => {
             const hit = brandSiteHits.get(c.brand);
@@ -2046,6 +2066,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
         brandedNames,
+        toolTypes,
         ourMotor,
         ourSpecs,
         weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
@@ -2056,7 +2077,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true, allowStaticFallbackTopup: true });
       const stillShortEmerging = 5 - result.competitors.length;
       for (let i = 0; i < stillShortEmerging; i++) {
-        result.competitors.push(buildEmptySlotPlaceholder("emerging", identityCard, ourMotorLabel, searchesSoFarPhase2));
+        result.competitors.push(buildEmptySlotPlaceholder("emerging", identityCard, toolTypes, ourMotorLabel, searchesSoFarPhase2));
       }
       result.matching_weights = scoringCtx.weights;
       result.form_inputs = buildFormInputsSnapshot(context);
@@ -2411,7 +2432,7 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
 // verify suite inspect the exact generated prompt text (e.g. assert zero
 // literal "clipper" substrings for a trimmer identity) without needing a
 // live AI call.
-export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, ourMotorLabel?: string | null, extraInstruction?: string) {
+export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string) {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
   const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
@@ -2419,14 +2440,14 @@ export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCa
   const tierKeyword = deriveTierKeyword(targetPriceRaw);
   const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
 
-  const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType] : (identity.subcategory || identity.category);
+  const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? getToolTypeLabel(identity.toolType, toolTypes) : (identity.subcategory || identity.category);
   const combinedExampleQuery = `{brand} ${ourMotorLabel || ""} ${toolTypeLabel} near ${targetDisplay}`.replace(/\s+/g, " ").trim();
 
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research and market analysis. You have access to web search. Use it extensively.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
-${identity.toolType ? buildToolTypePromptGuard(identity.toolType) : ""}
+${identity.toolType ? buildToolTypePromptGuard(identity.toolType, toolTypes) : ""}
 
 Your task: Research up to 8 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
@@ -2496,8 +2517,8 @@ Instructions:
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel, extraInstruction);
+async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -2515,15 +2536,15 @@ function assertHasCompetitors(parsed: any): any {
   return parsed;
 }
 
-async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, ourMotorLabel, extraInstruction);
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
 // Exported for the same offline-verify reason as buildPhase1Prompt above.
-export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
+export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
   // brandHintOverride (when the identified product maps to a legacy-brand
   // registry category, lib/legacy-brand-registry.ts) takes priority over
   // the static, non-binding lib/known-brands-by-category.ts hint — the
@@ -2536,14 +2557,14 @@ export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCa
   const tierKeyword = deriveTierKeyword(targetPriceRaw);
   const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
 
-  const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? TOOL_TYPE_LABELS[identity.toolType] : (identity.subcategory || identity.category);
+  const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? getToolTypeLabel(identity.toolType, toolTypes) : (identity.subcategory || identity.category);
   const combinedExampleQuery = `${ourMotorLabel || ""} ${toolTypeLabel} near ${targetDisplay}`.replace(/\s+/g, " ").trim();
 
   const systemPrompt = `You are a professional competitive intelligence analyst specializing in Amazon product research. You have access to web search. Use it extensively.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary, no "I'll research..." text.
 
-${identity.toolType ? buildToolTypePromptGuard(identity.toolType) : ""}
+${identity.toolType ? buildToolTypePromptGuard(identity.toolType, toolTypes) : ""}
 
 Your task: Research up to 8 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
@@ -2613,14 +2634,14 @@ Instructions:
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel, extraInstruction);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, brandHintOverride, ourMotorLabel, extraInstruction);
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
@@ -2666,7 +2687,7 @@ async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityC
 // Runs whenever Rainforest is configured, regardless of category — the
 // static getCategoryFallbackCompetitors data is now a last-resort only,
 // used solely when Rainforest itself is unavailable/fails outright.
-async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, excludeNames: string[] = [], motorHint?: string | null): Promise<any[]> {
+async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, toolTypes: ToolTypeRow[], excludeNames: string[] = [], motorHint?: string | null): Promise<any[]> {
   if (!hasRainforestKey) return [];
   const category = identity.subcategory || identity.category;
   if (!category) return [];
@@ -2721,7 +2742,7 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
       if (seenAsins.has(r.asin)) continue;
       const titleLower = r.title.toLowerCase();
       if (Array.from(seenTitleFragments).some(f => f && titleLower.includes(f))) continue;
-      if (identity.toolType && !assertToolType(r.title, identity.toolType).ok) {
+      if (identity.toolType && !assertToolType(r.title, identity.toolType, toolTypes).ok) {
         console.warn(`[tool-type] rejected live-search result "${r.title}" — mismatched tool type for ${identity.toolType}`);
         continue;
       }
@@ -2756,8 +2777,8 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
 
 // ----------------------------------------------------
 // SMART MOCK GENERATORS FOR OFFLINE / NO-KEY USE
-async function generateMockPhase1(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null) {
-  const live = await discoverCompetitorsLive(identity, "legacy", targetPriceRaw, [], context.motorTech || null);
+async function generateMockPhase1(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null, toolTypes: ToolTypeRow[]) {
+  const live = await discoverCompetitorsLive(identity, "legacy", targetPriceRaw, toolTypes, [], context.motorTech || null);
   if (live.length > 0) {
     return { web_searches_performed: live.length, competitors: live };
   }
@@ -2807,9 +2828,9 @@ async function generateMockPhase1(context: AnalysisContext, identity: IdentityCa
   };
 }
 
-async function generateMockPhase2(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null, phase1?: any) {
+async function generateMockPhase2(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number | null, toolTypes: ToolTypeRow[], phase1?: any) {
   const excludeNames = (phase1?.competitors || []).map((c: any) => c.name as string);
-  const live = await discoverCompetitorsLive(identity, "emerging", targetPriceRaw, excludeNames, context.motorTech || null);
+  const live = await discoverCompetitorsLive(identity, "emerging", targetPriceRaw, toolTypes, excludeNames, context.motorTech || null);
   if (live.length > 0) {
     return { web_searches_performed: live.length, competitors: live };
   }

@@ -12,6 +12,7 @@ import { getCategoryBySlug, listBrandsForCategory, getEnabledLegacyBrandsForCate
 // but as `import type` only (erased at compile time) — so this runtime
 // import of normalizeBrandToken does NOT create an actual module cycle.
 import { normalizeBrandToken } from "./legacy-brand-discovery";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export type CategorySlug =
   | "legacy_professional_clippers"
@@ -33,14 +34,35 @@ function textMatchesAny(text: string, keys: string[]): boolean {
   return keys.some(k => text.includes(k));
 }
 
-type IdentityForResolution = Pick<IdentityCard, "category" | "subcategory" | "targetUser">;
+// toolType is optional here (unlike IdentityCard's own required-but-
+// nullable field) — every existing caller that predates the toolType-first
+// routing fix below can keep omitting it entirely and still compile,
+// falling back to the same category-text keyword sniffing as before.
+type IdentityForResolution = Pick<IdentityCard, "category" | "subcategory" | "targetUser"> & { toolType?: IdentityCard["toolType"] };
 
 type RegistryFamily = "clipper_trimmer_shaver" | "beauty";
 
 // Shared by resolveRegistryCategorySlug (pro/retail single-slug case) and
 // resolveFamilySlugPair (both-list-merge case) below — factored out so the
 // two keyword-family checks live in exactly one place.
-function resolveFamily(identity: Pick<IdentityForResolution, "category" | "subcategory">): RegistryFamily | null {
+//
+// Checks the identity's OWN already-resolved toolType's `family` column
+// FIRST (lib/db/tool-types.ts) — the free-text category/subcategory
+// keyword-sniffing below is only a FALLBACK for when toolType is absent
+// (a legacy analysis pre-dating that field) or resolves to a type with no
+// family assigned (family: null, e.g. "combo"). This matters most for a
+// CUSTOM tool type: its category text won't contain any of
+// CLIPPER_TRIMMER_SHAVER_KEYS/BEAUTY_KEYS, so without this check it would
+// silently get zero curated brands even though its own `family` column
+// says exactly which curated list applies. Built-in types benefit too —
+// this is a genuine correctness fix, not just a custom-type accommodation
+// (a built-in type's category text could theoretically fail to contain the
+// sniffed keywords in some phrasing, previously falling through to null).
+function resolveFamily(identity: Pick<IdentityForResolution, "category" | "subcategory" | "toolType">, toolTypes: ToolTypeRow[]): RegistryFamily | null {
+  if (identity.toolType) {
+    const type = toolTypes.find(t => t.type_key === identity.toolType);
+    if (type && (type.family === "clipper_trimmer_shaver" || type.family === "beauty")) return type.family;
+  }
   const text = `${identity.category || ""} ${identity.subcategory || ""}`.toLowerCase();
   if (textMatchesAny(text, CLIPPER_TRIMMER_SHAVER_KEYS)) return "clipper_trimmer_shaver";
   if (textMatchesAny(text, BEAUTY_KEYS)) return "beauty";
@@ -55,8 +77,8 @@ function resolveFamily(identity: Pick<IdentityForResolution, "category" | "subca
 // single-slug resolution is UNCHANGED by the "both" merge below (still
 // used as-is by lib/motor-taxonomy.ts's isMotorizedCategory, which only
 // needs a non-null/null check, not the merged brand list itself).
-export function resolveRegistryCategorySlug(identity: IdentityForResolution): CategorySlug | null {
-  const family = resolveFamily(identity);
+export function resolveRegistryCategorySlug(identity: IdentityForResolution, toolTypes: ToolTypeRow[]): CategorySlug | null {
+  const family = resolveFamily(identity, toolTypes);
   const isPro = identity.targetUser !== "consumer";
   if (family === "clipper_trimmer_shaver") return isPro ? "legacy_professional_clippers" : "legacy_retail_clippers";
   if (family === "beauty") return isPro ? "professional_beauty" : "retail_beauty";
@@ -94,9 +116,9 @@ export interface ResolvedLegacyRegistry {
 // deduping any brand that appears on both by its normalized name — so e.g.
 // Wahl (present on both the professional and retail clipper lists) surfaces
 // exactly once, tagged with both source lists instead of twice or dropped.
-export async function resolveLegacyBrandsForIdentity(identity: IdentityForResolution): Promise<ResolvedLegacyRegistry | null> {
+export async function resolveLegacyBrandsForIdentity(identity: IdentityForResolution, toolTypes: ToolTypeRow[]): Promise<ResolvedLegacyRegistry | null> {
   if (identity.targetUser === "both") {
-    const family = resolveFamily(identity);
+    const family = resolveFamily(identity, toolTypes);
     if (!family) return null;
     const pair = FAMILY_SLUG_PAIRS[family];
 
@@ -131,7 +153,7 @@ export async function resolveLegacyBrandsForIdentity(identity: IdentityForResolu
     return { categorySlug: pair.pro, categoryName: proCategory?.name || retailCategory?.name || "", brands };
   }
 
-  const slug = resolveRegistryCategorySlug(identity);
+  const slug = resolveRegistryCategorySlug(identity, toolTypes);
   if (!slug) return null;
 
   const category = await getCategoryBySlug(slug);

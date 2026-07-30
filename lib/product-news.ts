@@ -15,7 +15,8 @@
 // JSON structure with no way to verify it against real search results.
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { SectionProvenanceData, ProvenanceTier, ProvenanceQuery } from "./section-provenance";
-import { assertToolType, ToolType, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
+import { assertToolType, ToolType, getToolTypeLabel } from "./tool-type-taxonomy";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export interface NewsItem {
   title: string;
@@ -63,17 +64,17 @@ function currentYear(referenceDate: Date): number {
   return referenceDate.getUTCFullYear();
 }
 
-function buildPrompt(productName: string, brand: string | null, referenceDate: Date, requiredToolType?: ToolType | null) {
+function buildPrompt(productName: string, brand: string | null, referenceDate: Date, toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null) {
   const year = currentYear(referenceDate);
   const brandLine = brand ? `"${brand}" "${productName}"` : `"${productName}"`;
   // Tool-type word appended explicitly (not left to whatever the bare
   // product name happens to say) — a sibling product from the same
   // brand/launch event (e.g. a clipper+trimmer combo launch) is a real
   // risk for a query with no type context at all.
-  const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()}` : "";
+  const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
   const searchQueries = [`"${productName}"${toolTypeWord} news`, `${brandLine}${toolTypeWord} launch OR recall OR update OR award ${year}`];
 
-  const systemPrompt = `You are searching for real, recent news about ONE specific product${requiredToolType && requiredToolType !== "combo" ? ` (a ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()})` : ""}. Search the web for:
+  const systemPrompt = `You are searching for real, recent news about ONE specific product${requiredToolType && requiredToolType !== "combo" ? ` (a ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()})` : ""}. Search the web for:
 - ${searchQueries[0]}
 - ${searchQueries[1]}
 
@@ -101,7 +102,7 @@ function derivePublisher(title: string, url: string): string {
   }
 }
 
-export async function findProductNews(productName: string, brand: string | null, referenceDate: Date = new Date(), requiredToolType?: ToolType | null): Promise<ProductNewsResult> {
+export async function findProductNews(productName: string, brand: string | null, toolTypes: ToolTypeRow[], referenceDate: Date = new Date(), requiredToolType?: ToolType | null): Promise<ProductNewsResult> {
   const searchedAt = referenceDate.toISOString();
   const t0 = Date.now();
   const NO_KEY_TIER: ProvenanceTier = { tier: "Product news web search", attempted: false, outcome: "skipped", errorMessage: "OpenAI not configured" };
@@ -110,7 +111,7 @@ export async function findProductNews(productName: string, brand: string | null,
     return { items: [], categoryContext: [], searchedAt, aiUnavailable: true, provenance: { tiers: [NO_KEY_TIER], queries: [] } };
   }
 
-  const { systemPrompt, userPrompt, searchQueries } = buildPrompt(productName, brand, referenceDate, requiredToolType);
+  const { systemPrompt, userPrompt, searchQueries } = buildPrompt(productName, brand, referenceDate, toolTypes, requiredToolType);
   const baseQueries: ProvenanceQuery[] = searchQueries.map(q => ({ tier: "Product news web search", query: q, verified: true }));
 
   try {
@@ -202,7 +203,7 @@ export async function findProductNews(productName: string, brand: string | null,
     // is dropped even if the model's own judgment missed it.
     const items = requiredToolType
       ? itemsAll.filter(it => {
-          const ok = assertToolType(`${it.title} ${it.summary}`, requiredToolType).ok;
+          const ok = assertToolType(`${it.title} ${it.summary}`, requiredToolType, toolTypes).ok;
           if (!ok) console.warn(`[tool-type] rejected news item "${it.title}" — mismatched tool type for ${requiredToolType}`);
           return ok;
         })

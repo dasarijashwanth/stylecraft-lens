@@ -14,6 +14,7 @@ import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { coerceAiAnswer } from "./ai-json-call";
 import { isRealAnswer } from "./field-answer-state";
 import { assertToolType, buildToolTypePromptGuard, ToolType } from "./tool-type-taxonomy";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export interface WebFallbackField {
   id: string;
@@ -45,6 +46,7 @@ async function runOneWebSearchCall(
   eligible: WebFallbackField[],
   productName: string,
   timeoutMs: number,
+  toolTypes: ToolTypeRow[],
   requiredToolType?: ToolType | null
 ): Promise<WebSearchResult | null> {
   const fieldList = eligible.map(f => `- ${f.id}: ${f.question}`).join("\n");
@@ -57,7 +59,7 @@ async function runOneWebSearchCall(
   // below plus the required source_hint (checked against assertToolType
   // in applyResult) is the real, code-enforced safeguard this path can
   // actually support given that constraint.
-  const toolTypeGuard = requiredToolType ? `\n\n${buildToolTypePromptGuard(requiredToolType)}` : "";
+  const toolTypeGuard = requiredToolType ? `\n\n${buildToolTypePromptGuard(requiredToolType, toolTypes)}` : "";
   const systemInstruction = `Search the web for verifiable public information about the product "${productName}" to answer the fields below. Use ONLY information you find via search — never guess or use general knowledge about similar products.${toolTypeGuard} If nothing reliable is found for a field, return "N/A".
 
 Do not narrate your search process — search silently, then respond with ONLY the final JSON object. No preamble, no commentary.
@@ -124,6 +126,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   productName: string,
   pipelineStart: number,
   timeBudgetMs: number,
+  toolTypes: ToolTypeRow[],
   requiredToolType?: ToolType | null
 ): Promise<void> {
   const eligible = schema.filter(f => !isRealAnswer(fields[f.id]?.answer));
@@ -143,7 +146,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
       // every other tier does. A missing/empty hint isn't itself rejected
       // (nothing concrete to contradict), only a hint that positively
       // resolves to a DIFFERENT tool type.
-      if (requiredToolType && raw?.source_hint && !assertToolType(String(raw.source_hint), requiredToolType).ok) {
+      if (requiredToolType && raw?.source_hint && !assertToolType(String(raw.source_hint), requiredToolType, toolTypes).ok) {
         console.warn(`[tool-type] rejected web-fallback answer for field "${f.id}" — source_hint "${raw.source_hint}" doesn't match required type ${requiredToolType}`);
         continue;
       }
@@ -153,7 +156,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   };
 
   if (eligible.length <= CHUNK_THRESHOLD) {
-    const result = await runOneWebSearchCall(eligible, productName, SINGLE_CALL_TIMEOUT_MS, requiredToolType);
+    const result = await runOneWebSearchCall(eligible, productName, SINGLE_CALL_TIMEOUT_MS, toolTypes, requiredToolType);
     applyResult(eligible, result);
     return;
   }
@@ -168,7 +171,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   await Promise.all(
     chunks.map(async chunk => {
       if (Date.now() - pipelineStart > timeBudgetMs) return;
-      const result = await runOneWebSearchCall(chunk, productName, CHUNK_CALL_TIMEOUT_MS, requiredToolType);
+      const result = await runOneWebSearchCall(chunk, productName, CHUNK_CALL_TIMEOUT_MS, toolTypes, requiredToolType);
       applyResult(chunk, result);
     })
   );

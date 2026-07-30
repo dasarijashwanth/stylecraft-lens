@@ -3,7 +3,8 @@ import { isPricingAnalysisEmpty } from "./pricing-analysis";
 import { summarizeSource, describeProvenanceTier } from "./provenance-format";
 import type { ProvenanceRow } from "./db/section-provenance";
 import { escapeHtml } from "./html-escape";
-import { TOOL_TYPE_LABELS, type ToolType } from "./tool-type-taxonomy";
+import { getToolTypeLabel } from "./tool-type-taxonomy";
+import type { ToolTypeRow } from "./db/tool-types";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both (merged)" };
 
@@ -11,10 +12,10 @@ const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consu
 // buildFormInputsSnapshot), printed as one plain line right above the
 // weights sentence — so the methodology appendix shows not just HOW
 // competitors were scored but WHAT inputs actually drove that scoring.
-function renderFormInputsLine(formInputs: any): string {
+function renderFormInputsLine(formInputs: any, toolTypes: ToolTypeRow[]): string {
   if (!formInputs) return "";
   const industryLabel = formInputs.industry === "haircare-styling" ? "Hair Care & Styling" : formInputs.industry === "grooming-barbering" ? "Grooming & Barbering" : (formInputs.industry || "—");
-  const toolTypeLabel = formInputs.toolType && TOOL_TYPE_LABELS[formInputs.toolType as ToolType] ? TOOL_TYPE_LABELS[formInputs.toolType as ToolType] : "—";
+  const toolTypeLabel = formInputs.toolType ? getToolTypeLabel(formInputs.toolType, toolTypes) : "—";
   const marketLabel = formInputs.targetMarket && TARGET_MARKET_LABELS[formInputs.targetMarket] ? TARGET_MARKET_LABELS[formInputs.targetMarket] : "—";
 
   const parts = [
@@ -66,7 +67,7 @@ function renderCompetitorEvidenceHTML(ca: any): string {
 // ASCII-only status words (no checkmark/emoji glyphs) — matches this file's
 // own renderStarRating()-established precedent of never relying on a bare
 // Unicode glyph for something print-critical.
-function renderProvenanceAppendixHTML(report: any): string {
+function renderProvenanceAppendixHTML(report: any, toolTypes: ToolTypeRow[]): string {
   const ca = report.competitive_analysis || {};
   const pa = report.pricing_analysis || {};
   const rows: ProvenanceRow[] = [...(ca.section_provenance || [])];
@@ -89,7 +90,7 @@ function renderProvenanceAppendixHTML(report: any): string {
   return `
     <div class="page-break"></div>
     <h2>Data Sources &amp; Methodology</h2>
-    ${renderFormInputsLine(ca.form_inputs)}
+    ${renderFormInputsLine(ca.form_inputs, toolTypes)}
     ${weights ? `
       <p style="font-size: 10px; color: #666;">
         Competitors are prioritized by motor type match (${Math.round(weights.motor * 100)}%), then price proximity
@@ -115,9 +116,9 @@ function renderProvenanceAppendixHTML(report: any): string {
   `;
 }
 
-export async function downloadReportPDF(report: any) {
+export async function downloadReportPDF(report: any, toolTypes: ToolTypeRow[]) {
   // Create a print-ready HTML document
-  const html = generatePrintHTML(report);
+  const html = generatePrintHTML(report, toolTypes);
 
   // Blob's own type must declare a charset — without it, the print window
   // has no encoding signal at all and the browser falls back to a legacy
@@ -139,16 +140,16 @@ export async function downloadReportPDF(report: any) {
   }
 }
 
-export async function downloadTabPDF(report: any, activeTab: string) {
+export async function downloadTabPDF(report: any, activeTab: string, toolTypes: ToolTypeRow[]) {
   const tabTitles: Record<string, string> = {
     "competitive-analysis": "Competitive Analysis",
     "pricing": "Pricing Analysis",
     "go-to-market": "Go-To-Market Strategy",
     "content-form": "Content Form & Key Messaging"
   };
-  
+
   const title = `${report.title} — ${tabTitles[activeTab] || activeTab}`;
-  const html = generatePrintHTML(report, activeTab);
+  const html = generatePrintHTML(report, toolTypes, activeTab);
 
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -224,7 +225,7 @@ function renderStarRating(rating: string | number | null | undefined, reviewCoun
   return `<span style="display:inline-flex;align-items:center;gap:2px;vertical-align:middle;">${stars}<span style="margin-left:3px;">${clamped.toFixed(1)}${reviewCount ? ` (${escapeHtml(reviewCount)})` : ""}</span></span>`;
 }
 
-function generatePrintHTML(report: any, activeTab?: string): string {
+function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: string): string {
   const ca = report.competitive_analysis || {};
   const pa = report.pricing_analysis || {};
   const gtm = report.go_to_market || {};
@@ -764,7 +765,7 @@ function generatePrintHTML(report: any, activeTab?: string): string {
     ` : ""}
   ` : ""}
 
-  ${renderProvenanceAppendixHTML(report)}
+  ${renderProvenanceAppendixHTML(report, toolTypes)}
 
 </body>
 </html>`;

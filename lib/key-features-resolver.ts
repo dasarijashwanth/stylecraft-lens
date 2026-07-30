@@ -13,7 +13,8 @@ import { callOpenAiForJson } from "./openai";
 import { fetchPageText, quoteAppearsInText } from "./citations";
 import { textSimilarity } from "./text-similarity";
 import { SectionProvenanceData, ProvenanceTier, ProvenanceQuery } from "./section-provenance";
-import { assertToolType, ToolType, TOOL_TYPE_LABELS } from "./tool-type-taxonomy";
+import { assertToolType, ToolType, getToolTypeLabel } from "./tool-type-taxonomy";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export type FeatureSourceType = "Amazon" | "Brand site" | "Retailer" | "Expert review";
 
@@ -105,16 +106,16 @@ function dedupeFeatures(features: ResolvedFeature[]): ResolvedFeature[] {
 // early-reject pattern as lib/amazon-review-analysis.ts's web-review tier.
 // Unrecognized-but-on-topic titles (no type word at all) are never
 // rejected. Exported for reuse if another tier needs the same filter.
-export function filterHitsByToolType(hits: SearchHit[], requiredToolType?: ToolType | null): SearchHit[] {
+export function filterHitsByToolType(hits: SearchHit[], toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null): SearchHit[] {
   if (!requiredToolType) return hits;
   return hits.filter(h => {
-    const ok = assertToolType(h.title, requiredToolType).ok;
+    const ok = assertToolType(h.title, requiredToolType, toolTypes).ok;
     if (!ok) console.warn(`[tool-type] rejected key-features hit "${h.title}" — mismatched tool type for ${requiredToolType}`);
     return ok;
   });
 }
 
-export async function resolveKeyFeatures(competitorName: string, asin: string | null, requiredToolType?: ToolType | null): Promise<KeyFeaturesResult> {
+export async function resolveKeyFeatures(competitorName: string, asin: string | null, toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null): Promise<KeyFeaturesResult> {
   const startedAt = Date.now();
   const searchedAt = new Date().toISOString();
   const tiersTried: FeatureSourceType[] = [];
@@ -168,9 +169,9 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
   if (!enough() && !overBudget()) {
     tiersTried.push("Brand site");
     const tierT0 = Date.now();
-    const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()}` : "";
+    const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
     const query = `"${competitorName}"${toolTypeWord} official product page`;
-    const hits = filterHitsByToolType(await searchForUrls(query, 2), requiredToolType);
+    const hits = filterHitsByToolType(await searchForUrls(query, 2), toolTypes, requiredToolType);
     let tierItemCount = 0;
     let tierRejectedCount = 0;
     const tierRejectedReasons: string[] = [];
@@ -201,9 +202,9 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
   if (!enough() && !overBudget()) {
     tiersTried.push("Retailer");
     const tierT0 = Date.now();
-    const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()}` : "";
+    const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
     const query = `"${competitorName}"${toolTypeWord} buy`;
-    const hits = filterHitsByToolType(await searchForUrls(query, 2), requiredToolType);
+    const hits = filterHitsByToolType(await searchForUrls(query, 2), toolTypes, requiredToolType);
     let tierItemCount = 0;
     let tierRejectedCount = 0;
     const tierRejectedReasons: string[] = [];
@@ -234,9 +235,9 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
   if (!enough() && !overBudget()) {
     tiersTried.push("Expert review");
     const tierT0 = Date.now();
-    const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${TOOL_TYPE_LABELS[requiredToolType].toLowerCase()}` : "";
+    const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
     const query = `"${competitorName}"${toolTypeWord} review`;
-    const hits = filterHitsByToolType(await searchForUrls(query, 2), requiredToolType);
+    const hits = filterHitsByToolType(await searchForUrls(query, 2), toolTypes, requiredToolType);
     let tierItemCount = 0;
     let tierRejectedCount = 0;
     const tierRejectedReasons: string[] = [];

@@ -8,6 +8,7 @@ import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { Spinner } from "@/components/ui/Spinner";
 import { buildPricingAnalysis } from "@/lib/pricing-analysis";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 
 interface ResultsPanelProps {
   analysis: {
@@ -116,6 +117,17 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
       .catch(() => {});
   }, []);
 
+  // Fetched once here and threaded into downloadReportPDF (lib/export-pdf.ts) —
+  // that module renders client-side, with no other existing tool-types fetch
+  // to reuse.
+  const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
+  useEffect(() => {
+    fetch("/api/tool-types")
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data.toolTypes)) setToolTypes(data.toolTypes); })
+      .catch(() => {});
+  }, []);
+
   const handleExportPDF = async () => {
     setExporting(true);
     try {
@@ -156,7 +168,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           notes: "",
         }
       };
-      await downloadReportPDF(reportData);
+      await downloadReportPDF(reportData, toolTypes);
     } catch (err) {
       console.error("PDF generation failed:", err);
     } finally {

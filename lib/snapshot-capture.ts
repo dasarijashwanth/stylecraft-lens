@@ -7,6 +7,7 @@ import { getAmazonProduct } from "./rainforest";
 import { scrapeProductPage } from "./scrape";
 import { insertSnapshot, SnapshotRow } from "./db/snapshots";
 import { assertToolType, ToolType } from "./tool-type-taxonomy";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export interface SnapshotProjection {
   title?: string;
@@ -44,6 +45,7 @@ export async function captureProductSnapshot(input: {
   // before this field existed, in which case nothing is checked (never a
   // guess at what "should" have been required).
   requiredToolType?: ToolType | null;
+  toolTypes: ToolTypeRow[];
 }): Promise<CaptureResult> {
   const resolvedAsin = input.asin?.trim().toUpperCase() || extractAsinFromUrl(input.productUrl);
   const isAmazonUrl = !!input.productUrl && /amazon\./i.test(input.productUrl);
@@ -75,7 +77,7 @@ export async function captureProductSnapshot(input: {
   let toolTypeMismatch = false;
   let toolTypeMismatchReason: string | null = null;
   if (input.requiredToolType && (projection.title || projection.description)) {
-    const check = assertToolType(`${projection.title || ""} ${projection.description || ""}`, input.requiredToolType);
+    const check = assertToolType(`${projection.title || ""} ${projection.description || ""}`, input.requiredToolType, input.toolTypes);
     if (!check.ok) {
       toolTypeMismatch = true;
       toolTypeMismatchReason = `Captured product "${projection.title}" doesn't match this project's declared tool type (${input.requiredToolType}) — reason: ${check.reason}`;

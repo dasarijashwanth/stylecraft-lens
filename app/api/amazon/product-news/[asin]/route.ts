@@ -8,6 +8,7 @@ import { getAnalysis } from "@/lib/db/analyses";
 import { isNewsUpdatesEnabled } from "@/lib/feature-flags";
 import { logCall } from "@/lib/obs";
 import type { ToolType } from "@/lib/tool-type-taxonomy";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 // Duplicated deliberately (matches app/api/amazon/reviews-analysis/[asin]/
 // route.ts's own copy) rather than sharing a module — a tiny, DB-touching
@@ -106,7 +107,8 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     }
 
     const requiredToolType = await resolveAnalysisToolType(analysisId);
-    const result = await findProductNews(productName, brand, new Date(), requiredToolType);
+    const toolTypes = await listToolTypes();
+    const result = await findProductNews(productName, brand, toolTypes, new Date(), requiredToolType);
 
     if (!result.aiUnavailable) {
       await setCachedNews(cacheKey, result);

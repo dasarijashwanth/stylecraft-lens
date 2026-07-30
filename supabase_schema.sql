@@ -984,3 +984,42 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS motor_branded_name VARCHAR(150);
 -- hot path entirely.
 ALTER TABLE motor_tech_search_misses ADD COLUMN IF NOT EXISTS brand_name VARCHAR(255);
 ALTER TABLE motor_tech_search_misses ADD COLUMN IF NOT EXISTS ai_guessed_family VARCHAR(50);
+
+-- 28. TOOL TYPES — migrates Tool Type from a fixed compile-time TypeScript
+-- union (lib/tool-type-taxonomy.ts) to the same admin/user-editable,
+-- DB-backed shape motor_families already uses, so a new tool category
+-- (e.g. a launched "Foil Shaper" line) can be added inline on the analyze/
+-- new-project forms without a code deploy. `family` mirrors
+-- motor_families.domain's two values ('clipper_trimmer_shaver' | 'beauty')
+-- and drives which Industry a type appears under (lib/tool-type-taxonomy.ts's
+-- toolTypesForIndustry) — NULL means valid under EITHER industry (only
+-- "combo" uses this, since a multi-tool kit can combine either domain).
+-- `custom` distinguishes a user/admin-added type from the 9 shipped
+-- defaults — custom types get identical strict-matching treatment via
+-- their own `aliases`, never weaker isolation than a built-in.
+CREATE TABLE IF NOT EXISTS tool_types (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    type_key VARCHAR(50) UNIQUE NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    aliases TEXT[] NOT NULL DEFAULT '{}',
+    family VARCHAR(30),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    custom BOOLEAN NOT NULL DEFAULT false,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE tool_types ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for tool_types" ON tool_types FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO tool_types (type_key, label, aliases, family, sort_order) VALUES
+    ('trimmer', 'Trimmer', ARRAY['trimmer','beard trimmer','detailer','outliner','liner','edger'], 'clipper_trimmer_shaver', 0),
+    ('shaver', 'Shaver', ARRAY['shaver','foil shaver','rotary shaver','electric shaver','razor'], 'clipper_trimmer_shaver', 1),
+    ('dryer', 'Hair Dryer', ARRAY['dryer','blow dryer','diffuser'], 'beauty', 2),
+    ('flat_iron', 'Flat Iron', ARRAY['flat iron','straightener','hair iron'], 'beauty', 3),
+    ('curling_iron', 'Curling Iron', ARRAY['curling iron','curling wand','curler','wand'], 'beauty', 4),
+    ('hot_brush', 'Hot Brush', ARRAY['hot brush','styling brush','heated brush'], 'beauty', 5),
+    ('clipper', 'Clipper', ARRAY['clipper'], 'clipper_trimmer_shaver', 6),
+    ('other_styling', 'Other Styling Tool', ARRAY[]::text[], 'beauty', 7),
+    ('combo', 'Combo / Multi-Tool Kit', ARRAY[]::text[], NULL, 8)
+ON CONFLICT (type_key) DO NOTHING;

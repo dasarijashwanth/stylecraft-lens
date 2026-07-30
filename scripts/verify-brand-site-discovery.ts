@@ -86,6 +86,29 @@ const PRODUCT_PAGE_HTML = `<!DOCTYPE html><html><head>
 
 const TARGET_PRICE = 259.95;
 
+// Mirrors lib/memoryDb.ts's seedToolTypeDefaults exactly (the real
+// production seed) — covers at least clipper/trimmer/shaver, the types this
+// script's fixtures actually exercise.
+function makeToolTypesFixture(): any[] {
+  const now = new Date().toISOString();
+  const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+    { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+    { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+    { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+    { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+    { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+    { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+    { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+    { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+    { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+  ];
+  return defs.map((d, i) => ({
+    id: `ttype_${d.key}`, type_key: d.key, label: d.label, aliases: d.aliases, family: d.family,
+    enabled: true, custom: false, sort_order: i, created_at: now, updated_at: now,
+  }));
+}
+const TOOL_TYPES = makeToolTypesFixture();
+
 function makeBrand(): any {
   return {
     id: "brand_testbrand",
@@ -112,7 +135,7 @@ async function main() {
 
   console.log("\n[A.1] attemptBrandSite — finds a real, motor-evidenced product page on the registered domain");
   {
-    const result = await attemptBrandSite(brand, { toolType: "trimmer", motorLabel: "Vector" });
+    const result = await attemptBrandSite(brand, { toolType: "trimmer", toolTypes: TOOL_TYPES, motorLabel: "Vector" });
     assert(!!result, "a result was returned (not null)");
     assert(result?.url === "https://example.com/products/vector-pro-trimmer", `the URL is the one actually found on the registered domain (got ${result?.url})`);
     assert(!!result?.price && result.price_raw === 229, `a real MSRP was extracted from the page (got ${result?.price} / ${result?.price_raw})`);
@@ -121,7 +144,7 @@ async function main() {
 
   console.log("\n[A.2] discoverBrandSiteCandidates — same result, via the concurrency-batched entry point");
   {
-    const map = await discoverBrandSiteCandidates([brand], { toolType: "trimmer", motorLabel: "Vector" });
+    const map = await discoverBrandSiteCandidates([brand], { toolType: "trimmer", toolTypes: TOOL_TYPES, motorLabel: "Vector" });
     assert(map.has("TestBrand"), "the brand appears in the result map");
     assert(map.get("TestBrand")?.price_raw === 229, "the cached/batched path returns the same real price");
   }
@@ -130,7 +153,7 @@ async function main() {
   let hybridCandidate: any;
   {
     const candidates = await searchCuratedLegacyBrands(
-      [brand], identity, TARGET_PRICE, "legacy_professional_clippers", undefined, undefined, "Vector"
+      [brand], identity, TARGET_PRICE, "legacy_professional_clippers", TOOL_TYPES, undefined, undefined, "Vector"
     );
     assert(candidates.length === 1, `exactly one candidate was produced (got ${candidates.length})`);
     hybridCandidate = candidates[0];
@@ -145,7 +168,7 @@ async function main() {
     const motorFamilies = await listMotorFamilies();
     const ourMotor = { familyKey: "vector", label: "Vector Motor", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
     const ctx = {
-      motorFamilies, ourMotor,
+      motorFamilies, toolTypes: TOOL_TYPES, ourMotor,
       ourSpecs: { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null },
       weights: { motor: 0.45, price: 0.35, feature: 0.2 },
     };
@@ -180,7 +203,7 @@ async function main() {
     const motorFamilies = await listMotorFamilies();
     const ourMotor = { familyKey: "vector", label: "Vector Motor", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
     const ctx = {
-      motorFamilies, ourMotor,
+      motorFamilies, toolTypes: TOOL_TYPES, ourMotor,
       ourSpecs: { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null },
       weights: { motor: 0.45, price: 0.35, feature: 0.2 },
     };

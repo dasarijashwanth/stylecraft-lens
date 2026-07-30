@@ -17,18 +17,30 @@ import { toast } from "sonner";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { Badge } from "@/components/ui/Badge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 
 export default function ReportsPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [reports, setReports] = useState<any[]>([]);
-  
+
   // Filter & Search states
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Fetched once here and threaded into downloadReportPDF (lib/export-pdf.ts)
+  // — that module renders client-side, with no other existing tool-types
+  // fetch to reuse.
+  const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
+  useEffect(() => {
+    fetch("/api/tool-types")
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data.toolTypes)) setToolTypes(data.toolTypes); })
+      .catch(() => {});
+  }, []);
 
   const fetchReports = async () => {
     try {
@@ -78,7 +90,7 @@ export default function ReportsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error("Failed to load report data");
       
-      await downloadReportPDF(data.report);
+      await downloadReportPDF(data.report, toolTypes);
       
       // Update status
       await fetch(`/api/reports/${id}`, {

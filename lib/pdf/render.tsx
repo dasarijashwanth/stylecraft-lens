@@ -9,6 +9,7 @@ import { SalesKitPdf } from "./SalesKitPdf";
 import { TdsPdf } from "./TdsPdf";
 import { GtmPdf } from "./GtmPdf";
 import { ActiveReportPdf } from "./ActiveReportPdf";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 export type DocType = "sales-kit" | "tds" | "gtm" | "active-report";
 
@@ -97,7 +98,8 @@ export async function renderDocumentPdf(
     if (!report) throw new DocumentNotFoundError("Report not found");
     productName = report.projects?.product_name || report.title || "Product";
     projectName = report.projects?.name;
-    element = <ActiveReportPdf productName={productName} projectName={projectName} report={report} />;
+    const toolTypes = await listToolTypes();
+    element = <ActiveReportPdf productName={productName} projectName={projectName} report={report} toolTypes={toolTypes} />;
   } else {
     throw new DocumentNotFoundError("Unknown document type");
   }

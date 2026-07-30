@@ -81,6 +81,28 @@ const sawSearchTerms: string[] = [];
 
 const TARGET_PRICE = 259.95;
 
+// Mirrors lib/memoryDb.ts's seedToolTypeDefaults exactly (the real
+// production seed) — used everywhere this script needs a ToolTypeRow[].
+function makeToolTypesFixture(): any[] {
+  const now = new Date().toISOString();
+  const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+    { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+    { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+    { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+    { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+    { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+    { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+    { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+    { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+    { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+  ];
+  return defs.map((d, i) => ({
+    id: `ttype_${d.key}`, type_key: d.key, label: d.label, aliases: d.aliases, family: d.family,
+    enabled: true, custom: false, sort_order: i, created_at: now, updated_at: now,
+  }));
+}
+const TOOL_TYPES = makeToolTypesFixture();
+
 // The core regression fixture the plan's acceptance criterion 5 names
 // directly: trimmer + vector motor + $259.
 const TRIMMER_IDENTITY: any = {
@@ -108,7 +130,7 @@ async function main() {
   const { computeFeatureScore } = await import("../lib/competitor-scoring");
   const { matchesDifferentiator } = await import("../lib/differentiator-match");
   const { resolveLegacyBrandsForIdentity } = await import("../lib/legacy-brand-registry");
-  const { toolTypesForIndustry, GROOMING_TOOL_TYPES, BEAUTY_TOOL_TYPES } = await import("../lib/tool-type-taxonomy");
+  const { toolTypesForIndustry } = await import("../lib/tool-type-taxonomy");
   const { listMotorFamilies } = await import("../lib/db/motor-families");
   const { searchCuratedLegacyBrands } = await import("../lib/legacy-brand-discovery");
 
@@ -119,7 +141,7 @@ async function main() {
       { name: "Wahl Senior Clipper", top_feature_summary: "High-torque electromagnetic motor" },
       { name: "BaBylissPRO SnapFX Trimmer", top_feature_summary: "" },
     ];
-    const filtered = filterCandidatesByCategoryAndIdentity(candidates, "legacy", TRIMMER_IDENTITY);
+    const filtered = filterCandidatesByCategoryAndIdentity(candidates, "legacy", TRIMMER_IDENTITY, TOOL_TYPES);
     assert(filtered.length === 2, `only the 2 real trimmers survive (got ${filtered.length})`);
     assert(filtered.every((c: any) => !/clipper/i.test(c.name)), "zero \"clipper\"-titled candidates survive a trimmer analysis");
   }
@@ -152,7 +174,7 @@ async function main() {
     };
 
     const ctx = {
-      motorFamilies, ourMotor,
+      motorFamilies, toolTypes: TOOL_TYPES, ourMotor,
       ourSpecs: { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null },
       weights: { motor: 0.45, price: 0.35, feature: 0.2 },
       keyDiff: "full metal body",
@@ -199,8 +221,8 @@ async function main() {
     const context: any = { productName: "Apex Cordless Trimmer", targetMarket: "both", keyDiff: "full metal body", pricePoint: "$259.95" };
     const ourMotorLabel = "Vector";
 
-    const p1 = buildPhase1Prompt(context, TRIMMER_IDENTITY, TARGET_PRICE, ourMotorLabel);
-    const p2 = buildPhase2Prompt(context, TRIMMER_IDENTITY, TARGET_PRICE, undefined, ourMotorLabel);
+    const p1 = buildPhase1Prompt(context, TRIMMER_IDENTITY, TARGET_PRICE, TOOL_TYPES, ourMotorLabel);
+    const p2 = buildPhase2Prompt(context, TRIMMER_IDENTITY, TARGET_PRICE, TOOL_TYPES, undefined, ourMotorLabel);
 
     for (const [label, { systemPrompt, userPrompt }] of [["Phase 1", p1], ["Phase 2", p2]] as const) {
       const priorityStart = systemPrompt.indexOf("DISCOVERY PRIORITY");
@@ -224,7 +246,7 @@ async function main() {
 
   console.log("\n[4] resolveLegacyBrandsForIdentity — \"both\" merges the real seeded pro+retail clipper lists");
   {
-    const registry = await resolveLegacyBrandsForIdentity({ category: "Clippers", subcategory: "Professional Trimmer", targetUser: "both" });
+    const registry = await resolveLegacyBrandsForIdentity({ category: "Clippers", subcategory: "Professional Trimmer", targetUser: "both" }, TOOL_TYPES);
     assert(!!registry, "a \"both\" resolution for a clipper/trimmer/shaver category returns a merged registry, not null");
     const byName = new Map((registry?.brands || []).map(b => [b.brand_name, b]));
 
@@ -239,7 +261,7 @@ async function main() {
     assert(!!retailOnly && (retailOnly.sourceLists || []).length === 1 && retailOnly.sourceLists![0] === "retail", "a retail-only brand (Manscaped) is tagged with only [\"retail\"]");
 
     // The plain pro/consumer single-list path must stay unchanged.
-    const proOnlyRegistry = await resolveLegacyBrandsForIdentity({ category: "Clippers", subcategory: "Professional Trimmer", targetUser: "pro" });
+    const proOnlyRegistry = await resolveLegacyBrandsForIdentity({ category: "Clippers", subcategory: "Professional Trimmer", targetUser: "pro" }, TOOL_TYPES);
     assert(!!proOnlyRegistry && proOnlyRegistry.brands.every(b => !b.sourceLists), "the plain \"pro\" resolution is unaffected — no sourceLists tagging at all");
   }
 
@@ -262,24 +284,28 @@ async function main() {
 
   console.log("\n[6] toolTypesForIndustry — Industry never offers the other Industry's Tool Type family");
   {
-    const groomingOpts = toolTypesForIndustry("grooming-barbering");
-    const beautyOpts = toolTypesForIndustry("haircare-styling");
-    assert(groomingOpts.every(t => (GROOMING_TOOL_TYPES as string[]).includes(t)), "grooming-barbering only offers clipper/trimmer/shaver/combo");
-    assert(beautyOpts.every(t => (BEAUTY_TOOL_TYPES as string[]).includes(t)), "haircare-styling only offers dryer/flat_iron/curling_iron/hot_brush/other_styling/combo");
-    assert(!groomingOpts.includes("dryer" as any) && !groomingOpts.includes("flat_iron" as any), "grooming-barbering never offers a beauty-only tool type");
-    assert(!beautyOpts.includes("clipper" as any) && !beautyOpts.includes("trimmer" as any) && !beautyOpts.includes("shaver" as any), "haircare-styling never offers a grooming-only tool type");
-    assert(groomingOpts.includes("combo" as any) && beautyOpts.includes("combo" as any), "combo is valid under either industry");
+    // GROOMING_TOOL_TYPES/BEAUTY_TOOL_TYPES (fixed arrays) no longer exist —
+    // Tool Type is DB-backed now, so the equivalent check is on each
+    // returned row's own `family` column instead of a hardcoded key list.
+    const groomingOpts = toolTypesForIndustry("grooming-barbering", TOOL_TYPES);
+    const beautyOpts = toolTypesForIndustry("haircare-styling", TOOL_TYPES);
+    assert(groomingOpts.every(t => t.family === "clipper_trimmer_shaver" || t.family === null), "grooming-barbering only offers clipper/trimmer/shaver-family (or family-agnostic combo) tool types");
+    assert(beautyOpts.every(t => t.family === "beauty" || t.family === null), "haircare-styling only offers beauty-family (or family-agnostic combo) tool types");
+    assert(!groomingOpts.some(t => t.type_key === "dryer") && !groomingOpts.some(t => t.type_key === "flat_iron"), "grooming-barbering never offers a beauty-only tool type");
+    assert(!beautyOpts.some(t => t.type_key === "clipper") && !beautyOpts.some(t => t.type_key === "trimmer") && !beautyOpts.some(t => t.type_key === "shaver"), "haircare-styling never offers a grooming-only tool type");
+    assert(groomingOpts.some(t => t.type_key === "combo") && beautyOpts.some(t => t.type_key === "combo"), "combo is valid under either industry");
   }
 
   console.log("\n[7] searchCuratedLegacyBrands — zero \"clipper\" in any search term sent to Rainforest for a trimmer identity");
   {
     sawSearchTerms.length = 0;
-    const registry = await resolveLegacyBrandsForIdentity({ category: "Clippers", subcategory: "Professional Trimmer", targetUser: "pro" });
+    const registry = await resolveLegacyBrandsForIdentity({ category: "Clippers", subcategory: "Professional Trimmer", targetUser: "pro" }, TOOL_TYPES);
     await searchCuratedLegacyBrands(
       (registry?.brands || []).slice(0, 2),
       { category: TRIMMER_IDENTITY.category, subcategory: TRIMMER_IDENTITY.subcategory, toolType: "trimmer" },
       TARGET_PRICE,
       registry!.categorySlug,
+      TOOL_TYPES,
       undefined,
       undefined,
       "Vector"

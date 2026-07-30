@@ -13,6 +13,7 @@ import { deriveTdsFieldsFromAmazon } from "./tds-derive";
 import { applyWebSearchFallback } from "./web-search-fallback";
 import { finalizeFieldAnswers } from "./field-finalize";
 import { TDS_NOT_LISTED } from "./field-answer-state";
+import { listToolTypes } from "./db/tool-types";
 
 // Re-exported for backward compatibility — canonical definition moved to
 // lib/field-answer-state.ts so it can be shared without a circular import.
@@ -112,6 +113,7 @@ export async function generateTdsFields(
   projectId?: string
 ): Promise<Record<string, TdsFieldAnswer>> {
   const pipelineStart = Date.now();
+  const toolTypes = await listToolTypes();
   const schema = TDS_FIELD_SCHEMA;
   const snapshotText = JSON.stringify(snapshotRawData || {});
   const recordText = projectRecordText(project);
@@ -165,7 +167,7 @@ export async function generateTdsFields(
   // web search capability at all). The shared fallback's eligibility check
   // (lib/field-answer-state.ts's isRealAnswer) already treats
   // TDS_NOT_LISTED as "no value" — no separate TDS-specific check needed.
-  await applyWebSearchFallback(grounded, aiEligibleSchema, productTitle, pipelineStart, TDS_PIPELINE_TIME_BUDGET_MS, project.toolType as any);
+  await applyWebSearchFallback(grounded, aiEligibleSchema, productTitle, pipelineStart, TDS_PIPELINE_TIME_BUDGET_MS, toolTypes, project.toolType as any);
 
   // Terminal step — converts anything still unresolved into an honest
   // "Not determinable — {reason}" ("Awaiting internal input" for

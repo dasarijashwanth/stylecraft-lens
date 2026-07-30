@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
@@ -64,6 +65,17 @@ export default function ProjectDetailPage() {
   // hide it for that first frame instead.
   const [tdsEnabled, setTdsEnabled] = useState(true);
   const { open: openContactSupport } = useContactSupport();
+
+  // Fetched once here and threaded into downloadReportPDF/downloadTabPDF
+  // (lib/export-pdf.ts) — that module renders client-side, with no other
+  // existing tool-types fetch to reuse.
+  const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
+  useEffect(() => {
+    fetch("/api/tool-types")
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data.toolTypes)) setToolTypes(data.toolTypes); })
+      .catch(() => {});
+  }, []);
 
   const fetchProjectDetails = async () => {
     try {
@@ -290,7 +302,7 @@ export default function ProjectDetailPage() {
                   Link report
                 </button>
                 <button
-                  onClick={() => downloadReportPDF(selectedReport)}
+                  onClick={() => downloadReportPDF(selectedReport, toolTypes)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/20"
                   title="Export whole report PDF"
                 >
@@ -343,6 +355,7 @@ export default function ProjectDetailPage() {
                   activeTab={activeTab}
                   onUpdate={fetchProjectDetails}
                   projectId={id}
+                  toolTypes={toolTypes}
                 />
               ) : (
                 /* Empty state — scoped to just this canvas, not the whole
@@ -451,11 +464,13 @@ function ReportTabContent({
   activeTab,
   onUpdate,
   projectId,
+  toolTypes,
 }: {
   report: any;
   activeTab: ReportTab;
   onUpdate: () => void;
   projectId: string;
+  toolTypes: ToolTypeRow[];
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -508,7 +523,7 @@ function ReportTabContent({
         
         <div className="flex items-center gap-2">
           <button
-            onClick={() => downloadTabPDF(report, activeTab)}
+            onClick={() => downloadTabPDF(report, activeTab, toolTypes)}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-border bg-surface-3/50 hover:bg-surface-3 text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
           >
             <Download className="w-3.5 h-3.5" />

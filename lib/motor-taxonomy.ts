@@ -7,6 +7,7 @@ import type { MotorFamilyRow } from "./db/motor-families";
 import type { BrandedMotorNameRow } from "./db/branded-motor-names";
 import { resolveRegistryCategorySlug } from "./legacy-brand-registry";
 import type { IdentityCard } from "./product-identification";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export type MotorMatchTier = "exact" | "adjacent" | "different" | "unverified";
 
@@ -150,6 +151,6 @@ export function computeMotorMatchTier(ourFamilyKey: string | null, candidateFami
 // second classification system. A genuinely unrelated product
 // (resolveRegistryCategorySlug returns null) skips motor scoring entirely —
 // never forces a motor requirement onto something it doesn't apply to.
-export function isMotorizedCategory(identity: Pick<IdentityCard, "category" | "subcategory" | "targetUser">): boolean {
-  return resolveRegistryCategorySlug(identity) !== null;
+export function isMotorizedCategory(identity: Pick<IdentityCard, "category" | "subcategory" | "targetUser" | "toolType">, toolTypes: ToolTypeRow[]): boolean {
+  return resolveRegistryCategorySlug(identity, toolTypes) !== null;
 }

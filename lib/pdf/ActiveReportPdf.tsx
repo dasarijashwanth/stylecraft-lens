@@ -3,7 +3,8 @@ import { styles, CoverHeader, PageFooter, SectionHeader, TwoColRow, BulletList, 
 import { isPricingAnalysisEmpty } from "@/lib/pricing-analysis";
 import { summarizeSource } from "@/lib/provenance-format";
 import type { ProvenanceRow } from "@/lib/db/section-provenance";
-import { TOOL_TYPE_LABELS, type ToolType } from "@/lib/tool-type-taxonomy";
+import { getToolTypeLabel } from "@/lib/tool-type-taxonomy";
+import type { ToolTypeRow } from "@/lib/db/tool-types";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both (merged)" };
 
@@ -11,10 +12,10 @@ const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consu
 // as lib/export-pdf.ts's renderFormInputsLine — kept as its own small
 // function here since this file renders via @react-pdf/renderer elements,
 // not HTML strings.
-function formInputsSummary(formInputs: any): string | null {
+function formInputsSummary(formInputs: any, toolTypes: ToolTypeRow[]): string | null {
   if (!formInputs) return null;
   const industryLabel = formInputs.industry === "haircare-styling" ? "Hair Care & Styling" : formInputs.industry === "grooming-barbering" ? "Grooming & Barbering" : (formInputs.industry || "—");
-  const toolTypeLabel = formInputs.toolType && TOOL_TYPE_LABELS[formInputs.toolType as ToolType] ? TOOL_TYPE_LABELS[formInputs.toolType as ToolType] : "—";
+  const toolTypeLabel = formInputs.toolType ? getToolTypeLabel(formInputs.toolType, toolTypes) : "—";
   const marketLabel = formInputs.targetMarket && TARGET_MARKET_LABELS[formInputs.targetMarket] ? TARGET_MARKET_LABELS[formInputs.targetMarket] : "—";
   return [
     `Industry: ${industryLabel}`,
@@ -71,10 +72,12 @@ export function ActiveReportPdf({
   productName,
   projectName,
   report,
+  toolTypes,
 }: {
   productName: string;
   projectName?: string;
   report: any;
+  toolTypes: ToolTypeRow[];
 }) {
   const ca = report.competitive_analysis || {};
   const pricing = report.pricing_analysis || {};
@@ -94,7 +97,7 @@ export function ActiveReportPdf({
   const citations = ca.citations || [];
   const provenanceRows: ProvenanceRow[] = ca.section_provenance || [];
   const matchingWeights = ca.matching_weights;
-  const formInputsLine = formInputsSummary(ca.form_inputs);
+  const formInputsLine = formInputsSummary(ca.form_inputs, toolTypes);
   const registrySnapshot = ca.legacy_registry_snapshot || null;
   const curatedCount = largeComps.filter((c: any) => c.curated_brand === true).length;
 

@@ -20,8 +20,9 @@ import { scrapeProductPage } from "./scrape";
 import { resolveCacheKey } from "./product-cache-key";
 import { insertProvenance } from "./db/section-provenance";
 import { parsePriceToNumber } from "./pricing-analysis";
-import { TOOL_TYPE_LABELS, type ToolType } from "./tool-type-taxonomy";
+import { getToolTypeLabel, type ToolType } from "./tool-type-taxonomy";
 import type { LegacyBrandRow } from "./db/legacy-brands";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export interface BrandSiteResult {
   url: string;
@@ -97,6 +98,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 
 export interface BrandSiteAttemptContext {
   toolType: ToolType;
+  toolTypes: ToolTypeRow[];
   motorLabel?: string | null;
   analysisId?: string | null;
 }
@@ -109,7 +111,7 @@ export async function attemptBrandSite(brand: LegacyBrandRow, ctx: BrandSiteAtte
   const domains = (brand.official_domains || []).filter(Boolean);
   if (domains.length === 0 || !hasOpenAIKey) return null;
 
-  const toolTypeWord = (TOOL_TYPE_LABELS[ctx.toolType] || "product").toLowerCase();
+  const toolTypeWord = getToolTypeLabel(ctx.toolType, ctx.toolTypes).toLowerCase() || "product";
   const cacheKey = resolveCacheKey("", `brandsite:${brand.brand_name}:${domains.join(",")}:${ctx.toolType}:${ctx.motorLabel || ""}`);
 
   const cached = await getCachedBrandSite(cacheKey);
@@ -188,7 +190,7 @@ function hostnameLooksLikeBrand(url: string, brandName: string): boolean {
 // and most candidates already resolve motor type from cheaper sources.
 export async function attemptBrandSiteForEmergingBrand(brandName: string, ctx: BrandSiteAttemptContext): Promise<BrandSiteResult | null> {
   if (!hasOpenAIKey || !brandName) return null;
-  const toolTypeWord = (TOOL_TYPE_LABELS[ctx.toolType] || "product").toLowerCase();
+  const toolTypeWord = getToolTypeLabel(ctx.toolType, ctx.toolTypes).toLowerCase() || "product";
   const cacheKey = resolveCacheKey("", `brandsite-emerging:${brandName}:${ctx.toolType}:${ctx.motorLabel || ""}`);
 
   const cached = await getCachedBrandSite(cacheKey);

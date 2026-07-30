@@ -12,6 +12,8 @@ import { getAmazonProduct } from "./rainforest";
 import { scrapeProductPage } from "./scrape";
 import { getProject } from "./db/projects";
 import { ToolType, resolveToolType } from "./tool-type-taxonomy";
+import { listToolTypes } from "./db/tool-types";
+import type { ToolTypeRow } from "./db/tool-types";
 
 export type IdentityStatus = "verified" | "custom_unreleased" | "ambiguous";
 
@@ -48,10 +50,11 @@ export interface IdentityCard {
 // "trimmer") — the caller pauses and asks rather than picking one.
 function resolveIdentityToolType(
   card: Pick<IdentityCard, "category" | "subcategory" | "productName">,
-  context: AnalysisContext
+  context: AnalysisContext,
+  toolTypes: ToolTypeRow[]
 ): { toolType: ToolType | null; conflict?: IdentityCard["toolTypeConflict"] } {
   const evidenceText = `${card.category} ${card.subcategory} ${card.productName}`;
-  const fromEvidence = resolveToolType(evidenceText);
+  const fromEvidence = resolveToolType(evidenceText, toolTypes);
   const userSelected = context.toolType;
 
   if (userSelected) {
@@ -118,7 +121,7 @@ export function needsUserInput(card: IdentityCard, context: AnalysisContext): bo
   return card.identityStatus === "ambiguous" || (card.identityStatus === "custom_unreleased" && !card.category?.trim());
 }
 
-function normalizeIdentityCard(raw: any, context: AnalysisContext): IdentityCard {
+function normalizeIdentityCard(raw: any, context: AnalysisContext, toolTypes: ToolTypeRow[]): IdentityCard {
   const status: IdentityStatus =
     raw?.identityStatus === "verified" || raw?.identityStatus === "custom_unreleased" || raw?.identityStatus === "ambiguous"
       ? raw.identityStatus
@@ -126,7 +129,7 @@ function normalizeIdentityCard(raw: any, context: AnalysisContext): IdentityCard
   const category = (raw?.category || context.category || "").trim();
   const subcategory = (raw?.subcategory || category).trim();
   const productName = raw?.productName || context.productName;
-  const { toolType, conflict } = resolveIdentityToolType({ category, subcategory, productName }, context);
+  const { toolType, conflict } = resolveIdentityToolType({ category, subcategory, productName }, context, toolTypes);
   return {
     productName,
     brand: raw?.brand || null,
@@ -145,9 +148,9 @@ function normalizeIdentityCard(raw: any, context: AnalysisContext): IdentityCard
 }
 
 // Used when no AI provider is available, or the AI call/parse fails.
-function fallbackIdentity(context: AnalysisContext): IdentityCard {
+function fallbackIdentity(context: AnalysisContext, toolTypes: ToolTypeRow[]): IdentityCard {
   const category = context.category?.trim() || "";
-  const { toolType, conflict } = resolveIdentityToolType({ category, subcategory: category, productName: context.productName }, context);
+  const { toolType, conflict } = resolveIdentityToolType({ category, subcategory: category, productName: context.productName }, context, toolTypes);
   return {
     productName: context.productName,
     brand: null,
@@ -166,6 +169,11 @@ function fallbackIdentity(context: AnalysisContext): IdentityCard {
 }
 
 export async function identifyProduct(context: AnalysisContext): Promise<IdentityCard> {
+  // Fetched once here (identifyProduct's own natural async boundary) and
+  // threaded down to every resolveIdentityToolType call site below — never
+  // module-level state (see lib/tool-type-taxonomy.ts's header for why).
+  const toolTypes = await listToolTypes();
+
   // Strongest identity source: a linked project's own captured product
   // data (added to the projects table by the TDS real-time-snapshot
   // feature) — reused here rather than duplicating scrape/Rainforest logic.
@@ -193,7 +201,7 @@ export async function identifyProduct(context: AnalysisContext): Promise<Identit
   // fallback if OpenAI is unavailable/fails.
   if (hasOpenAIKey) {
     const card = await callOpenAiForJson(SYSTEM_PROMPT, userPrompt, "product identification", { webSearch: true, maxToolCalls: 4, timeoutMs: 30_000 });
-    if (card) return normalizeIdentityCard(card, context);
+    if (card) return normalizeIdentityCard(card, context, toolTypes);
   }
 
   if (hasGeminiKey) {
@@ -205,11 +213,11 @@ export async function identifyProduct(context: AnalysisContext): Promise<Identit
       });
       if (!response.text) throw new Error(`Empty identification response (finishReason: ${response.candidates?.[0]?.finishReason})`);
       const card = JSON.parse(cleanJsonString(response.text));
-      return normalizeIdentityCard(card, context);
+      return normalizeIdentityCard(card, context, toolTypes);
     } catch (err) {
       console.warn("Gemini product identification failed, falling back to context-derived identity:", err);
     }
   }
 
-  return fallbackIdentity(context);
+  return fallbackIdentity(context, toolTypes);
 }

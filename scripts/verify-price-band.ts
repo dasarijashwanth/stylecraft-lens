@@ -24,6 +24,28 @@ function assert(condition: boolean, message: string) {
   }
 }
 
+// Mirrors lib/memoryDb.ts's seedToolTypeDefaults exactly (the real
+// production seed) — covers every type this script's fixtures exercise.
+function makeToolTypesFixture(): any[] {
+  const now = new Date().toISOString();
+  const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
+    { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
+    { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
+    { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
+    { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
+    { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
+    { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
+    { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
+    { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
+    { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+  ];
+  return defs.map((d, i) => ({
+    id: `ttype_${d.key}`, type_key: d.key, label: d.label, aliases: d.aliases, family: d.family,
+    enabled: true, custom: false, sort_order: i, created_at: now, updated_at: now,
+  }));
+}
+const TOOL_TYPES = makeToolTypesFixture();
+
 function makeIdentity(category: string, subcategory: string, productName = "Test Product", toolType: string = "dryer"): any {
   return {
     productName,
@@ -96,7 +118,7 @@ async function main() {
     { name: "BaByliss Curling Iron Wand", top_feature_summary: "curling iron", asin: "B0000000AA", price: "$40.00" }, // wrong tool type — must be rejected
     { name: "Conair InfinitiPRO Dryer", top_feature_summary: "hair dryer", asin: "B000E0L3C0", amazon_url: "https://www.amazon.com/dp/B000E0L3C0", price: "$39.99" },
   ];
-  const filtered = filterCandidatesByCategoryAndIdentity(rawCandidates, "legacy", identity);
+  const filtered = filterCandidatesByCategoryAndIdentity(rawCandidates, "legacy", identity, TOOL_TYPES);
   assert(filtered.length === 2, `filter kept exactly the 2 real, correctly-categorized, non-self-named candidates (got ${filtered.length})`);
   assert(filtered.every((c: any) => c.name !== "Acme Turbo Dryer 3000 Pro Clone"), "candidate named after the analyzed product itself was rejected");
   assert(filtered.every((c: any) => c.name !== "BaByliss Curling Iron Wand"), "wrong-tool-type candidate was rejected");
@@ -114,7 +136,7 @@ async function main() {
     { name: "No Live Price, Good AI Claim", tier: "legacy", price_raw: null, ai_claimed_price: "$260.00" },
     { name: "No Price At All", tier: "legacy", price_raw: null, ai_claimed_price: null },
   ];
-  const gated = applyPriceBandGate(syntheticCandidates, targetPriceRaw, "legacy", identity, 5);
+  const gated = applyPriceBandGate(syntheticCandidates, targetPriceRaw, "legacy", identity, TOOL_TYPES, 5);
   assert(gated.some((c: any) => c.name === "In-Band A"), "in-band candidate A accepted");
   assert(gated.some((c: any) => c.name === "In-Band B"), "in-band candidate B accepted");
   assert(gated.some((c: any) => c.name === "In-Band C"), "in-band candidate C accepted");
@@ -130,7 +152,7 @@ async function main() {
     { name: "Only In-Band One", tier: "legacy", price_raw: 250, ai_claimed_price: "$250.00" },
     { name: "Widened Pick (step 1)", tier: "legacy", price_raw: 160, ai_claimed_price: "$160.00" }, // outside ±30%, inside ±40%
   ];
-  const gatedSparse = applyPriceBandGate(sparseCandidates, targetPriceRaw, "legacy", identity, 5);
+  const gatedSparse = applyPriceBandGate(sparseCandidates, targetPriceRaw, "legacy", identity, TOOL_TYPES, 5);
   const widenedPick = gatedSparse.find((c: any) => c.name === "Widened Pick (step 1)");
   assert(!!widenedPick, "an otherwise-rejected candidate is accepted once widening reaches its price");
   assert(widenedPick?.out_of_band === true, "a widened-in pick is tagged out_of_band: true");
@@ -139,7 +161,7 @@ async function main() {
   // ---- Section 5: the EXACT reported bug scenario — real curated fallback data ----
   console.log("\n[5] End-to-end: $259.95 target against real curated hair-dryer fallback data");
 
-  const fallbackScenario = applyPriceBandGate([], 259.95, "legacy", makeIdentity("hair styling", "hair dryer"), 5);
+  const fallbackScenario = applyPriceBandGate([], 259.95, "legacy", makeIdentity("hair styling", "hair dryer"), TOOL_TYPES, 5);
   const names = fallbackScenario.map((c: any) => c.name);
   assert(!names.some((n: string) => n.includes("Conair")), "Conair ($39.99) correctly EXCLUDED even at the widest band — the exact bug scenario");
   assert(!names.some((n: string) => n.includes("Revlon")), "Revlon ($39.88) correctly EXCLUDED even at the widest band");
