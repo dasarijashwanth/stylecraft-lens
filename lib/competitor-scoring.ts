@@ -47,6 +47,14 @@ export interface FeatureComparable {
   runTimeMinutes?: number | null;
   cordless?: boolean | null;
   buildMaterial?: string | null;
+  // Heat/Plate Technology tool types (flat iron/curling iron/hot brush) —
+  // plate material itself is the PRIMARY criterion (see
+  // lib/heat-tech-taxonomy.ts), scored separately from this feature
+  // overlap. Heater type and max temp class are ordinary comparable
+  // features, same tier as bladeTech/buildMaterial, so they never
+  // double-count the primary-criterion match.
+  heaterType?: string | null;
+  maxTempClass?: string | null;
 }
 
 function normalizeStr(s: string): string {
@@ -77,14 +85,30 @@ export function computeFeatureScore(ours: FeatureComparable, theirs: FeatureComp
   }
   if (ours.cordless != null && theirs.cordless != null) checks.push(ours.cordless === theirs.cordless);
   if (ours.buildMaterial && theirs.buildMaterial) checks.push(normalizeStr(ours.buildMaterial) === normalizeStr(theirs.buildMaterial));
+  if (ours.heaterType && theirs.heaterType) checks.push(normalizeStr(ours.heaterType) === normalizeStr(theirs.heaterType));
+  if (ours.maxTempClass && theirs.maxTempClass) checks.push(normalizeStr(ours.maxTempClass) === normalizeStr(theirs.maxTempClass));
 
   const structuralScore = checks.length === 0 ? 0 : checks.filter(Boolean).length / checks.length;
   if (differentiatorMatch === undefined || differentiatorMatch === null) return structuralScore;
   return structuralScore * 0.7 + (differentiatorMatch ? 1 : 0) * 0.3;
 }
 
+// Weights are entered as free-form relative-importance numbers (any
+// non-negative scale, no sum-to-1 constraint) — normalization happens HERE,
+// at use-time, so every caller (and the stored/snapshotted `matching_weights`
+// audit trail) keeps the raw values the user actually typed. Guards against
+// a zero/invalid sum (should never happen given scoring-profiles.ts's own
+// "at least one > 0" validation, but a composite score must never divide by
+// zero) by falling back to DEFAULT_WEIGHTS, which already sums to 1.
+function normalizeWeights(weights: MatchingWeights): MatchingWeights {
+  const sum = weights.motor + weights.price + weights.feature;
+  if (!sum || !isFinite(sum)) return DEFAULT_WEIGHTS;
+  return { motor: weights.motor / sum, price: weights.price / sum, feature: weights.feature / sum };
+}
+
 export function computeCompositeScore(motorScore: number, priceScore: number, featureScore: number, weights: MatchingWeights = DEFAULT_WEIGHTS): number {
-  return weights.motor * motorScore + weights.price * priceScore + weights.feature * featureScore;
+  const w = normalizeWeights(weights);
+  return w.motor * motorScore + w.price * priceScore + w.feature * featureScore;
 }
 
 // "Fill in priority order, max 1 product per brand until every listed

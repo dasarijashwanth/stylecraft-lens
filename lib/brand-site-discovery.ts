@@ -100,6 +100,13 @@ export interface BrandSiteAttemptContext {
   toolType: ToolType;
   toolTypes: ToolTypeRow[];
   motorLabel?: string | null;
+  // The noun phrase describing whichever criterion motorLabel actually
+  // represents ("motor technology"/"plate/heat technology") — defaults to
+  // "motor technology" for backward compatibility with existing callers
+  // (all pre-Fix-3 callers are genuinely motorized). Never omit this for a
+  // motorless styling tool, or the search prompt below would wrongly ask
+  // for "motor technology" on a flat iron/curling iron/hot brush.
+  criterionTerm?: string | null;
   analysisId?: string | null;
 }
 
@@ -123,7 +130,7 @@ export async function attemptBrandSite(brand: LegacyBrandRow, ctx: BrandSiteAtte
 
     try {
       const { data, citations } = await searchAndExtractJson<{ urls?: string[] }>(
-        `You are searching ONLY within ${brand.brand_name}'s official website (${domain}). Find up to 3 real product page URLs, actually sold on this exact domain, for a ${toolTypeWord}${ctx.motorLabel ? ` using ${ctx.motorLabel} motor technology` : ""}. Never invent a URL — only ones you actually found via search. Return ONLY valid JSON: {"urls": ["https://...", ...]}`,
+        `You are searching ONLY within ${brand.brand_name}'s official website (${domain}). Find up to 3 real product page URLs, actually sold on this exact domain, for a ${toolTypeWord}${ctx.motorLabel ? ` using ${ctx.motorLabel} ${ctx.criterionTerm ?? "motor technology"}` : ""}. Never invent a URL — only ones you actually found via search. Return ONLY valid JSON: {"urls": ["https://...", ...]}`,
         query,
         6_000,
         2
@@ -200,7 +207,7 @@ export async function attemptBrandSiteForEmergingBrand(brandName: string, ctx: B
   const query = `${brandName} official site ${toolTypeWord}`;
   try {
     const { data, citations } = await searchAndExtractJson<{ urls?: string[] }>(
-      `Find the OFFICIAL brand website (never Amazon, never a retailer, never a review/roundup site) for the brand "${brandName}", specifically a product page for a ${toolTypeWord}${ctx.motorLabel ? ` using ${ctx.motorLabel} motor technology` : ""}. Never invent a URL — only ones you actually found via search. Return ONLY valid JSON: {"urls": ["https://...", ...]}`,
+      `Find the OFFICIAL brand website (never Amazon, never a retailer, never a review/roundup site) for the brand "${brandName}", specifically a product page for a ${toolTypeWord}${ctx.motorLabel ? ` using ${ctx.motorLabel} ${ctx.criterionTerm ?? "motor technology"}` : ""}. Never invent a URL — only ones you actually found via search. Return ONLY valid JSON: {"urls": ["https://...", ...]}`,
       query,
       6_000,
       2

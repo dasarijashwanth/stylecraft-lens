@@ -17,6 +17,9 @@ export interface ToolTypeRow {
   label: string;
   aliases: string[];
   family: string | null; // 'clipper_trimmer_shaver' | 'beauty' | null (either)
+  // Which evidence-backed criterion dominates composite scoring for this
+  // type — see lib/heat-tech-taxonomy.ts / lib/motor-taxonomy.ts.
+  primary_criterion: "motor" | "heat_technology" | "none";
   enabled: boolean;
   custom: boolean;
   sort_order: number;
@@ -31,12 +34,22 @@ function mockToRow(t: MockToolType): ToolTypeRow {
     label: t.label,
     aliases: t.aliases,
     family: t.family,
+    primary_criterion: t.primaryCriterion,
     enabled: t.enabled,
     custom: t.custom,
     sort_order: t.sortOrder,
     created_at: t.createdAt.toISOString(),
     updated_at: t.updatedAt.toISOString(),
   };
+}
+
+// A new custom type's sensible default criterion, when the caller doesn't
+// explicitly specify one — clipper/trimmer/shaver-family types default to
+// 'motor' (the common case for that industry), beauty-family types default
+// to 'none' (safe default — heat_technology is a real, specific claim about
+// the product that shouldn't be assumed without the user opting in).
+function defaultPrimaryCriterion(family: string | null | undefined): "motor" | "heat_technology" | "none" {
+  return family === "clipper_trimmer_shaver" ? "motor" : "none";
 }
 
 export async function listToolTypes(): Promise<ToolTypeRow[]> {
@@ -53,8 +66,11 @@ export async function addToolType(input: {
   label: string;
   aliases?: string[];
   family?: string | null;
+  primaryCriterion?: "motor" | "heat_technology" | "none";
   custom?: boolean;
 }): Promise<ToolTypeRow> {
+  const primaryCriterion = input.primaryCriterion ?? defaultPrimaryCriterion(input.family);
+
   if (isSupabaseConfigured) {
     const { data: existing } = await supabaseAdmin
       .from("tool_types")
@@ -70,6 +86,7 @@ export async function addToolType(input: {
         label: input.label,
         aliases: input.aliases || [],
         family: input.family ?? null,
+        primary_criterion: primaryCriterion,
         custom: input.custom ?? true,
         sort_order: nextSort,
       })
@@ -87,6 +104,7 @@ export async function addToolType(input: {
     label: input.label,
     aliases: input.aliases || [],
     family: input.family ?? null,
+    primaryCriterion,
     enabled: true,
     custom: input.custom ?? true,
     sortOrder: nextSort,
@@ -99,13 +117,14 @@ export async function addToolType(input: {
 
 export async function updateToolType(
   id: string,
-  patch: { label?: string; aliases?: string[]; family?: string | null; enabled?: boolean; sortOrder?: number }
+  patch: { label?: string; aliases?: string[]; family?: string | null; primaryCriterion?: "motor" | "heat_technology" | "none"; enabled?: boolean; sortOrder?: number }
 ): Promise<ToolTypeRow | null> {
   if (isSupabaseConfigured) {
     const dbPatch: any = { updated_at: new Date().toISOString() };
     if (patch.label !== undefined) dbPatch.label = patch.label;
     if (patch.aliases !== undefined) dbPatch.aliases = patch.aliases;
     if (patch.family !== undefined) dbPatch.family = patch.family;
+    if (patch.primaryCriterion !== undefined) dbPatch.primary_criterion = patch.primaryCriterion;
     if (patch.enabled !== undefined) dbPatch.enabled = patch.enabled;
     if (patch.sortOrder !== undefined) dbPatch.sort_order = patch.sortOrder;
     const { data, error } = await supabaseAdmin.from("tool_types").update(dbPatch).eq("id", id).select().single();
@@ -118,6 +137,7 @@ export async function updateToolType(
   if (patch.label !== undefined) row.label = patch.label;
   if (patch.aliases !== undefined) row.aliases = patch.aliases;
   if (patch.family !== undefined) row.family = patch.family;
+  if (patch.primaryCriterion !== undefined) row.primaryCriterion = patch.primaryCriterion;
   if (patch.enabled !== undefined) row.enabled = patch.enabled;
   if (patch.sortOrder !== undefined) row.sortOrder = patch.sortOrder;
   row.updatedAt = new Date();

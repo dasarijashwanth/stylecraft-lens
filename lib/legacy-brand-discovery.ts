@@ -241,7 +241,14 @@ export async function searchCuratedLegacyBrands(
   ourMotorLabel?: string | null,
   // Testability hook for the brand-site pass's independent budget, same
   // reasoning as timeBudgetMsOverride above.
-  brandSiteTimeBudgetMsOverride?: number
+  brandSiteTimeBudgetMsOverride?: number,
+  // The noun phrase describing whichever criterion ourMotorLabel actually
+  // represents ("motor technology"/"plate/heat technology") — threaded into
+  // the brand-site pass's own search prompt (lib/brand-site-discovery.ts)
+  // so a motorless styling tool's brand-site search never asks for "motor
+  // technology". Defaults to "motor technology" for backward compatibility
+  // (every existing caller not yet updated is genuinely motorized).
+  criterionTerm?: string | null
 ): Promise<CuratedBrandCandidate[]> {
   const subcategory = identity.subcategory || identity.category || "";
   const isProfessional = categorySlug.includes("professional");
@@ -263,7 +270,7 @@ export async function searchCuratedLegacyBrands(
   // discovery is a one-shot "find the official page" per brand, it
   // doesn't need to repeat per price-widen-step the way Amazon search does.
   const brandSitePromise = identity.toolType && identity.toolType !== "combo"
-    ? discoverBrandSiteCandidates(brands, { toolType: identity.toolType, toolTypes, motorLabel: ourMotorLabel }, brandSiteTimeBudgetMsOverride ?? BRAND_SITE_PASS_TIME_BUDGET_MS)
+    ? discoverBrandSiteCandidates(brands, { toolType: identity.toolType, toolTypes, motorLabel: ourMotorLabel, criterionTerm }, brandSiteTimeBudgetMsOverride ?? BRAND_SITE_PASS_TIME_BUDGET_MS)
     : Promise.resolve(new Map<string, BrandSiteResult>());
 
   const amazonWidenLoopPromise = (async () => {

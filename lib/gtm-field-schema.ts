@@ -115,6 +115,15 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("motor_run_time", "Motor", "Run Time"),
   field("motor_speed", "Motor", "Speed"),
 
+  // Heat/Plate Technology — the parallel section for motorless styling
+  // tools (flat iron/curling iron/hot brush, see lib/db/tool-types.ts's
+  // primary_criterion column). Present in the schema for every product
+  // like Motor is; resolves to "Not listed"/N/A for tool types where it
+  // doesn't apply, the same way Motor already does for non-motorized ones.
+  field("plate_material", "Heat/Plate Technology", "Plate Material"),
+  field("heater_type", "Heat/Plate Technology", "Heater Type"),
+  field("max_temp_class", "Heat/Plate Technology", "Max Temp"),
+
   // Blades
   field("blade_name", "Blades", "Blade Name"),
   field("fixed_blade", "Blades", "Fixed Blade"),

@@ -1023,3 +1023,95 @@ INSERT INTO tool_types (type_key, label, aliases, family, sort_order) VALUES
     ('other_styling', 'Other Styling Tool', ARRAY[]::text[], 'beauty', 7),
     ('combo', 'Combo / Multi-Tool Kit', ARRAY[]::text[], NULL, 8)
 ON CONFLICT (type_key) DO NOTHING;
+
+-- 29. SCORING PROFILES — replaces the old singleton
+-- competitor_matching_config (Section 16-ish, now deprecated/unused, kept
+-- for history) with per-tool-type weight profiles. `type_key IS NULL` is
+-- the global default/fallback row — used for any tool type (including
+-- every custom one) with no row of its own. Weights are stored EXACTLY as
+-- entered (no forced sum-to-1) — free-form relative-importance numbers;
+-- normalization happens at use-time in lib/competitor-scoring.ts's
+-- computeCompositeScore, never at write time, so the raw entered values
+-- stay auditable (see matching_weights snapshot on analyses.phase1_result/
+-- phase2_result). motor_weight/price_weight/feature_weight column names
+-- are kept from the old table for continuity — motor_weight represents
+-- whichever PRIMARY CRITERION applies for that tool type (Motor for
+-- motorized types, Heat/Plate Technology for motorless ones per Section
+-- 30's tool_types.primary_criterion column) — this avoids a signature
+-- rename across the ~30 files that already pass a `{motor,price,feature}`
+-- shaped weights object.
+CREATE TABLE IF NOT EXISTS scoring_profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    type_key VARCHAR(50) UNIQUE,
+    motor_weight NUMERIC(6,3) NOT NULL,
+    price_weight NUMERIC(6,3) NOT NULL,
+    feature_weight NUMERIC(6,3) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE scoring_profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for scoring_profiles" ON scoring_profiles FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO scoring_profiles (type_key, motor_weight, price_weight, feature_weight) VALUES
+    (NULL, 45, 35, 20),
+    ('clipper', 45, 35, 20),
+    ('trimmer', 45, 35, 20),
+    ('shaver', 45, 35, 20),
+    ('dryer', 35, 35, 30),
+    ('flat_iron', 40, 35, 25),
+    ('curling_iron', 40, 35, 25),
+    ('hot_brush', 40, 35, 25)
+ON CONFLICT (type_key) DO NOTHING;
+
+-- 30. TOOL TYPE PRIMARY CRITERION — which evidence-backed criterion
+-- dominates composite scoring for this type: 'motor' (the existing motor
+-- taxonomy/extraction cascade), 'heat_technology' (the new parallel
+-- plate/heat taxonomy — Section 31/32 — for motorless styling tools),
+-- or 'none' (neither applies; that weight slot should be 0 in the type's
+-- scoring_profiles row, letting price+features carry the full score via
+-- computeCompositeScore's own normalization, no special-case code needed).
+ALTER TABLE tool_types ADD COLUMN IF NOT EXISTS primary_criterion VARCHAR(30) NOT NULL DEFAULT 'motor';
+UPDATE tool_types SET primary_criterion = 'motor' WHERE type_key IN ('clipper', 'trimmer', 'shaver', 'dryer');
+UPDATE tool_types SET primary_criterion = 'heat_technology' WHERE type_key IN ('flat_iron', 'curling_iron', 'hot_brush');
+UPDATE tool_types SET primary_criterion = 'none' WHERE type_key IN ('other_styling', 'combo');
+
+-- 31. HEAT/PLATE TECHNOLOGY FAMILIES — a full parallel to motor_families
+-- (Section 25) for motorless styling tools (flat iron/curling iron/hot
+-- brush), minus the motor-specific `modifier`/`adjacent_families` concepts
+-- (not needed here — match tiers are exact/different/unverified only, see
+-- lib/heat-tech-taxonomy.ts's computeHeatTechMatchTier).
+CREATE TABLE IF NOT EXISTS heat_tech_families (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    family_key VARCHAR(50) UNIQUE NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    aliases TEXT[] NOT NULL DEFAULT '{}',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE heat_tech_families ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for heat_tech_families" ON heat_tech_families FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO heat_tech_families (family_key, label, aliases, sort_order) VALUES
+    ('titanium', 'Titanium', ARRAY['titanium', 'titanium plates', 'titanium-coated', 'titanium coated'], 0),
+    ('ceramic', 'Ceramic', ARRAY['ceramic', 'ceramic plates', 'ceramic-coated', 'ceramic coated'], 1),
+    ('tourmaline', 'Tourmaline', ARRAY['tourmaline', 'tourmaline plates', 'tourmaline-ceramic', 'tourmaline ceramic'], 2),
+    ('ionic', 'Ionic', ARRAY['ionic', 'ion technology', 'negative ion'], 3)
+ON CONFLICT (family_key) DO NOTHING;
+
+-- 32. BRANDED HEAT/PLATE TECHNOLOGY NAMES — a full parallel to
+-- branded_motor_names (Section 24): a brand's own proprietary plate/heat
+-- marketing name (e.g. a fictional "NanoGlide Plates"), scoped to the one
+-- brand that owns it, never a global alias.
+CREATE TABLE IF NOT EXISTS branded_heat_tech_names (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    brand_name VARCHAR(255) NOT NULL,
+    branded_term VARCHAR(255) NOT NULL,
+    family_key VARCHAR(50) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE branded_heat_tech_names ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for branded_heat_tech_names" ON branded_heat_tech_names FOR ALL USING (true) WITH CHECK (true);

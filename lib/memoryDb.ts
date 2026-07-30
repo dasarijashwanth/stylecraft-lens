@@ -280,8 +280,46 @@ export interface MockToolType {
   label: string;
   aliases: string[];
   family: string | null; // 'clipper_trimmer_shaver' | 'beauty' | null (either)
+  // Which evidence-backed criterion dominates composite scoring for this
+  // type — 'motor' (existing motor taxonomy/extraction), 'heat_technology'
+  // (the parallel plate/heat taxonomy for motorless styling tools), or
+  // 'none' (neither applies — that scoring_profiles weight slot should be 0).
+  primaryCriterion: "motor" | "heat_technology" | "none";
   enabled: boolean;
   custom: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockScoringProfile {
+  id: string;
+  // null = the global default/fallback profile, used for any tool type
+  // (including every custom one) with no row of its own.
+  typeKey: string | null;
+  motorWeight: number;
+  priceWeight: number;
+  featureWeight: number;
+  updatedAt: Date;
+}
+
+export interface MockHeatTechFamily {
+  id: string;
+  familyKey: string;
+  label: string;
+  aliases: string[];
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MockBrandedHeatTechName {
+  id: string;
+  brandName: string;
+  brandedTerm: string;
+  familyKey: string;
+  enabled: boolean;
   sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
@@ -455,6 +493,13 @@ class MemoryDatabase {
   // mappings) — starts empty, same precedent as legacy brands' official_domains.
   brandedMotorNames: MockBrandedMotorName[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
+  // Replaces competitorMatchingConfig above — per-tool-type weight profiles.
+  // Same always-seeded precedent as motorFamilies/toolTypes.
+  scoringProfiles: MockScoringProfile[] = [];
+  // Full parallel to motorFamilies/brandedMotorNames for the new Heat/Plate
+  // Technology criterion (motorless styling tools) — same seeding precedent.
+  heatTechFamilies: MockHeatTechFamily[] = [];
+  brandedHeatTechNames: MockBrandedHeatTechName[] = [];
   // Same always-seeded precedent — real default Help content, not an
   // empty admin table. Votes/search-misses start empty (real usage data).
   faqs: MockFaq[] = [];
@@ -480,6 +525,8 @@ class MemoryDatabase {
     this.seedBrandRegistryDefaults();
     this.seedMotorFamilyDefaults();
     this.seedToolTypeDefaults();
+    this.seedScoringProfileDefaults();
+    this.seedHeatTechFamilyDefaults();
     this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
@@ -734,21 +781,22 @@ class MemoryDatabase {
     });
   }
 
-  // Mirrors supabase_schema.sql's Section 28 tool_types seed INSERT exactly
-  // — the 9 built-in types Tool Type used to be a fixed TS union of.
+  // Mirrors supabase_schema.sql's Section 28 tool_types seed INSERT
+  // (+ Section 30's primary_criterion backfill) exactly — the 9 built-in
+  // types Tool Type used to be a fixed TS union of.
   seedToolTypeDefaults() {
     if (this.toolTypes.length > 0) return;
     const now = new Date();
-    const defs: { key: string; label: string; aliases: string[]; family: string | null }[] = [
-      { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver" },
-      { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver" },
-      { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty" },
-      { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty" },
-      { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty" },
-      { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty" },
-      { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver" },
-      { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty" },
-      { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null },
+    const defs: { key: string; label: string; aliases: string[]; family: string | null; primaryCriterion: "motor" | "heat_technology" | "none" }[] = [
+      { key: "trimmer", label: "Trimmer", aliases: ["trimmer", "beard trimmer", "detailer", "outliner", "liner", "edger"], family: "clipper_trimmer_shaver", primaryCriterion: "motor" },
+      { key: "shaver", label: "Shaver", aliases: ["shaver", "foil shaver", "rotary shaver", "electric shaver", "razor"], family: "clipper_trimmer_shaver", primaryCriterion: "motor" },
+      { key: "dryer", label: "Hair Dryer", aliases: ["dryer", "blow dryer", "diffuser"], family: "beauty", primaryCriterion: "motor" },
+      { key: "flat_iron", label: "Flat Iron", aliases: ["flat iron", "straightener", "hair iron"], family: "beauty", primaryCriterion: "heat_technology" },
+      { key: "curling_iron", label: "Curling Iron", aliases: ["curling iron", "curling wand", "curler", "wand"], family: "beauty", primaryCriterion: "heat_technology" },
+      { key: "hot_brush", label: "Hot Brush", aliases: ["hot brush", "styling brush", "heated brush"], family: "beauty", primaryCriterion: "heat_technology" },
+      { key: "clipper", label: "Clipper", aliases: ["clipper"], family: "clipper_trimmer_shaver", primaryCriterion: "motor" },
+      { key: "other_styling", label: "Other Styling Tool", aliases: [], family: "beauty", primaryCriterion: "none" },
+      { key: "combo", label: "Combo / Multi-Tool Kit", aliases: [], family: null, primaryCriterion: "none" },
     ];
     defs.forEach((d, i) => {
       this.toolTypes.push({
@@ -757,8 +805,64 @@ class MemoryDatabase {
         label: d.label,
         aliases: d.aliases,
         family: d.family,
+        primaryCriterion: d.primaryCriterion,
         enabled: true,
         custom: false,
+        sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 29 scoring_profiles seed INSERT
+  // exactly — replaces the old singleton competitorMatchingConfig with
+  // per-tool-type weight profiles. typeKey: null is the global default row.
+  seedScoringProfileDefaults() {
+    if (this.scoringProfiles.length > 0) return;
+    const now = new Date();
+    const defs: { key: string | null; motor: number; price: number; feature: number }[] = [
+      { key: null, motor: 45, price: 35, feature: 20 },
+      { key: "clipper", motor: 45, price: 35, feature: 20 },
+      { key: "trimmer", motor: 45, price: 35, feature: 20 },
+      { key: "shaver", motor: 45, price: 35, feature: 20 },
+      { key: "dryer", motor: 35, price: 35, feature: 30 },
+      { key: "flat_iron", motor: 40, price: 35, feature: 25 },
+      { key: "curling_iron", motor: 40, price: 35, feature: 25 },
+      { key: "hot_brush", motor: 40, price: 35, feature: 25 },
+    ];
+    defs.forEach(d => {
+      this.scoringProfiles.push({
+        id: `sprof_${d.key ?? "default"}`,
+        typeKey: d.key,
+        motorWeight: d.motor,
+        priceWeight: d.price,
+        featureWeight: d.feature,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 31 heat_tech_families seed INSERT
+  // exactly — a full parallel to seedMotorFamilyDefaults for the new
+  // motorless-styling-tool criterion, minus the motor-specific
+  // modifier/adjacent_families concepts (not needed here).
+  seedHeatTechFamilyDefaults() {
+    if (this.heatTechFamilies.length > 0) return;
+    const now = new Date();
+    const defs: { key: string; label: string; aliases: string[] }[] = [
+      { key: "titanium", label: "Titanium", aliases: ["titanium", "titanium plates", "titanium-coated", "titanium coated"] },
+      { key: "ceramic", label: "Ceramic", aliases: ["ceramic", "ceramic plates", "ceramic-coated", "ceramic coated"] },
+      { key: "tourmaline", label: "Tourmaline", aliases: ["tourmaline", "tourmaline plates", "tourmaline-ceramic", "tourmaline ceramic"] },
+      { key: "ionic", label: "Ionic", aliases: ["ionic", "ion technology", "negative ion"] },
+    ];
+    defs.forEach((d, i) => {
+      this.heatTechFamilies.push({
+        id: `htfam_${d.key}`,
+        familyKey: d.key,
+        label: d.label,
+        aliases: d.aliases,
+        enabled: true,
         sortOrder: i,
         createdAt: now,
         updatedAt: now,

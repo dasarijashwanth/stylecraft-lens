@@ -197,7 +197,15 @@ export function buildToolTypePromptGuard(toolType: string, toolTypes: ToolTypeRo
   // against, so the guard never warns against a type that could never
   // have been confused with this one in the first place.
   const conflicting = toolTypes.filter(t => t.enabled && t.type_key !== toolType && t.aliases.length > 0).map(t => t.label).join(", ");
-  return `The product is a ${label}. Use ONLY ${label.toLowerCase()} information. Do NOT use, reference, or borrow data about ${conflicting} or any other conflicting tool type — including sibling products from the same brand or collection, even ones sharing the same motor technology or model line. If provided source material describes a different tool type, ignore that material entirely. If you cannot complete the task with ${label.toLowerCase()}-specific data, say so rather than substituting data from a different tool type.`;
+  // Which criterion this exact tool type is actually evaluated on — this
+  // shared guard feeds every prompt in the pipeline (Phase 0-3, GTM
+  // generation, web-search fallback, key-features/review/news extraction),
+  // so "motor technology" must never leak into it for a motorless flat
+  // iron/curling iron/hot brush (Fix 3's "Motor never appears anywhere for
+  // motorless types" requirement) or a 'none'-criterion type.
+  const criterionRow = toolTypes.find(t => t.type_key === toolType);
+  const criterionPhrase = criterionRow?.primary_criterion === "heat_technology" ? "plate/heat technology" : criterionRow?.primary_criterion === "none" ? "technology" : "motor technology";
+  return `The product is a ${label}. Use ONLY ${label.toLowerCase()} information. Do NOT use, reference, or borrow data about ${conflicting} or any other conflicting tool type — including sibling products from the same brand or collection, even ones sharing the same ${criterionPhrase} or model line. If provided source material describes a different tool type, ignore that material entirely. If you cannot complete the task with ${label.toLowerCase()}-specific data, say so rather than substituting data from a different tool type.`;
 }
 
 // Maps the StyleCraft catalog's own already-correct product.category

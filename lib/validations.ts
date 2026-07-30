@@ -21,6 +21,16 @@ export const MOTOR_FAMILY_VALUES = [
   "magnetic", "pivot", "rotary", "brushless", "vector", "ac_motor", "dc_motor",
 ] as const;
 
+// The parallel fixed set for the Heat/Plate Technology criterion (motorless
+// styling tools — flat iron/curling iron/hot brush, see lib/db/tool-types.ts's
+// primary_criterion column). Must stay in sync with the 4 enabled rows
+// seeded by supabase_schema.sql's Section 31 migration /
+// lib/memoryDb.ts's seedHeatTechFamilyDefaults, same convention as
+// MOTOR_FAMILY_VALUES above.
+export const HEAT_TECH_FAMILY_VALUES = [
+  "titanium", "ceramic", "tourmaline", "ionic",
+] as const;
+
 // Normalizes and validates any URL input
 export function normalizeUrl(input: string): string | null {
   if (!input || input.trim() === "") return null;
@@ -90,8 +100,26 @@ export const AnalysisFormSchema = z.object({
   motorFamily: z.enum(MOTOR_FAMILY_VALUES).optional(),
   motorBrandedName: z.string().max(150).optional(),
   motorTech: z.string().optional(),
+  // The parallel Heat/Plate Technology fields — populated instead of
+  // motorFamily/motorBrandedName/motorTech when the selected tool type's
+  // primary_criterion is 'heat_technology' (see lib/analysisEngine.ts's
+  // resolvePrimaryCriterion). heatTechRaw mirrors motorTech's role: a
+  // legacy free-text fallback, never written by the form going forward.
+  heatTechFamily: z.enum(HEAT_TECH_FAMILY_VALUES).optional(),
+  heatTechBrandedName: z.string().max(150).optional(),
+  heatTechRaw: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
   pricePoint: RequiredPricePoint,
+  // Optional "Adjust weights for this analysis" override (lib/db/scoring-
+  // profiles.ts) — free-form relative-importance numbers, no sum-to-1
+  // constraint (see lib/competitor-scoring.ts's computeCompositeScore for
+  // where normalization actually happens). When omitted, the pipeline
+  // resolves the selected tool type's own scoring profile instead.
+  weightOverride: z.object({
+    motor: z.number().min(0),
+    price: z.number().min(0),
+    feature: z.number().min(0),
+  }).refine(w => w.motor + w.price + w.feature > 0, "At least one criterion must be > 0").optional(),
 });
 
 export const NewProjectSchema = z.object({

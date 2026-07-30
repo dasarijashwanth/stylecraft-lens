@@ -1,10 +1,10 @@
 // lib/db/competitor-matching-config.ts
-// Singleton config row for the composite-score weights
-// (lib/competitor-scoring.ts's computeCompositeScore) — admin-editable at
-// /dashboard/admin/competitor-matching without a deploy. No generic
-// settings/config table existed anywhere in this app before this; a
-// dedicated small table (rather than a KV blob) matches this codebase's
-// existing preference for explicit typed columns over schemaless config.
+// DEPRECATED — superseded by lib/db/scoring-profiles.ts's per-tool-type
+// scoring_profiles table (this was a single global weight row with no
+// per-tool-type concept at all). Kept, never deleted, per this repo's
+// additive-only schema convention; no code path calls this module anymore
+// once the scoring-profiles migration lands. Left here only as the
+// original historical shape.
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
@@ -29,16 +29,13 @@ export async function getMatchingWeights(): Promise<CompetitorMatchingWeights> {
   return { motor_weight: c.motorWeight, price_weight: c.priceWeight, feature_weight: c.featureWeight, updated_at: c.updatedAt.toISOString() };
 }
 
-// Normalizes to sum 1.0 defensively — an admin typo (e.g. weights summing to
-// 0.9) must never silently under-weight every candidate's composite score.
-function normalize(motor: number, price: number, feature: number): { motor: number; price: number; feature: number } {
-  const sum = motor + price + feature;
-  if (!sum || !isFinite(sum)) return DEFAULT_WEIGHTS as any;
-  return { motor: motor / sum, price: price / sum, feature: feature / sum };
-}
-
 export async function updateMatchingWeights(input: { motor: number; price: number; feature: number }): Promise<CompetitorMatchingWeights> {
-  const { motor, price, feature } = normalize(input.motor, input.price, input.feature);
+  // No forced normalization — raw values are stored as entered (auditability);
+  // normalization now happens at use-time in lib/competitor-scoring.ts's
+  // computeCompositeScore. Superseded by scoring-profiles.ts's own
+  // validation (reject all-zero) — this function is unused dead code path
+  // but kept honest in case anything still calls it.
+  const { motor, price, feature } = input;
 
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin

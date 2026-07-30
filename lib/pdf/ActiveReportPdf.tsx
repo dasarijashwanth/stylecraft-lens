@@ -17,14 +17,23 @@ function formInputsSummary(formInputs: any, toolTypes: ToolTypeRow[]): string | 
   const industryLabel = formInputs.industry === "haircare-styling" ? "Hair Care & Styling" : formInputs.industry === "grooming-barbering" ? "Grooming & Barbering" : (formInputs.industry || "—");
   const toolTypeLabel = formInputs.toolType ? getToolTypeLabel(formInputs.toolType, toolTypes) : "—";
   const marketLabel = formInputs.targetMarket && TARGET_MARKET_LABELS[formInputs.targetMarket] ? TARGET_MARKET_LABELS[formInputs.targetMarket] : "—";
+  // Only whichever criterion actually applied to this tool type gets a
+  // line — never a "Motor Technology: unspecified" line for a motorless
+  // flat iron/curling iron/hot brush analysis, and never both lines at
+  // once.
+  const criterionLine = formInputs.motorTech
+    ? `Motor Technology: ${formInputs.motorTech}`
+    : formInputs.heatTechRaw
+    ? `Plate/Heat Technology: ${formInputs.heatTechRaw}`
+    : null;
   return [
     `Industry: ${industryLabel}`,
     `Tool Type: ${toolTypeLabel}`,
     `Target Market: ${marketLabel}`,
-    `Motor Technology: ${formInputs.motorTech || "unspecified"}`,
+    criterionLine,
     `Target Price: ${formInputs.pricePoint || "unspecified"}`,
     `Differentiator: ${formInputs.keyDiff || "none given"}`,
-  ].join("  ·  ");
+  ].filter(Boolean).join("  ·  ");
 }
 
 // Never render a bare "—" for a competitor with partial data — omit the
@@ -32,10 +41,15 @@ function formInputsSummary(formInputs: any, toolTypes: ToolTypeRow[]): string | 
 // literally nothing was resolved for this competitor.
 function competitorSummary(c: any): string {
   const parts: string[] = [];
-  // Motor Type leads — it's the #1 selection criterion, not incidental spec
-  // data (lib/analysisEngine.ts's selectByCompositeScore).
+  // The primary-criterion match leads — it's the #1 selection criterion,
+  // not incidental spec data (lib/analysisEngine.ts's
+  // selectByCompositeScore). motor_*/heat_tech_* fields are mutually
+  // exclusive per competitor — never both, never a Motor line for a
+  // motorless flat iron/curling iron/hot brush competitor.
   if (c.motor_match_tier === "unverified") parts.push("Motor: Unverified");
   else if (c.motor_type) parts.push(`Motor: ${c.motor_type}`);
+  else if (c.heat_tech_match_tier === "unverified") parts.push("Plate/Heat: Unverified");
+  else if (c.heat_tech_type) parts.push(`Plate/Heat: ${c.heat_tech_type}`);
   if (c.price) parts.push(c.price);
   if (c.rating) parts.push(`★${c.rating}${c.review_count ? ` (${c.review_count} reviews)` : ""}`);
   else if (c.review_count) parts.push(`${c.review_count} reviews`);
@@ -46,7 +60,7 @@ function competitorSummary(c: any): string {
   // (lib/legacy-brand-discovery.ts's brand-site pass) — distinct from the
   // "unverified" tag above, which means a lookup was attempted and failed.
   if (c.sources?.brand_site && !c.sources?.amazon) parts.push("Sold via brand/pro channels — not on Amazon");
-  if (c.motor_unverified_fallback) parts.push("last-resort pick, motor type unconfirmed");
+  if (c.motor_unverified_fallback) parts.push(c.heat_tech_type || c.heat_tech_match_tier ? "last-resort pick, plate/heat technology unconfirmed" : "last-resort pick, motor type unconfirmed");
   // Only the exception is flagged — a curated-list pick is the expected
   // default and needs no extra tag; a competitor the curated registry
   // couldn't fill (lib/analysisEngine.ts's AI top-up fallback) does.
@@ -55,17 +69,23 @@ function competitorSummary(c: any): string {
 }
 
 // Same per-competitor evidence block as lib/export-pdf.ts's
-// renderCompetitorEvidenceHTML — motor evidence quote+source and which
-// source(s) contributed, at a finer grain than the section-level
+// renderCompetitorEvidenceHTML — primary-criterion evidence quote+source and
+// which source(s) contributed, at a finer grain than the section-level
 // ProvenanceAppendix below.
 function competitorEvidenceLine(c: any): string {
-  const motorLine = c.motor_match_tier === "unverified"
-    ? "not confirmed from any source"
-    : `${c.motor_type || "unknown"} (${c.motor_match_tier})${c.motor_source_quote ? ` — "${c.motor_source_quote}"` : ""}`;
+  const isHeatTech = !c.motor_match_tier && !!c.heat_tech_match_tier;
+  const criterionLabel = isHeatTech ? "Plate/Heat" : "Motor";
+  const criterionLine = isHeatTech
+    ? (c.heat_tech_match_tier === "unverified"
+        ? "not confirmed from any source"
+        : `${c.heat_tech_type || "unknown"} (${c.heat_tech_match_tier})${c.heat_tech_source_quote ? ` — "${c.heat_tech_source_quote}"` : ""}`)
+    : (c.motor_match_tier === "unverified"
+        ? "not confirmed from any source"
+        : `${c.motor_type || "unknown"} (${c.motor_match_tier})${c.motor_source_quote ? ` — "${c.motor_source_quote}"` : ""}`);
   const sourceLabel = c.sources?.brand_site && c.sources?.amazon ? "brand site + Amazon"
     : c.sources?.brand_site ? `brand site (${c.sources.brand_site.url})`
     : c.sources?.amazon ? "Amazon" : "unspecified";
-  return `Motor: ${motorLine} · Source: ${sourceLabel}`;
+  return `${criterionLabel}: ${criterionLine} · Source: ${sourceLabel}`;
 }
 
 export function ActiveReportPdf({
@@ -197,13 +217,32 @@ export function ActiveReportPdf({
               Analysis inputs — {formInputsLine}
             </Text>
           )}
-          {matchingWeights && (
-            <Text style={{ fontSize: 8, color: "#666666", marginBottom: 8, lineHeight: 1.4 }}>
-              Competitors are prioritized by motor type match ({Math.round(matchingWeights.motor * 100)}%), then price
-              proximity ({Math.round(matchingWeights.price * 100)}%) — absolute for legacy brands, relative to each
-              indie brand&apos;s own lineup — then comparable feature/spec overlap ({Math.round(matchingWeights.feature * 100)}%).
-            </Text>
-          )}
+          {matchingWeights && (() => {
+            // Weights are stored EXACTLY as entered (free-form relative-
+            // importance numbers, no sum-to-1 constraint) — normalization
+            // happens here at render time, same as
+            // lib/competitor-scoring.ts's computeCompositeScore, so this
+            // print-out reflects what actually happened during scoring.
+            const sum = matchingWeights.motor + matchingWeights.price + matchingWeights.feature;
+            const pct = (w: number) => (sum > 0 ? Math.round((w / sum) * 100) : 0);
+            // The weights object's "motor" slot is generic across tool
+            // types (see lib/db/scoring-profiles.ts) — labeled here per
+            // whichever criterion this analysis's own competitors were
+            // actually scored on, never a hardcoded "Motor" for a motorless
+            // flat iron/curling iron/hot brush analysis.
+            const allComps = [...largeComps, ...emergingComps];
+            const criterionLabel = allComps.some((c: any) => c.heat_tech_match_tier) && !allComps.some((c: any) => c.motor_match_tier)
+              ? "Heat/Plate Technology"
+              : "Motor";
+            return (
+              <Text style={{ fontSize: 8, color: "#666666", marginBottom: 8, lineHeight: 1.4 }}>
+                Weights (as entered): {criterionLabel} {matchingWeights.motor}, Price {matchingWeights.price}, Features {matchingWeights.feature} → effective {pct(matchingWeights.motor)}/{pct(matchingWeights.price)}/{pct(matchingWeights.feature)}%.
+                Competitors are prioritized by {criterionLabel.toLowerCase()} match ({pct(matchingWeights.motor)}%), then price
+                proximity ({pct(matchingWeights.price)}%) — absolute for legacy brands, relative to each
+                indie brand&apos;s own lineup — then comparable feature/spec overlap ({pct(matchingWeights.feature)}%).
+              </Text>
+            );
+          })()}
           {(largeComps.length > 0 || emergingComps.length > 0) && (
             <View style={{ marginBottom: 8 }}>
               <Text style={{ fontSize: 10, fontWeight: 700, marginBottom: 4 }}>Per-Competitor Evidence</Text>

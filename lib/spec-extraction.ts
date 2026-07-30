@@ -15,6 +15,12 @@ const RUNTIME_LABELS = ["run time", "runtime", "battery life"];
 const CORDLESS_KEYWORDS = ["cordless", "wireless", "battery-powered", "battery powered"];
 const CORDED_KEYWORDS = ["corded", "plug-in", "plug in", "wired"];
 const BLADE_KEYWORDS = ["stainless steel", "ceramic", "titanium", "carbon steel", "self-sharpening"];
+// Heat/Plate Technology tool types (flat iron/curling iron/hot brush) —
+// heater type and max temp class are ordinary comparable features, never
+// the primary criterion itself (that's plate material, see
+// lib/heat-tech-taxonomy.ts/lib/heat-tech-extraction.ts).
+const HEATER_TYPE_LABELS = ["heater type", "heating element", "heater"];
+const MAX_TEMP_LABELS = ["max temp", "maximum temperature", "temperature range", "heat setting"];
 
 function findSpecValue(specAndAttr: RainforestSpec[], labels: string[]): string | null {
   for (const spec of specAndAttr) {
@@ -66,6 +72,8 @@ export function extractCompetitorSpecs(product: {
     cordless: detectCordless([...texts, ...specAndAttr.map(s => `${s.name} ${s.value}`)]),
     buildMaterial: findSpecValue(specAndAttr, ["material"]),
     bladeTech: findBladeMention(texts),
+    heaterType: findSpecValue(specAndAttr, HEATER_TYPE_LABELS),
+    maxTempClass: findSpecValue(specAndAttr, MAX_TEMP_LABELS),
   };
 }
 
@@ -76,12 +84,14 @@ export function extractCompetitorSpecs(product: {
 // project (ad-hoc analyses simply skip feature scoring gracefully, since
 // computeFeatureScore already treats "nothing comparable" as 0, not an error).
 export function extractOurSpecsFromTds(tdsFields: Record<string, string> | null): FeatureComparable {
-  if (!tdsFields) return { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null };
+  if (!tdsFields) return { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null, heaterType: null, maxTempClass: null };
 
   const rpmAnswer = tdsFields["motor_rpm"];
   const runTimeAnswer = tdsFields["motor_run_time"];
   const materialAnswer = tdsFields["material"];
   const bladeAnswer = tdsFields["blade_name"];
+  const heaterTypeAnswer = tdsFields["heater_type"];
+  const maxTempAnswer = tdsFields["max_temp_class"];
 
   return {
     rpm: isRealAnswer(rpmAnswer) ? parseNumber(rpmAnswer) : null,
@@ -89,5 +99,7 @@ export function extractOurSpecsFromTds(tdsFields: Record<string, string> | null)
     cordless: null, // no dedicated TDS field for this today — left unknown rather than guessed
     buildMaterial: isRealAnswer(materialAnswer) ? materialAnswer : null,
     bladeTech: isRealAnswer(bladeAnswer) ? (findBladeMention([bladeAnswer]) || bladeAnswer) : null,
+    heaterType: isRealAnswer(heaterTypeAnswer) ? heaterTypeAnswer : null,
+    maxTempClass: isRealAnswer(maxTempAnswer) ? maxTempAnswer : null,
   };
 }

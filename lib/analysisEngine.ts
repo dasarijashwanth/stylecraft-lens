@@ -28,9 +28,15 @@ import { listMotorFamilies } from "./db/motor-families";
 import type { MotorFamilyRow } from "./db/motor-families";
 import { listBrandedMotorNames } from "./db/branded-motor-names";
 import type { BrandedMotorNameRow } from "./db/branded-motor-names";
-import { getMatchingWeights } from "./db/competitor-matching-config";
+import { getScoringProfileForToolType } from "./db/scoring-profiles";
 import { isMotorizedCategory, computeMotorMatchTier } from "./motor-taxonomy";
 import { extractCompetitorMotorType, resolveOurMotorType, type OurMotorResolution } from "./motor-extraction";
+import { listHeatTechFamilies } from "./db/heat-tech-families";
+import type { HeatTechFamilyRow } from "./db/heat-tech-families";
+import { listBrandedHeatTechNames } from "./db/branded-heat-tech-names";
+import type { BrandedHeatTechNameRow } from "./db/branded-heat-tech-names";
+import { computeHeatTechMatchTier } from "./heat-tech-taxonomy";
+import { extractCompetitorHeatTech, resolveOurHeatTech, type OurHeatTechResolution } from "./heat-tech-extraction";
 import {
   computeMotorScore, computePriceScoreAbsolute, computePriceScoreRelative, computeFeatureScore,
   computeCompositeScore, dedupeToOnePerBrand, type MatchingWeights,
@@ -47,6 +53,38 @@ import { matchesDifferentiator } from "./differentiator-match";
 function formatMotorLabel(motor: OurMotorResolution | null): string | null {
   if (!motor) return null;
   return motor.modifierLabel ? `${motor.modifierLabel} ${motor.label}` : motor.label;
+}
+
+// Criterion-agnostic wording for buildPhase1Prompt/buildPhase2Prompt — the
+// literal word "motor" must never appear in a discovery prompt for a
+// motorless tool type (see Fix 3's "no motor terms in discovery queries"
+// requirement). `term` is the noun phrase used in a full sentence ("motor
+// technology"/"plate/heat technology"); `typeWord` is the shorter form used
+// in "different X type"/"X mismatch" phrasing. Both are null for 'none'
+// (no criterion applies at all — neither word should appear).
+function criterionPhrasing(kind: "motor" | "heat_technology" | "none"): { term: string | null; typeWord: string | null } {
+  if (kind === "heat_technology") return { term: "plate/heat technology", typeWord: "plate/heat" };
+  if (kind === "motor") return { term: "motor technology", typeWord: "motor" };
+  return { term: null, typeWord: null };
+}
+
+// Which evidence-backed criterion dominates this product's competitor
+// scoring — 'motor' (clipper/trimmer/shaver/dryer), 'heat_technology'
+// (flat iron/curling iron/hot brush — motorless styling tools), or 'none'
+// (neither applies, e.g. "other_styling"/"combo"). Replaces the old
+// family-based isMotorizedCategory() gate for this decision — that gate
+// grouped every "beauty"-family type together (dryer AND flat iron AND
+// other_styling all shared family:"beauty"), which is exactly why
+// motorless types were wrongly treated as needing a motor answer before
+// this column existed. Falls back to isMotorizedCategory's own keyword-
+// sniffing only for the rare case of a toolType with no matching
+// tool_types row at all (should never happen for a real live analysis,
+// but never crash over it) — preserves old behavior for that edge case.
+// Exported for the same offline-verify reason as buildPhase1Prompt below.
+export function resolvePrimaryCriterion(identity: Pick<IdentityCard, "category" | "subcategory" | "targetUser" | "toolType">, toolTypes: ToolTypeRow[]): "motor" | "heat_technology" | "none" {
+  const row = identity.toolType ? toolTypes.find(t => t.type_key === identity.toolType) : undefined;
+  if (row) return row.primary_criterion;
+  return isMotorizedCategory(identity, toolTypes) ? "motor" : "none";
 }
 
 export interface AnalysisContext {
@@ -73,6 +111,14 @@ export interface AnalysisContext {
   motorFamily?: string;
   motorBrandedName?: string;
   motorTech?: string;
+  // Full parallel to motorFamily/motorTech above, for tool types whose
+  // primary_criterion is 'heat_technology' (flat iron/curling iron/hot
+  // brush) instead of 'motor' — see lib/heat-tech-taxonomy.ts/
+  // lib/heat-tech-extraction.ts. heatTechRaw is the legacy free-text
+  // fallback, mirroring motorTech's role exactly.
+  heatTechFamily?: string;
+  heatTechBrandedName?: string;
+  heatTechRaw?: string;
   keyDiff?: string;
   pricePoint?: string;
   // Set via the pause-and-ask answer route when resolveOurLineupTier
@@ -88,6 +134,12 @@ export interface AnalysisContext {
   // back to evidence-based resolution, pausing to ask if that's also
   // unresolvable — never guesses).
   toolType?: ToolType;
+  // Set via the analyze/new-project forms' "Adjust weights for this
+  // analysis" expander — when present, always wins over the resolved
+  // per-tool-type lib/db/scoring-profiles.ts profile for this one run
+  // (never persisted back to the profile unless the form's own "Save to
+  // profile" action is used, a separate explicit API call).
+  weightOverride?: MatchingWeights;
 }
 
 // Snapshotted onto the phase1/phase2 result alongside matching_weights
@@ -103,6 +155,9 @@ function buildFormInputsSnapshot(context: AnalysisContext) {
     motorFamily: context.motorFamily ?? null,
     motorBrandedName: context.motorBrandedName ?? null,
     motorTech: context.motorTech ?? null,
+    heatTechFamily: context.heatTechFamily ?? null,
+    heatTechBrandedName: context.heatTechBrandedName ?? null,
+    heatTechRaw: context.heatTechRaw ?? null,
     keyDiff: context.keyDiff ?? null,
     pricePoint: context.pricePoint ?? null,
   };
@@ -834,6 +889,13 @@ export interface CompositeScoringContext {
   // absent degrades gracefully to generic-alias-only matching.
   brandedNames?: BrandedMotorNameRow[];
   ourMotor: OurMotorResolution | null;
+  // Which criterion actually drives scoring for this identity's tool type
+  // (lib/tool-type-taxonomy.ts's primary_criterion) — selectByCompositeScore
+  // branches on this instead of unconditionally running the motor cascade.
+  primaryCriterion: "motor" | "heat_technology" | "none";
+  heatTechFamilies?: HeatTechFamilyRow[];
+  brandedHeatTechNames?: BrandedHeatTechNameRow[];
+  ourHeatTech: OurHeatTechResolution | null;
   ourSpecs: import("./competitor-scoring").FeatureComparable;
   weights: MatchingWeights;
   // Indie-only — absent/undefined for legacy, in which case price scoring
@@ -892,9 +954,36 @@ export function selectByCompositeScore(
   }
 
   const scored = accepted.map(c => {
-    const motorExtraction = extractCompetitorMotorType({ ...c, title: c.name }, ctx.motorFamilies, { brand: c.brand, brandedNames: ctx.brandedNames });
-    const motorMatchTier = computeMotorMatchTier(ctx.ourMotor?.familyKey ?? null, motorExtraction?.familyKey ?? null, ctx.motorFamilies);
-    const motorScore = computeMotorScore(motorMatchTier);
+    // Which cascade actually runs is decided once, per ctx.primaryCriterion
+    // (lib/tool-types.ts's primary_criterion column) — 'motor' unchanged
+    // from before this branch existed; 'heat_technology' runs the parallel
+    // heat-tech cascade instead and populates heat_tech_* fields, never
+    // motor_*; 'none' runs neither, criterionScore stays 0 (a neutral
+    // constant identical for every candidate — doesn't discriminate, same
+    // reasoning as the existing ourMotor-null-degrades-gracefully comment
+    // above this function).
+    let motorExtraction: ReturnType<typeof extractCompetitorMotorType> = null;
+    let motorMatchTier: ReturnType<typeof computeMotorMatchTier> | null = null;
+    let motorScore = 0;
+    let heatTechExtraction: ReturnType<typeof extractCompetitorHeatTech> = null;
+    let heatTechMatchTier: ReturnType<typeof computeHeatTechMatchTier> | null = null;
+    let heatTechScore = 0;
+    let criterionScore = 0;
+
+    if (ctx.primaryCriterion === "heat_technology") {
+      heatTechExtraction = extractCompetitorHeatTech({ ...c, title: c.name }, ctx.heatTechFamilies || [], { brand: c.brand, brandedNames: ctx.brandedHeatTechNames });
+      heatTechMatchTier = computeHeatTechMatchTier(ctx.ourHeatTech?.familyKey ?? null, heatTechExtraction?.familyKey ?? null);
+      // computeMotorScore's tier->number mapping is criterion-agnostic
+      // (HeatTechMatchTier is a literal subset of MotorMatchTier) — reused
+      // as-is rather than duplicating the same 3-branch function.
+      heatTechScore = computeMotorScore(heatTechMatchTier);
+      criterionScore = heatTechScore;
+    } else if (ctx.primaryCriterion === "motor") {
+      motorExtraction = extractCompetitorMotorType({ ...c, title: c.name }, ctx.motorFamilies, { brand: c.brand, brandedNames: ctx.brandedNames });
+      motorMatchTier = computeMotorMatchTier(ctx.ourMotor?.familyKey ?? null, motorExtraction?.familyKey ?? null, ctx.motorFamilies);
+      motorScore = computeMotorScore(motorMatchTier);
+      criterionScore = motorScore;
+    }
 
     let priceScore: number;
     let priceLogic: "absolute" | "relative" = "absolute";
@@ -924,32 +1013,51 @@ export function selectByCompositeScore(
     const candidateText = [c.name, ...(Array.isArray(c.feature_bullets) ? c.feature_bullets : []), c.description || ""].filter(Boolean).join(" ");
     const differentiatorMatch = ctx.keyDiff ? matchesDifferentiator(ctx.keyDiff, candidateText) : null;
     const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs, differentiatorMatch);
-    const compositeScore = computeCompositeScore(motorScore, priceScore, featureScore, ctx.weights);
+    const compositeScore = computeCompositeScore(criterionScore, priceScore, featureScore, ctx.weights);
 
     const outOfBand = !isWithinBand(c._resolvedPrice, primaryBand);
     const { _resolvedPrice, ai_claimed_price, ...rest } = c;
 
     return {
       ...rest,
-      motor_type: motorExtraction?.label ?? null,
-      motor_family_key: motorExtraction?.familyKey ?? null,
-      motor_modifier: motorExtraction?.modifierLabel ?? null,
-      // The brand's own proprietary marketing name (e.g. "IN3"), shown
-      // alongside the canonical family — null unless normalizeMotor resolved
-      // it via the branded map (lib/db/branded-motor-names.ts).
-      motor_branded_name: motorExtraction?.brandedName ?? null,
-      motor_source_quote: motorExtraction?.sourceQuote ?? null,
-      // Which cascade step actually resolved the match, and where to see it
-      // for yourself — surfaced next to motor_source_quote in the UI/PDF so
-      // "how do we know this" is answerable for motor type like every other
-      // section already is. url falls back to wherever the candidate's data
-      // came from (brand-site page when that's the source, else the Amazon
-      // listing itself) since a spec/bullet/title match doesn't have its
-      // own distinct URL.
-      motor_confirmed_via: motorExtraction?.confirmedVia ?? null,
-      motor_source_url: motorExtraction ? (c.sources?.brand_site?.url || c.amazon_url || null) : null,
-      motor_match_tier: motorMatchTier,
-      motor_score: motorScore,
+      // Motor fields are present ONLY when this tool type's primary
+      // criterion is 'motor' — for 'heat_technology'/'none' types these
+      // keys are absent entirely, never null-filled, so no Motor row/label
+      // can ever accidentally render for a motorless product.
+      ...(ctx.primaryCriterion === "motor" ? {
+        motor_type: motorExtraction?.label ?? null,
+        motor_family_key: motorExtraction?.familyKey ?? null,
+        motor_modifier: motorExtraction?.modifierLabel ?? null,
+        // The brand's own proprietary marketing name (e.g. "IN3"), shown
+        // alongside the canonical family — null unless normalizeMotor
+        // resolved it via the branded map (lib/db/branded-motor-names.ts).
+        motor_branded_name: motorExtraction?.brandedName ?? null,
+        motor_source_quote: motorExtraction?.sourceQuote ?? null,
+        // Which cascade step actually resolved the match, and where to see
+        // it for yourself — surfaced next to motor_source_quote in the
+        // UI/PDF so "how do we know this" is answerable for motor type like
+        // every other section already is. url falls back to wherever the
+        // candidate's data came from (brand-site page when that's the
+        // source, else the Amazon listing itself) since a spec/bullet/title
+        // match doesn't have its own distinct URL.
+        motor_confirmed_via: motorExtraction?.confirmedVia ?? null,
+        motor_source_url: motorExtraction ? (c.sources?.brand_site?.url || c.amazon_url || null) : null,
+        motor_match_tier: motorMatchTier,
+        motor_score: motorScore,
+      } : {}),
+      // Heat/Plate Technology — the parallel field set for motorless
+      // styling tools (flat iron/curling iron/hot brush), same shape and
+      // same reasoning as the motor_* block above.
+      ...(ctx.primaryCriterion === "heat_technology" ? {
+        heat_tech_type: heatTechExtraction?.label ?? null,
+        heat_tech_family_key: heatTechExtraction?.familyKey ?? null,
+        heat_tech_branded_name: heatTechExtraction?.brandedName ?? null,
+        heat_tech_source_quote: heatTechExtraction?.sourceQuote ?? null,
+        heat_tech_confirmed_via: heatTechExtraction?.confirmedVia ?? null,
+        heat_tech_source_url: heatTechExtraction ? (c.sources?.brand_site?.url || c.amazon_url || null) : null,
+        heat_tech_match_tier: heatTechMatchTier,
+        heat_tech_score: heatTechScore,
+      } : {}),
       price_score: priceScore,
       price_logic: priceLogic,
       their_lineup_percentile: theirLineupPercentile,
@@ -976,8 +1084,19 @@ export function selectByCompositeScore(
     // verified pick already seated (never let an ungrounded pick from a
     // brand crowd out — or duplicate — a brand that already has a real,
     // motor-evidenced competitor).
-    const verifiedPool = scored.filter(c => c.motor_match_tier !== "unverified");
-    const unverifiedPool = scored.filter(c => c.motor_match_tier === "unverified");
+    //
+    // getEffectiveTier makes this criterion-aware: 'motor' types read
+    // motor_match_tier exactly as before; 'heat_technology' types read
+    // heat_tech_match_tier instead; 'none' types (the criterion doesn't
+    // apply at all) always resolve "exact" so they're never held back
+    // waiting for evidence of a criterion that was never going to exist.
+    const getEffectiveTier = (c: any): string => {
+      if (ctx.primaryCriterion === "motor") return c.motor_match_tier ?? "unverified";
+      if (ctx.primaryCriterion === "heat_technology") return c.heat_tech_match_tier ?? "unverified";
+      return "exact";
+    };
+    const verifiedPool = scored.filter(c => getEffectiveTier(c) !== "unverified");
+    const unverifiedPool = scored.filter(c => getEffectiveTier(c) === "unverified");
     final = tier === "legacy" ? dedupeToOnePerBrand(verifiedPool, limit) : verifiedPool.slice(0, limit);
 
     if (final.length < limit) {
@@ -1037,9 +1156,16 @@ export function selectByCompositeScore(
         weaknesses: [],
         recent_news: [],
         top_feature_summary: "",
-        motor_type: null,
-        motor_match_tier: "unverified",
-        motor_score: computeMotorScore("unverified"),
+        ...(ctx.primaryCriterion === "motor" ? {
+          motor_type: null,
+          motor_match_tier: "unverified",
+          motor_score: computeMotorScore("unverified"),
+        } : {}),
+        ...(ctx.primaryCriterion === "heat_technology" ? {
+          heat_tech_type: null,
+          heat_tech_match_tier: "unverified",
+          heat_tech_score: computeMotorScore("unverified"),
+        } : {}),
         price_score: computePriceScoreAbsolute(fbPrice, targetPriceRaw),
         price_logic: "absolute",
         feature_score: 0,
@@ -1361,7 +1487,15 @@ interface Phase2ResolvedContext {
   motorFamilies: any;
   brandedNames: BrandedMotorNameRow[];
   toolTypes: ToolTypeRow[];
+  primaryCriterion: "motor" | "heat_technology" | "none";
   ourMotor: any;
+  heatTechFamilies: HeatTechFamilyRow[];
+  brandedHeatTechNames: BrandedHeatTechNameRow[];
+  ourHeatTech: OurHeatTechResolution | null;
+  // Whichever criterion applies' resolved label — "our motor" wording kept
+  // for minimal footprint across the ~10 call sites that already thread
+  // this through discovery prompts; holds the Heat/Plate Technology label
+  // instead when primaryCriterion is 'heat_technology'.
   ourMotorLabel: string | null;
   weights: any;
   ourSpecs: any;
@@ -1398,10 +1532,13 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   // of the static getKnownBrandsHint list, AND registry brands are hard-
   // filtered out of the results below — a real guarantee, not just a
   // prompt-level request the model could ignore.
-  // Same motor resolution as Phase 1 (cheap re-read — already resolved
-  // once, or already in context.motorTech from that phase's own pause).
+  // Same motor/heat-tech resolution as Phase 1 (cheap re-read — already
+  // resolved once, or already in context.motorTech/heatTechRaw from that
+  // phase's own pause).
   const motorFamilies = await listMotorFamilies();
   const brandedNames = await listBrandedMotorNames();
+  const heatTechFamilies = await listHeatTechFamilies();
+  const brandedHeatTechNames = await listBrandedHeatTechNames();
   // Same "cheap re-read" precedent as motorFamilies/brandedNames above —
   // never module-level state (see this file's own header on why).
   const toolTypes = await listToolTypes();
@@ -1412,9 +1549,11 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
     : null;
   const brandHintOverride = registry ? registry.brands.flatMap(b => [b.brand_name, ...b.aliases]) : undefined;
 
-  const motorRequired = isMotorizedCategory(identityCard, toolTypes);
-  const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
-  if (motorRequired && !ourMotor) {
+  const primaryCriterion = resolvePrimaryCriterion(identityCard, toolTypes);
+  const ourMotor = primaryCriterion === "motor"
+    ? await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies)
+    : null;
+  if (primaryCriterion === "motor" && !ourMotor) {
     return {
       ok: false,
       pendingQuestion: {
@@ -1424,8 +1563,24 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
       },
     };
   }
-  const ourMotorLabel = formatMotorLabel(ourMotor);
-  const weights = await getMatchingWeights();
+  const ourHeatTech = primaryCriterion === "heat_technology"
+    ? await resolveOurHeatTech({ heatTechFamily: context.heatTechFamily, heatTechRaw: context.heatTechRaw, projectId: context.projectId }, identityCard, heatTechFamilies)
+    : null;
+  if (primaryCriterion === "heat_technology" && !ourHeatTech) {
+    return {
+      ok: false,
+      pendingQuestion: {
+        question: `What plate/heat technology does ${context.productName} use? (e.g. titanium, ceramic, tourmaline)`,
+        field: "heatTechType",
+        placeholder: "e.g. titanium",
+      },
+    };
+  }
+  const ourMotorLabel = primaryCriterion === "heat_technology" ? (ourHeatTech?.label ?? null) : formatMotorLabel(ourMotor);
+  // A per-analysis override (set on the analyze/new-project forms' "Adjust
+  // weights for this analysis" expander) always wins over the resolved
+  // per-tool-type profile — never module-level state, resolved fresh here.
+  const weights = context.weightOverride ?? await getScoringProfileForToolType(identityCard.toolType);
   const ourSpecs = context.projectId
     ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
     : extractOurSpecsFromTds(null);
@@ -1452,7 +1607,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
     };
   }
 
-  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
+  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
 }
 
 // Shared by Phase 1's and Phase 2a's multi-round fill loop (see the header
@@ -1656,16 +1811,21 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
       }
 
-      // Motor type is priority #1 (dominates selection, per the matching
-      // spec) — resolved once, before any discovery runs. isMotorizedCategory
-      // reuses the exact category-keyword resolution the legacy registry
-      // already does; a genuinely unrelated product skips the requirement
+      // Our product's primary criterion is priority #1 (dominates selection,
+      // per the matching spec) — resolved once, before any discovery runs.
+      // resolvePrimaryCriterion reads the identified tool type's own
+      // primary_criterion column ('motor'/'heat_technology'/'none'); a
+      // genuinely unrelated product ('none') skips the requirement
       // entirely rather than being forced to answer an inapplicable question.
       const motorFamilies = await listMotorFamilies();
       const brandedNames = await listBrandedMotorNames();
-      const motorRequired = isMotorizedCategory(identityCard, toolTypes);
-      const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
-      if (motorRequired && !ourMotor) {
+      const heatTechFamilies = await listHeatTechFamilies();
+      const brandedHeatTechNames = await listBrandedHeatTechNames();
+      const primaryCriterion = resolvePrimaryCriterion(identityCard, toolTypes);
+      const ourMotor = primaryCriterion === "motor"
+        ? await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies)
+        : null;
+      if (primaryCriterion === "motor" && !ourMotor) {
         const question = {
           question: `What motor technology does ${context.productName} use? (e.g. "brushless rotary", "magnetic/vector", "pivot")`,
           field: "motorType",
@@ -1674,8 +1834,22 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await setPendingQuestion(analysisId, question);
         return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
       }
-      const ourMotorLabel = formatMotorLabel(ourMotor);
-      const weights = await getMatchingWeights();
+      const ourHeatTech = primaryCriterion === "heat_technology"
+        ? await resolveOurHeatTech({ heatTechFamily: context.heatTechFamily, heatTechRaw: context.heatTechRaw, projectId: context.projectId }, identityCard, heatTechFamilies)
+        : null;
+      if (primaryCriterion === "heat_technology" && !ourHeatTech) {
+        const question = {
+          question: `What plate/heat technology does ${context.productName} use? (e.g. titanium, ceramic, tourmaline)`,
+          field: "heatTechType",
+          placeholder: "e.g. titanium",
+        };
+        await setPendingQuestion(analysisId, question);
+        return { analysisId, phase: 1, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: question };
+      }
+      const ourMotorLabel = primaryCriterion === "heat_technology" ? (ourHeatTech?.label ?? null) : formatMotorLabel(ourMotor);
+      // A per-analysis override always wins over the resolved per-tool-type
+      // profile — never module-level state, resolved fresh here.
+      const weights = context.weightOverride ?? await getScoringProfileForToolType(identityCard.toolType);
       const ourSpecs = context.projectId
         ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
         : extractOurSpecsFromTds(null);
@@ -1683,9 +1857,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         motorFamilies,
         brandedNames,
         toolTypes,
+        primaryCriterion,
         ourMotor,
+        heatTechFamilies,
+        brandedHeatTechNames,
+        ourHeatTech,
         ourSpecs,
-        weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+        weights,
         keyDiff: context.keyDiff ?? null,
       };
 
@@ -1755,7 +1933,9 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             toolTypes,
             writeBrandProgress,
             undefined,
-            ourMotorLabel
+            ourMotorLabel,
+            undefined,
+            criterionPhrasing(primaryCriterion).term
           );
 
           let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard, toolTypes);
@@ -1822,8 +2002,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         } else {
           const aiResult: any = await withAiFallback(
             "Phase 1",
-            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel) : null,
-            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel) : null,
+            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, undefined, primaryCriterion) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, undefined, primaryCriterion) : null,
             () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
             startTime
           );
@@ -1845,8 +2025,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         const extraInstruction = fillRoundExtraInstruction(fill.round, "legacy");
         const aiResult: any = await withAiFallback(
           `Phase 1 (fill round ${fill.round})`,
-          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction) : null,
-          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction) : null,
+          hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion) : null,
           () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
           startTime
         );
@@ -1945,7 +2125,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await setPendingQuestion(analysisId, resolved.pendingQuestion);
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: resolved.pendingQuestion };
       }
-      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, ourMotor, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
+      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
 
       if (record.phase2_result?.__phase2Stage !== "discovered") {
         // ----------------------------------------------------
@@ -1966,8 +2146,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         const extraInstruction = fill.round === 1 ? undefined : fillRoundExtraInstruction(fill.round, "emerging");
         const result: any = await withAiFallback(
           fill.round === 1 ? "Phase 2" : `Phase 2 (fill round ${fill.round})`,
-          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction) : null,
-          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction) : null,
+          hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion) : null,
           () => generateMockPhase2(context, identityCard, targetPriceRaw, toolTypes, phase1Result),
           startTime
         );
@@ -1988,8 +2168,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // authoritative selection with full indie lineups happens in 2b
         // regardless of what this trial predicts.
         const trialCtx: CompositeScoringContext = {
-          motorFamilies, brandedNames, toolTypes, ourMotor, ourSpecs, ourLineupPercentile, indieLineups: new Map(),
-          weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+          motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor,
+          heatTechFamilies, brandedHeatTechNames, ourHeatTech,
+          ourSpecs, ourLineupPercentile, indieLineups: new Map(),
+          weights,
           keyDiff: context.keyDiff ?? null,
         };
         const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "emerging", identityCard, 5, trialCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
@@ -2041,7 +2223,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         if (ungrounded.length > 0) {
           const brandSiteHits = await discoverBrandSiteCandidatesForEmerging(
             ungrounded.map((c: any) => c.brand),
-            { toolType: identityCard.toolType, toolTypes, motorLabel: ourMotorLabel, analysisId }
+            { toolType: identityCard.toolType, toolTypes, motorLabel: ourMotorLabel, analysisId, criterionTerm: criterionPhrasing(primaryCriterion).term }
           );
           result.competitors = result.competitors.map((c: any) => {
             const hit = brandSiteHits.get(c.brand);
@@ -2067,9 +2249,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         motorFamilies,
         brandedNames,
         toolTypes,
+        primaryCriterion,
         ourMotor,
+        heatTechFamilies,
+        brandedHeatTechNames,
+        ourHeatTech,
         ourSpecs,
-        weights: { motor: Number(weights.motor_weight), price: Number(weights.price_weight), feature: Number(weights.feature_weight) },
+        weights,
         ourLineupPercentile,
         indieLineups,
         keyDiff: context.keyDiff ?? null,
@@ -2432,13 +2618,14 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
 // verify suite inspect the exact generated prompt text (e.g. assert zero
 // literal "clipper" substrings for a trimmer identity) without needing a
 // live AI call.
-export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string) {
+export function buildPhase1Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
   const brandHint = getKnownBrandsHint(identity.category);
   const attributesLine = identity.keyAttributes.length ? identity.keyAttributes.join(", ") : "—";
   const targetDisplay = context.pricePoint || identity.priceObserved?.value || `$${targetPriceRaw.toFixed(2)}`;
   const band = computePriceBand(targetPriceRaw, "legacy", 0);
   const tierKeyword = deriveTierKeyword(targetPriceRaw);
   const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
+  const { term: criterionTerm, typeWord: criterionTypeWord } = criterionPhrasing(primaryCriterion);
 
   const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? getToolTypeLabel(identity.toolType, toolTypes) : (identity.subcategory || identity.category);
   const combinedExampleQuery = `{brand} ${ourMotorLabel || ""} ${toolTypeLabel} near ${targetDisplay}`.replace(/\s+/g, " ").trim();
@@ -2453,7 +2640,7 @@ Your task: Research up to 8 ESTABLISHED, LARGE market leaders that compete with 
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
 For each brand, find their ONE best matching product THAT FALLS WITHIN THE ACCEPTABLE PRICE RANGE below, in the SAME category as the identified product — among in-band candidates only, prioritize matching key attributes first. Return up to 8 products total.
 
-DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize matching motor technology "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : ` No motor technology was specified, so proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}" — before falling back to a plain brand+category search.${ourMotorLabel ? ` For each brand, prefer their model that ALSO uses ${ourMotorLabel} (or the closest related motor technology in their lineup) over a model that merely matches on price. If a brand's only in-range model uses a different motor type, still include it (never leave a brand slot empty over motor mismatch alone) but make that clear in its inclusion_rationale.` : ""}
+DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize matching ${criterionTerm} "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : criterionTerm ? ` No ${criterionTerm} was specified, so proximity to ${targetDisplay} is the leading signal.` : ` Proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}" — before falling back to a plain brand+category search.${ourMotorLabel && criterionTerm ? ` For each brand, prefer their model that ALSO uses ${ourMotorLabel} (or the closest related ${criterionTerm} in their lineup) over a model that merely matches on price. If a brand's only in-range model uses a different ${criterionTypeWord} type, still include it (never leave a brand slot empty over ${criterionTypeWord} mismatch alone) but make that clear in its inclusion_rationale.` : ""}
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
@@ -2510,15 +2697,15 @@ Positioning Context (product-specific facts — current BSR, price tier, target 
 
 Instructions:
 1. ${brandHint ? `Check these known brands first: ${brandHint.join(", ")} — then add any other established brand your search finds in this category.` : "Search broadly for established brands in this exact category."}
-2. Combine motor technology and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best ${tierKeyword} ${toolTypeLabel} ${bandLabel}", to bias results toward the correct motor+price segment together.
+2. ${criterionTerm ? `Combine ${criterionTerm} and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best ${tierKeyword} ${toolTypeLabel} ${bandLabel}", to bias results toward the correct ${criterionTypeWord}+price segment together.` : `Combine the product type and price in the same search rather than searching each separately, e.g. "best ${tierKeyword} ${toolTypeLabel} ${bandLabel}", to bias results toward the correct segment.`}
 3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
 4. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.${extraInstruction ? `\n\n${extraInstruction}` : ""}`;
 
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction);
+async function executePhase1Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -2536,15 +2723,15 @@ function assertHasCompetitors(parsed: any): any {
   return parsed;
 }
 
-async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction);
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
+  const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
 // Exported for the same offline-verify reason as buildPhase1Prompt above.
-export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
+export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
   // brandHintOverride (when the identified product maps to a legacy-brand
   // registry category, lib/legacy-brand-registry.ts) takes priority over
   // the static, non-binding lib/known-brands-by-category.ts hint — the
@@ -2556,6 +2743,7 @@ export function buildPhase2Prompt(context: AnalysisContext, identity: IdentityCa
   const band = computePriceBand(targetPriceRaw, "emerging", 0);
   const tierKeyword = deriveTierKeyword(targetPriceRaw);
   const bandLabel = `$${band.min.toFixed(2)}–$${band.max.toFixed(2)}`;
+  const { term: criterionTerm, typeWord: criterionTypeWord } = criterionPhrasing(primaryCriterion);
 
   const toolTypeLabel = identity.toolType && identity.toolType !== "combo" ? getToolTypeLabel(identity.toolType, toolTypes) : (identity.subcategory || identity.category);
   const combinedExampleQuery = `${ourMotorLabel || ""} ${toolTypeLabel} near ${targetDisplay}`.replace(/\s+/g, " ").trim();
@@ -2569,11 +2757,11 @@ ${identity.toolType ? buildToolTypePromptGuard(identity.toolType, toolTypes) : "
 Your task: Research up to 8 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
 
-DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize indie/emerging brands specifically known for similar motor technology "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : ` No motor technology was specified, so proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}", or "best ${combinedExampleQuery} ${new Date().getFullYear()}" — before falling back to generic category searches.${ourMotorLabel ? ` A candidate whose motor type you cannot confirm from its own listing should still be included if nothing better is found, but note in its inclusion_rationale that motor type could not be verified.` : ""}
+DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize indie/emerging brands specifically known for similar ${criterionTerm} "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : criterionTerm ? ` No ${criterionTerm} was specified, so proximity to ${targetDisplay} is the leading signal.` : ` Proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}", or "best ${combinedExampleQuery} ${new Date().getFullYear()}" — before falling back to generic category searches.${ourMotorLabel && criterionTypeWord ? ` A candidate whose ${criterionTypeWord} type you cannot confirm from its own listing should still be included if nothing better is found, but note in its inclusion_rationale that ${criterionTypeWord} type could not be verified.` : ""}
 
 CRITICAL RULES:
 1. Search Amazon directly for real competing PRODUCTS (not brands), sourcing all data from Amazon listings. Always drill down to the specific SKU/model that competes with the identified product. Never use brand overview data.
-2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs — INCLUDING motor type/technology whenever the listing states it. If data is unavailable, use "—" NOT a guess.
+2. Search for exact price, ASIN, review count, star rating, monthly sales velocity badge (e.g. "X+ bought in past month"), and all confirmed technical specs${criterionTerm ? ` — INCLUDING ${criterionTerm} whenever the listing states it` : ""}. If data is unavailable, use "—" NOT a guess.
 3. Every candidate MUST be the same product type as "${identity.category} / ${identity.subcategory}" — reject anything from a different category, even a closely related one, unless the identified product itself spans categories.
 4. If key attributes are mentioned (${attributesLine}), perform a DIRECT Amazon search combining those attributes with the category term before selecting competitors.
 5. PRICE IS A HARD CONSTRAINT: the acceptable price range for every candidate is ${bandLabel} (the user's target price of ${targetDisplay}). Value/indie challengers priced meaningfully below this range are still legitimately relevant competitors, which is why this range already extends lower than the established-brand search — but reject anything above the range, and never below 50% of the target price. Reject any product priced outside ${bandLabel}, even if it is an excellent category/attribute match.
@@ -2626,7 +2814,7 @@ Positioning Context (product-specific facts — current BSR, price tier, target 
 
 Instructions:
 1. Search Amazon for emerging brand products matching the identified category and key attributes, within the acceptable price range — price is a hard filter here, not a secondary preference.
-2. Combine motor technology and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best value ${toolTypeLabel} ${bandLabel}", to bias results toward the correct motor+price segment together.
+2. ${criterionTerm ? `Combine ${criterionTerm} and price in the same search rather than searching each separately, e.g. "${combinedExampleQuery}" or "best value ${toolTypeLabel} ${bandLabel}", to bias results toward the correct ${criterionTypeWord}+price segment together.` : `Combine the product type and price in the same search rather than searching each separately, e.g. "best value ${toolTypeLabel} ${bandLabel}", to bias results toward the correct segment.`}
 3. Every result must be a real ${identity.subcategory || identity.category} — not any other product type.
 4. ${brandHint ? `Exclude the large brands: ${brandHint.join(", ")}.` : "Exclude any large established brand — focus on indie/newer names."}
 5. Drill down to specific SKU/model listings. Retrieve exact price, ASIN, rating, review count, and monthly sales velocity.${extraInstruction ? `\n\n${extraInstruction}` : ""}`;
@@ -2634,14 +2822,14 @@ Instructions:
   return { systemPrompt, userPrompt };
 }
 
-async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction);
+async function executePhase2Gemini(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion);
   const text = await generateWithGeminiFallback(systemPrompt, userPrompt, onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string) {
-  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction);
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
+  const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion);
   const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));

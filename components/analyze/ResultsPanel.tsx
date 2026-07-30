@@ -83,6 +83,17 @@ interface ResultsPanelProps {
   onNewAnalysis: () => void;
 }
 
+// Which criterion actually scored a batch of competitors (motor_*/
+// heat_tech_* fields are mutually exclusive per competitor, see
+// lib/analysisEngine.ts's selectByCompositeScore) — null for a 'none'-
+// criterion tool type, where the "prioritized by X" sentence below is
+// skipped entirely rather than naming a criterion that never applied.
+function describeCriterionForCompetitors(competitors: any[]): string | null {
+  if (competitors.some(c => c.motor_match_tier)) return "motor type";
+  if (competitors.some(c => c.heat_tech_match_tier)) return "plate/heat technology";
+  return null;
+}
+
 export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   // A slot the fill loop couldn't fill (lib/analysisEngine.ts's
@@ -90,6 +101,8 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
   // competitor — counts/comparison-table columns must never include it.
   const phase1RealCompetitors = (phase1.competitors || []).filter((c: any) => !c.empty_slot);
   const phase2RealCompetitors = (phase2.competitors || []).filter((c: any) => !c.empty_slot);
+  const phase1CriterionLabel = describeCriterionForCompetitors(phase1RealCompetitors);
+  const phase2CriterionLabel = describeCriterionForCompetitors(phase2RealCompetitors);
   // Threaded into each CompetitorCard so its "Why this competitor" section
   // can name the actual differentiator a match was scored against, not
   // just show an unlabeled checkmark.
@@ -483,7 +496,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
 
         {phase1.matching_weights && (
           <p className="text-[10px] text-text-muted italic -mt-3">
-            Competitors prioritized by motor type, then price (legacy: nearest to your target price), then comparable specs.
+            Competitors prioritized {phase1CriterionLabel ? `by ${phase1CriterionLabel}, then ` : "by "}price (legacy: nearest to your target price), then comparable specs.
             {phase1.legacy_registry_snapshot && (
               <> Legacy competitors selected from the {phase1.legacy_registry_snapshot.category_name} brand list ({phase1RealCompetitors.filter((c: any) => c.curated_brand === true).length} of {phase1RealCompetitors.length} from curated brands).</>
             )}
@@ -522,7 +535,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
 
         {phase2.matching_weights && (
           <p className="text-[10px] text-text-muted italic -mt-3">
-            Competitors prioritized by motor type, then price (indie: relative to each brand&apos;s own lineup tier), then comparable specs.
+            Competitors prioritized {phase2CriterionLabel ? `by ${phase2CriterionLabel}, then ` : "by "}price (indie: relative to each brand&apos;s own lineup tier), then comparable specs.
           </p>
         )}
 
@@ -581,21 +594,49 @@ function amazonOnlyEmptyLabel(c: any): string | null {
 function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTableProps) {
   if (!competitors || competitors.length === 0) return null;
 
+  // Whichever criterion actually scored this batch of competitors
+  // (lib/analysisEngine.ts's selectByCompositeScore — motor_*/heat_tech_*
+  // fields are mutually exclusive per competitor, and every competitor in
+  // one analysis shares the same tool type's primary_criterion) — 'none'
+  // means neither applies and the row is omitted entirely, never rendered
+  // as an empty/"Unverified" Motor Type row for a motorless product.
+  const criterionKind: "motor" | "heat_technology" | "none" = competitors.some((c: any) => c.motor_match_tier)
+    ? "motor"
+    : competitors.some((c: any) => c.heat_tech_match_tier)
+    ? "heat_technology"
+    : "none";
+
+  const criterionRow: TableRowDef | null =
+    criterionKind === "motor"
+      ? {
+          label: "Motor Type",
+          getValue: (c) =>
+            c.motor_match_tier === "unverified"
+              ? "Unverified"
+              : c.motor_type
+              ? (c.motor_branded_name ? `${c.motor_type} (${c.motor_branded_name})` : c.motor_type)
+              : null,
+        }
+      : criterionKind === "heat_technology"
+      ? {
+          label: "Heat/Plate Technology",
+          getValue: (c) =>
+            c.heat_tech_match_tier === "unverified"
+              ? "Unverified"
+              : c.heat_tech_type
+              ? (c.heat_tech_branded_name ? `${c.heat_tech_type} (${c.heat_tech_branded_name})` : c.heat_tech_type)
+              : null,
+        }
+      : null;
+
   const rows: TableRowDef[] = [
-    // Motor Type and Price lead the table — they're the #1 and #2
-    // competitor-selection criteria (lib/analysisEngine.ts's
-    // selectByCompositeScore), not just incidental spec data, so they're
-    // always populated for a selected competitor rather than something
-    // that can fall through to "Not available."
-    {
-      label: "Motor Type",
-      getValue: (c) =>
-        c.motor_match_tier === "unverified"
-          ? "Unverified"
-          : c.motor_type
-          ? (c.motor_branded_name ? `${c.motor_type} (${c.motor_branded_name})` : c.motor_type)
-          : null,
-    },
+    // The primary-criterion row (Motor Type/Heat-Plate Technology) and
+    // Price lead the table — they're the #1 and #2 competitor-selection
+    // criteria (lib/analysisEngine.ts's selectByCompositeScore), not just
+    // incidental spec data, so they're always populated for a selected
+    // competitor rather than something that can fall through to "Not
+    // available." Omitted entirely for a 'none'-criterion tool type.
+    ...(criterionRow ? [criterionRow] : []),
     { label: "Amazon Price", getValue: (c) => c.price || null },
     { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null), getEmptyLabel: amazonOnlyEmptyLabel },
     { label: "Review Count", getValue: (c) => c.review_count || null, getEmptyLabel: amazonOnlyEmptyLabel },

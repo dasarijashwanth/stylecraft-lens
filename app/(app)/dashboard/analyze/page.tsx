@@ -24,6 +24,28 @@ interface MotorFamilyOption {
   aliases: string[];
 }
 
+// The parallel Heat/Plate Technology option shape — a full parallel to
+// MotorFamilyOption for motorless styling tools (flat iron/curling iron/
+// hot brush), minus the domain field (not needed here).
+interface HeatTechFamilyOption {
+  family_key: string;
+  label: string;
+  aliases: string[];
+}
+
+const CRITERION_LABELS: Record<string, string> = {
+  motor: "Motor",
+  heat_technology: "Heat/Plate Technology",
+  none: "None",
+};
+
+interface ScoringProfileOption {
+  type_key: string | null;
+  motor_weight: number;
+  price_weight: number;
+  feature_weight: number;
+}
+
 function normalizeMotorToken(s: string): string {
   return (s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, " ").trim();
 }
@@ -36,6 +58,22 @@ function normalizeMotorToken(s: string): string {
 // sorted by sort_order, so iterating in array order approximates the same
 // first-match-wins precedence.
 function detectMotorFamilyFromText(text: string, families: MotorFamilyOption[]): string | null {
+  const tokens = new Set(normalizeMotorToken(text).split(/\s+/).filter(Boolean));
+  if (tokens.size === 0) return null;
+  for (const f of families) {
+    const candidates = [f.label, f.family_key.replace(/_/g, " "), ...f.aliases];
+    for (const c of candidates) {
+      const cTokens = normalizeMotorToken(c).split(/\s+/).filter(Boolean);
+      if (cTokens.length > 0 && cTokens.every(t => tokens.has(t))) return f.family_key;
+    }
+  }
+  return null;
+}
+
+// Full parallel to detectMotorFamilyFromText for the Heat/Plate Technology
+// criterion — same whole-word alias containment, same reasoning for not
+// importing lib/heat-tech-taxonomy.ts directly into a client bundle.
+function detectHeatTechFamilyFromText(text: string, families: HeatTechFamilyOption[]): string | null {
   const tokens = new Set(normalizeMotorToken(text).split(/\s+/).filter(Boolean));
   if (tokens.size === 0) return null;
   for (const f of families) {
@@ -82,8 +120,14 @@ export default function AnalyzePage() {
   // alongside the canonical family, never used for matching.
   const [motorFamily, setMotorFamily] = useState("");
   const [motorBrandedName, setMotorBrandedName] = useState("");
+  // Full parallel to motorFamily/motorBrandedName for the Heat/Plate
+  // Technology criterion (flat iron/curling iron/hot brush) — see
+  // CRITERION_LABELS / primaryCriterion below for which one actually shows.
+  const [heatTechFamily, setHeatTechFamily] = useState("");
+  const [heatTechBrandedName, setHeatTechBrandedName] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
   const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
+  const [heatTechFamilies, setHeatTechFamilies] = useState<HeatTechFamilyOption[]>([]);
   const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
   // "+ Add new tool type…" inline mini-form state.
   const [showAddToolType, setShowAddToolType] = useState(false);
@@ -101,6 +145,16 @@ export default function AnalyzePage() {
       .catch(() => {});
   }, []);
 
+  // Populates the Heat/Plate Technology <select> with the real taxonomy
+  // (lib/heat-tech-taxonomy.ts) — full parallel to the Motor Type fetch
+  // above, shown instead of it for motorless styling tools.
+  useEffect(() => {
+    fetch("/api/heat-tech-families")
+      .then(r => r.json())
+      .then(data => setHeatTechFamilies(data.families || []))
+      .catch(() => {});
+  }, []);
+
   // Populates the Tool Type <select> with the real, DB-backed taxonomy
   // (built-ins + any admin/user-added custom types) — lib/db/tool-types.ts.
   useEffect(() => {
@@ -109,6 +163,84 @@ export default function AnalyzePage() {
       .then(data => setToolTypes(data.toolTypes || []))
       .catch(() => {});
   }, []);
+
+  // Which criterion drives matching for the SELECTED tool type
+  // (lib/db/tool-types.ts's primary_criterion) — replaces the old
+  // industry-based "Motor Type only for Grooming & Barbering" gate, which
+  // wrongly hid Motor for Hair Dryer (a real motorized type that happens to
+  // share the "haircare-styling" industry with motorless flat
+  // irons/curling irons/hot brushes). Before a specific tool type is picked,
+  // falls back to the old industry heuristic just so the right field isn't
+  // jarringly absent while the user is still choosing.
+  const selectedToolTypeRow = toolType ? toolTypes.find(t => t.type_key === toolType) : undefined;
+  const primaryCriterion: "motor" | "heat_technology" | "none" = selectedToolTypeRow
+    ? (selectedToolTypeRow.primary_criterion as "motor" | "heat_technology" | "none")
+    : (industry === "haircare-styling" ? "none" : "motor");
+  const criterionLabel = CRITERION_LABELS[primaryCriterion] || "Motor";
+
+  // "Adjust weights for this analysis" — resolves the selected tool type's
+  // scoring profile (own row, else the global default) via
+  // lib/db/scoring-profiles.ts, purely for prefilling the expander; the
+  // actual weights used server-side are resolved fresh at analysis time
+  // (see lib/analysisEngine.ts), this is display-only.
+  const [scoringProfiles, setScoringProfiles] = useState<ScoringProfileOption[]>([]);
+  const [showWeightOverride, setShowWeightOverride] = useState(false);
+  const [weightOverrideInputs, setWeightOverrideInputs] = useState({ motor: "45", price: "35", feature: "20" });
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/scoring-profiles")
+      .then(r => r.json())
+      .then(data => setScoringProfiles(data.profiles || []))
+      .catch(() => {});
+  }, []);
+
+  const resolvedProfileForToolType = (() => {
+    const own = toolType ? scoringProfiles.find(p => p.type_key === toolType) : undefined;
+    return own || scoringProfiles.find(p => p.type_key === null) || { motor_weight: 45, price_weight: 35, feature_weight: 20 };
+  })();
+
+  // Re-prefills the expander's inputs from the newly-selected tool type's
+  // profile whenever it's still closed (never clobbers a value the user is
+  // actively adjusting).
+  useEffect(() => {
+    if (showWeightOverride) return;
+    setWeightOverrideInputs({
+      motor: String(resolvedProfileForToolType.motor_weight),
+      price: String(resolvedProfileForToolType.price_weight),
+      feature: String(resolvedProfileForToolType.feature_weight),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolType, scoringProfiles]);
+
+  const weightOverrideSum = (Number(weightOverrideInputs.motor) || 0) + (Number(weightOverrideInputs.price) || 0) + (Number(weightOverrideInputs.feature) || 0);
+  const weightOverridePct = (raw: string) => (weightOverrideSum > 0 ? Math.round(((Number(raw) || 0) / weightOverrideSum) * 100) : 0);
+
+  async function handleSaveWeightsToProfile() {
+    setSavingProfile(true);
+    try {
+      const res = await fetch("/api/admin/scoring-profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          typeKey: toolType || null,
+          motor: Number(weightOverrideInputs.motor),
+          price: Number(weightOverrideInputs.price),
+          feature: Number(weightOverrideInputs.feature),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save profile");
+      toast.success("Saved as this tool type's default profile");
+      const profilesRes = await fetch("/api/scoring-profiles");
+      const profilesData = await profilesRes.json();
+      setScoringProfiles(profilesData.profiles || []);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save profile — admin access required");
+    } finally {
+      setSavingProfile(false);
+    }
+  }
 
   async function handleAddToolType() {
     const label = newToolTypeName.trim();
@@ -156,6 +288,13 @@ export default function AnalyzePage() {
     if (detected) setMotorFamily(detected);
   }, [motorBrandedName, motorFamilies, motorFamily]);
 
+  // Same live auto-detect, mirrored for the Heat/Plate Technology criterion.
+  useEffect(() => {
+    if (heatTechFamily || !heatTechBrandedName.trim() || heatTechFamilies.length === 0) return;
+    const detected = detectHeatTechFamilyFromText(heatTechBrandedName, heatTechFamilies);
+    if (detected) setHeatTechFamily(detected);
+  }, [heatTechBrandedName, heatTechFamilies, heatTechFamily]);
+
   // When product is selected from StylecraftUS catalog
   function handleProductSelect(productId: string) {
     setSelectedProductId(productId);
@@ -174,6 +313,8 @@ export default function AnalyzePage() {
       setCompanyContext("");
       setMotorFamily("");
       setMotorBrandedName("");
+      setHeatTechFamily("");
+      setHeatTechBrandedName("");
       setKeyDiff("");
       setPricePoint("");
       return;
@@ -285,10 +426,15 @@ export default function AnalyzePage() {
       errs.description = "Add at least 10 characters for sharper results";
     }
     if (!toolType) errs.toolType = "Select the exact tool type";
-    // Motor Type is hidden entirely for Hair Care & Styling (not applicable
-    // to those tool types) — required whenever it's actually shown.
-    if (industry !== "haircare-styling" && !motorFamily) {
+    // Motor Type / Heat-Plate Technology are each shown only when the
+    // selected tool type's primary_criterion actually calls for them —
+    // required whenever the relevant one is actually shown, per
+    // primaryCriterion above.
+    if (primaryCriterion === "motor" && !motorFamily) {
       errs.motorFamily = "Select the motor type";
+    }
+    if (primaryCriterion === "heat_technology" && !heatTechFamily) {
+      errs.heatTechFamily = "Select the plate/heat technology";
     }
     const priceNum = parsePriceToNumber(pricePoint);
     if (!pricePoint.trim() || priceNum === null || priceNum <= 0) {
@@ -341,6 +487,11 @@ export default function AnalyzePage() {
       const motorTechFallback = motorFamilyLabel
         ? (motorBrandedName.trim() ? `${motorFamilyLabel} (${motorBrandedName.trim()})` : motorFamilyLabel)
         : motorBrandedName.trim();
+      // Same fallback construction, mirrored for Heat/Plate Technology.
+      const heatTechFamilyLabel = heatTechFamilies.find(f => f.family_key === heatTechFamily)?.label || "";
+      const heatTechRawFallback = heatTechFamilyLabel
+        ? (heatTechBrandedName.trim() ? `${heatTechFamilyLabel} (${heatTechBrandedName.trim()})` : heatTechFamilyLabel)
+        : heatTechBrandedName.trim();
 
       const res = await fetch("/api/analyses", {
         method: "POST",
@@ -354,14 +505,22 @@ export default function AnalyzePage() {
           category: category.trim() || undefined,
           toolType,
           companyContext: companyContext.trim() || undefined,
-          // Never submit a motor type for Hair Care & Styling — the field
-          // only applies to Grooming & Barbering, even if a catalog
-          // auto-fill left a stale value sitting in state.
-          motorFamily: industry === "haircare-styling" ? undefined : (motorFamily || undefined),
-          motorBrandedName: industry === "haircare-styling" ? undefined : (motorBrandedName.trim() || undefined),
-          motorTech: industry === "haircare-styling" ? undefined : (motorTechFallback || undefined),
+          // Only submit whichever criterion actually applies to the
+          // selected tool type — never both, never a stale value left over
+          // from a prior tool-type selection.
+          motorFamily: primaryCriterion === "motor" ? (motorFamily || undefined) : undefined,
+          motorBrandedName: primaryCriterion === "motor" ? (motorBrandedName.trim() || undefined) : undefined,
+          motorTech: primaryCriterion === "motor" ? (motorTechFallback || undefined) : undefined,
+          heatTechFamily: primaryCriterion === "heat_technology" ? (heatTechFamily || undefined) : undefined,
+          heatTechBrandedName: primaryCriterion === "heat_technology" ? (heatTechBrandedName.trim() || undefined) : undefined,
+          heatTechRaw: primaryCriterion === "heat_technology" ? (heatTechRawFallback || undefined) : undefined,
           keyDiff: keyDiff.trim() || undefined,
           pricePoint: pricePoint.trim() || undefined,
+          weightOverride: showWeightOverride && weightOverrideSum > 0 ? {
+            motor: Number(weightOverrideInputs.motor) || 0,
+            price: Number(weightOverrideInputs.price) || 0,
+            feature: Number(weightOverrideInputs.feature) || 0,
+          } : undefined,
         })
       });
 
@@ -422,6 +581,20 @@ export default function AnalyzePage() {
     if (!label) return "";
     return motorBrandedName.trim() ? `${label} (${motorBrandedName.trim()})` : label;
   })();
+  // Same derivation, mirrored for Heat/Plate Technology.
+  const heatTechSummaryLabel = (() => {
+    const label = heatTechFamilies.find(f => f.family_key === heatTechFamily)?.label;
+    if (!label) return "";
+    return heatTechBrandedName.trim() ? `${label} (${heatTechBrandedName.trim()})` : label;
+  })();
+  // Whichever criterion applies to the currently-selected tool type, or a
+  // neutral "not applicable" note for 'none' types — never shows a stale
+  // Motor label for a motorless product or vice versa.
+  const criterionSummaryLabel = primaryCriterion === "heat_technology"
+    ? (heatTechSummaryLabel || `${criterionLabel.toLowerCase()} unspecified`)
+    : primaryCriterion === "motor"
+    ? (motorSummaryLabel || "motor type unspecified")
+    : "not applicable for this tool type";
 
   return (
     <div className="space-y-6">
@@ -510,11 +683,15 @@ export default function AnalyzePage() {
                   value={industry}
                   onChange={(e) => {
                     setIndustry(e.target.value);
-                    // Motor Type (rotary/magnetic/pivot clipper-style
-                    // motors) only applies to Grooming & Barbering tools —
-                    // clear any prior selection so a stale motor type never
-                    // gets submitted for a Hair Care & Styling product.
+                    // Motor Type only applies to motorized tool types, Heat/
+                    // Plate Technology only to motorless styling tools — the
+                    // Industry switch itself doesn't determine which shows
+                    // (the selected Tool Type does, see primaryCriterion
+                    // above), but clear both here as a reasonable starting
+                    // point so a stale value never gets submitted before the
+                    // Tool Type re-selection below settles which one applies.
                     if (e.target.value === "haircare-styling") { setMotorFamily(""); setMotorBrandedName(""); }
+                    else { setHeatTechFamily(""); setHeatTechBrandedName(""); }
                     // Tool Type options are Industry-dependent (see
                     // toolTypesForIndustry) — a Tool Type valid under the
                     // old Industry (e.g. "Trimmer") is meaningless once the
@@ -723,13 +900,15 @@ export default function AnalyzePage() {
           <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-4 shadow-sm">
             <h2 className="text-sm font-bold text-text-primary">Precision targeting</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Motor Type — Grooming & Barbering only (clipper/trimmer/
-                  shaver-style motors); not applicable to Hair Care & Styling
-                  tools. Fixed 7-family canonical list — our own branding
-                  (e.g. "EON Digital Brushless Motor") is a Brushless Motor
-                  for matching purposes; the branded name is a separate,
-                  optional display-only field below. */}
-              {industry !== "haircare-styling" && (
+              {/* Motor Type / Heat-Plate Technology — whichever criterion
+                  actually applies to the SELECTED tool type
+                  (primaryCriterion above, from lib/db/tool-types.ts's
+                  primary_criterion), never both, never neither's stale
+                  leftover value. Each is a fixed canonical list — our own
+                  branding (e.g. "EON Digital Brushless Motor") maps to a
+                  canonical family for matching purposes; the branded name is
+                  a separate, optional display-only field below it. */}
+              {primaryCriterion === "motor" && (
                 <div className="space-y-1">
                   <label className="font-semibold text-text-primary block">Motor type *</label>
                   <select
@@ -761,7 +940,39 @@ export default function AnalyzePage() {
                 </div>
               )}
 
-              <div className={`space-y-1 ${industry === "haircare-styling" ? "md:col-span-2" : ""}`}>
+              {primaryCriterion === "heat_technology" && (
+                <div className="space-y-1">
+                  <label className="font-semibold text-text-primary block">Plate/heat technology *</label>
+                  <select
+                    value={heatTechFamily}
+                    onChange={(e) => {
+                      setHeatTechFamily(e.target.value);
+                      if (errors.heatTechFamily) setErrors(prev => { const n = { ...prev }; delete n.heatTechFamily; return n; });
+                    }}
+                    className={`w-full px-3 py-2 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent ${
+                      errors.heatTechFamily ? "border-danger" : "border-border"
+                    }`}
+                  >
+                    <option value="">Select plate/heat technology…</option>
+                    {heatTechFamilies.map(f => (
+                      <option key={f.family_key} value={f.family_key}>{f.label}</option>
+                    ))}
+                  </select>
+                  {errors.heatTechFamily && <p className="text-[10px] text-danger">{errors.heatTechFamily}</p>}
+                  <input
+                    type="text"
+                    value={heatTechBrandedName}
+                    onChange={(e) => setHeatTechBrandedName(e.target.value)}
+                    placeholder="Branded plate/heat name (optional) — e.g. SoftTouch Titanium"
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                  />
+                  <p className="text-[10px] text-text-muted">
+                    Competitors are matched on the plate/heat technology family. Your branded name appears in documents but matching uses the universal type.
+                  </p>
+                </div>
+              )}
+
+              <div className={`space-y-1 ${primaryCriterion === "none" ? "md:col-span-2" : ""}`}>
                 <label className="font-semibold text-text-primary block">Key differentiating feature</label>
                 <input
                   type="text"
@@ -775,11 +986,80 @@ export default function AnalyzePage() {
             </div>
           </div>
 
+          {/* "Adjust weights for this analysis" — prefilled from the
+              selected tool type's scoring profile (lib/db/scoring-profiles.ts);
+              changes here apply to THIS run only unless "Save to profile" is
+              clicked. Free-entry, no sum-to-1 constraint — normalization
+              happens server-side at scoring time. */}
+          <div className="bg-surface-2 border border-border rounded-xl p-5 space-y-3">
+            <button
+              type="button"
+              onClick={() => setShowWeightOverride(v => !v)}
+              className="flex items-center justify-between w-full text-left"
+            >
+              <span className="text-sm font-bold text-text-primary">Adjust weights for this analysis</span>
+              <span className="text-[10px] text-text-muted">{showWeightOverride ? "Hide" : "Optional — click to expand"}</span>
+            </button>
+            {showWeightOverride && (
+              <div className="space-y-3">
+                <p className="text-[10px] text-text-muted">
+                  Enter any non-negative numbers expressing RELATIVE importance — no need to sum to 1 or 100. Prefilled from this tool type&apos;s current profile.
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{criterionLabel}</label>
+                    <input
+                      type="number" step="1" min="0"
+                      value={weightOverrideInputs.motor}
+                      onChange={e => setWeightOverrideInputs(prev => ({ ...prev, motor: e.target.value }))}
+                      className="mt-1 w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                    <p className="mt-0.5 text-[10px] text-text-muted">→ {weightOverridePct(weightOverrideInputs.motor)}%</p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Price</label>
+                    <input
+                      type="number" step="1" min="0"
+                      value={weightOverrideInputs.price}
+                      onChange={e => setWeightOverrideInputs(prev => ({ ...prev, price: e.target.value }))}
+                      className="mt-1 w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                    <p className="mt-0.5 text-[10px] text-text-muted">→ {weightOverridePct(weightOverrideInputs.price)}%</p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Features</label>
+                    <input
+                      type="number" step="1" min="0"
+                      value={weightOverrideInputs.feature}
+                      onChange={e => setWeightOverrideInputs(prev => ({ ...prev, feature: e.target.value }))}
+                      className="mt-1 w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                    <p className="mt-0.5 text-[10px] text-text-muted">→ {weightOverridePct(weightOverrideInputs.feature)}%</p>
+                  </div>
+                </div>
+                {weightOverrideSum <= 0 && <p className="text-[10px] text-danger">At least one criterion must be &gt; 0 — falling back to the profile default.</p>}
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-text-muted">
+                    {criterionLabel} {weightOverrideInputs.motor || 0} → {weightOverridePct(weightOverrideInputs.motor)}% · Price {weightOverrideInputs.price || 0} → {weightOverridePct(weightOverrideInputs.price)}% · Features {weightOverrideInputs.feature || 0} → {weightOverridePct(weightOverrideInputs.feature)}%
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleSaveWeightsToProfile}
+                    disabled={savingProfile}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold text-accent hover:underline disabled:opacity-50"
+                  >
+                    {savingProfile ? "Saving…" : "Save to profile"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Review-step summary — pure derived text, confirms every field's
               real value right before the run starts (no new state). */}
           {productName.trim() && toolType && (
             <p className="text-[11px] text-text-secondary bg-surface-3/30 border border-border rounded-lg px-4 py-2.5">
-              Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {getToolTypeLabel(toolType, toolTypes)}, {motorSummaryLabel || "motor type unspecified"}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
+              Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {getToolTypeLabel(toolType, toolTypes)}, {criterionSummaryLabel}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
               {keyDiff.trim() && <> · differentiator: {keyDiff.trim()}</>}
             </p>
           )}

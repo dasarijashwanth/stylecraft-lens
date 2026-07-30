@@ -8,6 +8,47 @@ import type { ToolTypeRow } from "./db/tool-types";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both (merged)" };
 
+// motor_*/heat_tech_* fields are mutually exclusive per competitor (see
+// lib/analysisEngine.ts's selectByCompositeScore) — these helpers pick
+// whichever one actually applies so the comparison tables/cards below never
+// show a "Motor" label/column for a motorless flat iron/curling iron/hot
+// brush competitor.
+function competitorCriterionKind(c: any): "motor" | "heat_technology" | "none" {
+  if (c.motor_match_tier) return "motor";
+  if (c.heat_tech_match_tier) return "heat_technology";
+  return "none";
+}
+
+function competitorCriterionSpecLabel(c: any): string {
+  return competitorCriterionKind(c) === "heat_technology" ? "Plate/Heat" : "Motor";
+}
+
+function competitorCriterionCellValue(c: any): string {
+  if (competitorCriterionKind(c) === "heat_technology") {
+    return c.heat_tech_match_tier === "unverified" ? "Unverified" : escapeHtml(c.heat_tech_type) || "—";
+  }
+  return c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—";
+}
+
+function competitorCriterionDifferentBadge(c: any): string {
+  if (competitorCriterionKind(c) === "heat_technology") {
+    return c.heat_tech_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different plate/heat)</span>` : "";
+  }
+  return c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : "";
+}
+
+// Column/section header label for a whole table of competitors — 'none'
+// falls back to "Motor Type" only because every existing caller of this
+// helper already filters to non-empty tables of motor/heat-tech-scored
+// competitors; a 'none'-criterion analysis's competitors simply won't match
+// either condition below, in which case this default is never actually
+// displayed (see the callers' own conditional rendering).
+function criterionColumnLabel(competitors: any[]): string {
+  return competitors.some((c: any) => c.heat_tech_match_tier) && !competitors.some((c: any) => c.motor_match_tier)
+    ? "Heat/Plate Technology"
+    : "Motor Type";
+}
+
 // Every form input that's supposed to shape a run (lib/analysisEngine.ts's
 // buildFormInputsSnapshot), printed as one plain line right above the
 // weights sentence — so the methodology appendix shows not just HOW
@@ -18,14 +59,23 @@ function renderFormInputsLine(formInputs: any, toolTypes: ToolTypeRow[]): string
   const toolTypeLabel = formInputs.toolType ? getToolTypeLabel(formInputs.toolType, toolTypes) : "—";
   const marketLabel = formInputs.targetMarket && TARGET_MARKET_LABELS[formInputs.targetMarket] ? TARGET_MARKET_LABELS[formInputs.targetMarket] : "—";
 
+  // Only whichever criterion actually applied to this tool type gets a
+  // line — never "Motor Technology: unspecified" for a motorless flat
+  // iron/curling iron/hot brush analysis.
+  const criterionLine = formInputs.motorTech
+    ? `Motor Technology: ${formInputs.motorTech}`
+    : formInputs.heatTechRaw
+    ? `Plate/Heat Technology: ${formInputs.heatTechRaw}`
+    : null;
+
   const parts = [
     `Industry: ${industryLabel}`,
     `Tool Type: ${toolTypeLabel}`,
     `Target Market: ${marketLabel}`,
-    `Motor Technology: ${formInputs.motorTech || "unspecified"}`,
+    criterionLine,
     `Target Price: ${formInputs.pricePoint || "unspecified"}`,
     `Differentiator: ${formInputs.keyDiff || "none given"}`,
-  ];
+  ].filter((p): p is string => !!p);
 
   return `
     <p style="font-size: 10px; color: #666;">
@@ -47,15 +97,23 @@ function renderCompetitorEvidenceHTML(ca: any): string {
     <h3 style="font-size: 12px; margin-top: 14px;">Per-Competitor Evidence</h3>
     <ul style="font-size: 9px; color: #666;">
       ${competitors.map((c: any) => {
-        const motorLine = c.motor_match_tier === "unverified"
-          ? "Motor type: not confirmed from any source"
-          : `Motor type: ${escapeHtml(c.motor_type || "unknown")} (${escapeHtml(c.motor_match_tier || "unverified")})${c.motor_source_quote ? ` — &quot;${escapeHtml(c.motor_source_quote)}&quot;` : ""}`;
+        // motor_*/heat_tech_* fields are mutually exclusive per competitor
+        // (lib/analysisEngine.ts's selectByCompositeScore) — never a Motor
+        // line for a motorless flat iron/curling iron/hot brush competitor.
+        const isHeatTech = !c.motor_match_tier && !!c.heat_tech_match_tier;
+        const criterionLine = isHeatTech
+          ? (c.heat_tech_match_tier === "unverified"
+              ? "Plate/heat technology: not confirmed from any source"
+              : `Plate/heat technology: ${escapeHtml(c.heat_tech_type || "unknown")} (${escapeHtml(c.heat_tech_match_tier || "unverified")})${c.heat_tech_source_quote ? ` — &quot;${escapeHtml(c.heat_tech_source_quote)}&quot;` : ""}`)
+          : (c.motor_match_tier === "unverified"
+              ? "Motor type: not confirmed from any source"
+              : `Motor type: ${escapeHtml(c.motor_type || "unknown")} (${escapeHtml(c.motor_match_tier || "unverified")})${c.motor_source_quote ? ` — &quot;${escapeHtml(c.motor_source_quote)}&quot;` : ""}`);
         const priceLine = `Price: ${c.price_logic === "relative" ? "matched by relative brand tier" : "matched by absolute proximity to target"}`;
         const sourceLabel = c.sources?.brand_site && c.sources?.amazon ? "brand site + Amazon"
           : c.sources?.brand_site ? `brand site (${escapeHtml(c.sources.brand_site.url)})`
           : c.sources?.amazon ? "Amazon" : "unspecified";
-        const fallbackLine = c.motor_unverified_fallback ? " — included as a last-resort, motor-unverified pick" : "";
-        return `<li><strong>${escapeHtml(c.name || "Unknown")}</strong> — ${motorLine}; ${priceLine}; source: ${sourceLabel}${fallbackLine}</li>`;
+        const fallbackLine = c.motor_unverified_fallback ? ` — included as a last-resort, ${isHeatTech ? "plate/heat-technology" : "motor"}-unverified pick` : "";
+        return `<li><strong>${escapeHtml(c.name || "Unknown")}</strong> — ${criterionLine}; ${priceLine}; source: ${sourceLabel}${fallbackLine}</li>`;
       }).join("")}
     </ul>
   `;
@@ -86,6 +144,20 @@ function renderProvenanceAppendixHTML(report: any, toolTypes: ToolTypeRow[]): st
   };
 
   const weights = ca.matching_weights;
+  // Weights are stored EXACTLY as entered (free-form relative-importance
+  // numbers, no sum-to-1 constraint) — normalization happens here at render
+  // time, same as lib/competitor-scoring.ts's computeCompositeScore, so
+  // this print-out reflects what actually happened during scoring.
+  const weightSum = weights ? weights.motor + weights.price + weights.feature : 0;
+  const weightPct = (w: number) => (weightSum > 0 ? Math.round((w / weightSum) * 100) : 0);
+  // The weights object's "motor" slot is generic across tool types (see
+  // lib/db/scoring-profiles.ts) — labeled here per whichever criterion this
+  // analysis's own competitors were actually scored on, never a hardcoded
+  // "Motor" for a motorless flat iron/curling iron/hot brush analysis.
+  const allComps = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])];
+  const criterionLabel = allComps.some((c: any) => c.heat_tech_match_tier) && !allComps.some((c: any) => c.motor_match_tier)
+    ? "Heat/Plate Technology"
+    : "Motor";
 
   return `
     <div class="page-break"></div>
@@ -93,10 +165,11 @@ function renderProvenanceAppendixHTML(report: any, toolTypes: ToolTypeRow[]): st
     ${renderFormInputsLine(ca.form_inputs, toolTypes)}
     ${weights ? `
       <p style="font-size: 10px; color: #666;">
-        Competitors are prioritized by motor type match (${Math.round(weights.motor * 100)}%), then price proximity
-        (${Math.round(weights.price * 100)}%) — absolute for legacy brands, relative to each indie brand's own lineup —
-        then comparable feature/spec overlap (${Math.round(weights.feature * 100)}%). Each competitor's individual
-        motor/price/feature scores are noted on its comparison table row above.
+        Weights (as entered): ${criterionLabel} ${weights.motor}, Price ${weights.price}, Features ${weights.feature} → effective ${weightPct(weights.motor)}/${weightPct(weights.price)}/${weightPct(weights.feature)}%.
+        Competitors are prioritized by ${criterionLabel.toLowerCase()} match (${weightPct(weights.motor)}%), then price proximity
+        (${weightPct(weights.price)}%) — absolute for legacy brands, relative to each indie brand's own lineup —
+        then comparable feature/spec overlap (${weightPct(weights.feature)}%). Each competitor's individual
+        ${criterionLabel.toLowerCase()}/price/feature scores are noted on its comparison table row above.
       </p>
     ` : ""}
     ${renderCompetitorEvidenceHTML(ca)}
@@ -581,19 +654,19 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${escapeHtml(c.top_feature_summary)}</div>` : ""}
           ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${escapeHtml(c.description.slice(0, 300))}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
-            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"} | RPM: ${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"} | Run: ${escapeHtml(c.confirmed_technical_specs?.run_time) || "—"}
+            <strong>Specs:</strong> ${competitorCriterionSpecLabel(c)}: ${competitorCriterionCellValue(c)} | RPM: ${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"} | Run: ${escapeHtml(c.confirmed_technical_specs?.run_time) || "—"}
           </div>
         </div>
       `).join("")}
     </div>
 
     <h3>Legacy Brand Comparison Table</h3>
-    <p style="font-size: 10px; color: #666;">Motor Type and Price lead this table — they're the #1 and #2 competitor-selection criteria, not incidental spec data.</p>
+    <p style="font-size: 10px; color: #666;">${criterionColumnLabel(ca.large_brand_competitors || [])} and Price lead this table — they're the #1 and #2 competitor-selection criteria, not incidental spec data.</p>
     <table class="comparison-table">
       <thead>
         <tr>
           <th style="width: 22%">Model</th>
-          <th style="width: 15%">Motor Type</th>
+          <th style="width: 15%">${criterionColumnLabel(ca.large_brand_competitors || [])}</th>
           <th style="width: 10%">Price</th>
           <th style="width: 10%">Rating</th>
           <th style="width: 12%">Review Count</th>
@@ -604,8 +677,8 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
       <tbody>
         ${(ca.large_brand_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${escapeHtml(c.name)}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
-            <td>${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"}</td>
+            <td><strong>${escapeHtml(c.name)}</strong>${competitorCriterionDifferentBadge(c)}</td>
+            <td>${competitorCriterionCellValue(c)}</td>
             <td>${escapeHtml(c.price) || "—"}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
             <td>${escapeHtml(c.review_count) || "—"}</td>
@@ -641,19 +714,19 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
           ${c.top_feature_summary ? `<div class="comp-bullet"><strong>Differentiator:</strong> ${escapeHtml(c.top_feature_summary)}</div>` : ""}
           ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${escapeHtml(c.description.slice(0, 300))}${c.description.length > 300 ? "…" : ""}</div>` : ""}
           <div class="comp-specs">
-            <strong>Specs:</strong> Motor: ${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"} | RPM: ${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"} | Run: ${escapeHtml(c.confirmed_technical_specs?.run_time) || "—"}
+            <strong>Specs:</strong> ${competitorCriterionSpecLabel(c)}: ${competitorCriterionCellValue(c)} | RPM: ${escapeHtml(c.confirmed_technical_specs?.rpm) || "—"} | Run: ${escapeHtml(c.confirmed_technical_specs?.run_time) || "—"}
           </div>
         </div>
       `).join("")}
     </div>
 
     <h3>Indie Brand Comparison Table</h3>
-    <p style="font-size: 10px; color: #666;">Motor Type and Price lead this table — they're the #1 and #2 competitor-selection criteria. Price for indie brands reflects RELATIVE brand-tier positioning (see each competitor's rationale), not just absolute dollars.</p>
+    <p style="font-size: 10px; color: #666;">${criterionColumnLabel(ca.indie_emerging_competitors || [])} and Price lead this table — they're the #1 and #2 competitor-selection criteria. Price for indie brands reflects RELATIVE brand-tier positioning (see each competitor's rationale), not just absolute dollars.</p>
     <table class="comparison-table">
       <thead>
         <tr>
           <th style="width: 22%">Model</th>
-          <th style="width: 15%">Motor Type</th>
+          <th style="width: 15%">${criterionColumnLabel(ca.indie_emerging_competitors || [])}</th>
           <th style="width: 10%">Price</th>
           <th style="width: 10%">Rating</th>
           <th style="width: 12%">Review Count</th>
@@ -664,8 +737,8 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
       <tbody>
         ${(ca.indie_emerging_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${escapeHtml(c.name)}</strong>${c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : ""}</td>
-            <td>${c.motor_match_tier === "unverified" ? "Unverified" : escapeHtml(c.motor_type) || "—"}</td>
+            <td><strong>${escapeHtml(c.name)}</strong>${competitorCriterionDifferentBadge(c)}</td>
+            <td>${competitorCriterionCellValue(c)}</td>
             <td>${escapeHtml(c.price) || "—"}${c.price_logic === "relative" ? ` <span style="font-size:9px; color:#666;">(relative tier)</span>` : ""}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
             <td>${escapeHtml(c.review_count) || "—"}</td>

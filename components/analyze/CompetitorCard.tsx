@@ -75,6 +75,16 @@ interface Competitor {
   motor_source_quote?:     string | null;
   motor_match_tier?:       "exact" | "adjacent" | "different" | "unverified";
   motor_score?:            number;
+  // Full parallel to the motor_* fields above, for tool types whose
+  // primary_criterion is 'heat_technology' (flat iron/curling iron/hot
+  // brush) instead of 'motor' — see lib/heat-tech-taxonomy.ts. A scored
+  // competitor NEVER has both sets populated; 'none'-criterion types have
+  // neither.
+  heat_tech_type?:         string | null;
+  heat_tech_branded_name?: string | null;
+  heat_tech_source_quote?: string | null;
+  heat_tech_match_tier?:   "exact" | "different" | "unverified";
+  heat_tech_score?:        number;
   price_score?:            number;
   price_logic?:            "absolute" | "relative";
   their_lineup_percentile?: number | null;
@@ -178,6 +188,29 @@ function motorLabelWithBranded(c: Pick<Competitor, "motor_type" | "motor_branded
   if (!c.motor_type) return "";
   return c.motor_branded_name ? `${c.motor_type} (${c.motor_branded_name})` : c.motor_type;
 }
+
+// Same derivation, mirrored for the Heat/Plate Technology criterion.
+function heatTechLabelWithBranded(c: Pick<Competitor, "heat_tech_type" | "heat_tech_branded_name">): string {
+  if (!c.heat_tech_type) return "";
+  return c.heat_tech_branded_name ? `${c.heat_tech_type} (${c.heat_tech_branded_name})` : c.heat_tech_type;
+}
+
+type CriterionKind = "motor" | "heat_technology" | "none";
+
+// Which criterion actually scored this competitor — 'motor'/'heat_technology'
+// fields are mutually exclusive (see lib/analysisEngine.ts's
+// selectByCompositeScore), 'none' means this tool type's primary_criterion
+// is 'none' and neither was ever populated.
+function resolveCriterionKind(c: Pick<Competitor, "motor_match_tier" | "heat_tech_match_tier">): CriterionKind {
+  if (c.motor_match_tier) return "motor";
+  if (c.heat_tech_match_tier) return "heat_technology";
+  return "none";
+}
+
+const CRITERION_DISPLAY: Record<"motor" | "heat_technology", { label: string; noun: string }> = {
+  motor: { label: "Motor", noun: "motor type" },
+  heat_technology: { label: "Heat/Plate Technology", noun: "plate/heat technology" },
+};
 
 function describeTier(t: TierResult): string {
   if (!t.attempted) return "not attempted (no ASIN)";
@@ -417,6 +450,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
   const displaySales   = live?.monthly_str  ?? c.monthly_sales ?? null;
   const displayManufacturer = live?.manufacturer ?? c.manufacturer ?? null;
   const displayModelNumber  = live?.model_number ?? c.model_number ?? null;
+  const criterionKind = resolveCriterionKind(c);
 
   // Per-section citation numbering — same URL cited twice in one section
   // keeps one number (components/analyze/CitationMarker.tsx).
@@ -475,23 +509,36 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
         <div className="rounded-lg border border-border/60 bg-surface-3/20 p-2.5 space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-[9px] font-bold text-text-muted uppercase tracking-wider">Why this competitor</span>
-            <span className="text-[9px] font-mono text-text-secondary" title="Composite match score (motor + price + features)">
+            <span className="text-[9px] font-mono text-text-secondary" title={`Composite match score (${criterionKind === "none" ? "price + features" : `${CRITERION_DISPLAY[criterionKind].label.toLowerCase()} + price + features`})`}>
               score {c.composite_score.toFixed(2)}
             </span>
           </div>
-          <p className="text-[10px] text-text-secondary leading-snug">
-            <span className="font-semibold">Motor: </span>
-            {c.motor_match_tier === "unverified" ? (
-              "Motor type could not be confirmed for one or both products"
-            ) : c.motor_match_tier === "exact" ? (
-              `Same motor type (${motorLabelWithBranded(c)})`
-            ) : c.motor_match_tier === "adjacent" ? (
-              `Related motor technology (${motorLabelWithBranded(c)} vs. yours)`
-            ) : (
-              `Different motor type (${motorLabelWithBranded(c) || "unknown"} vs. yours)`
-            )}
-            {c.motor_source_quote && <span className="italic text-text-muted"> — &quot;{c.motor_source_quote}&quot;</span>}
-          </p>
+          {criterionKind !== "none" && (
+            <p className="text-[10px] text-text-secondary leading-snug">
+              <span className="font-semibold">{CRITERION_DISPLAY[criterionKind].label}: </span>
+              {criterionKind === "motor" ? (
+                c.motor_match_tier === "unverified" ? (
+                  "Motor type could not be confirmed for one or both products"
+                ) : c.motor_match_tier === "exact" ? (
+                  `Same motor type (${motorLabelWithBranded(c)})`
+                ) : c.motor_match_tier === "adjacent" ? (
+                  `Related motor technology (${motorLabelWithBranded(c)} vs. yours)`
+                ) : (
+                  `Different motor type (${motorLabelWithBranded(c) || "unknown"} vs. yours)`
+                )
+              ) : (
+                c.heat_tech_match_tier === "unverified" ? (
+                  "Plate/heat technology could not be confirmed for one or both products"
+                ) : c.heat_tech_match_tier === "exact" ? (
+                  `Same plate/heat technology (${heatTechLabelWithBranded(c)})`
+                ) : (
+                  `Different plate/heat technology (${heatTechLabelWithBranded(c) || "unknown"} vs. yours)`
+                )
+              )}
+              {criterionKind === "motor" && c.motor_source_quote && <span className="italic text-text-muted"> — &quot;{c.motor_source_quote}&quot;</span>}
+              {criterionKind === "heat_technology" && c.heat_tech_source_quote && <span className="italic text-text-muted"> — &quot;{c.heat_tech_source_quote}&quot;</span>}
+            </p>
+          )}
           <p className="text-[10px] text-text-secondary leading-snug">
             <span className="font-semibold">Price: </span>
             {c.price_logic === "relative" ? (
@@ -511,6 +558,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           {c.motor_match_tier === "different" && (
             <p className="text-[10px] text-warning leading-snug">
               Included despite a different motor type — no exact/adjacent-motor candidate was available for this slot.
+            </p>
+          )}
+          {c.heat_tech_match_tier === "different" && (
+            <p className="text-[10px] text-warning leading-snug">
+              Included despite different plate/heat technology — no exact-match candidate was available for this slot.
             </p>
           )}
           {c.differentiator_match === true && keyDiff && (
@@ -564,7 +616,12 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
               Verified via brand site — not sold on Amazon
             </span>
           )}
-          {c.motor_unverified_fallback && (
+          {c.motor_unverified_fallback && criterionKind === "heat_technology" && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No plate/heat-technology-evidenced candidate was available to fill this slot — included as a last-resort, unconfirmed.">
+              Plate/heat technology unconfirmed — last-resort pick
+            </span>
+          )}
+          {c.motor_unverified_fallback && criterionKind !== "heat_technology" && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No motor-evidenced candidate was available to fill this slot — included as a last-resort, motor type unconfirmed.">
               Motor type unconfirmed — last-resort pick
             </span>
@@ -587,6 +644,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           {c.motor_match_tier === "different" && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No exact or adjacent-motor candidate was available for this slot.">
               Different motor type ({motorLabelWithBranded(c) || "unknown"})
+            </span>
+          )}
+          {c.heat_tech_match_tier === "different" && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No exact-match candidate was available for this slot.">
+              Different plate/heat technology ({heatTechLabelWithBranded(c) || "unknown"})
             </span>
           )}
         </div>

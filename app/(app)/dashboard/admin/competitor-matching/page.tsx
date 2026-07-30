@@ -18,7 +18,9 @@ interface MotorFamily {
   sort_order: number;
 }
 
-interface Weights {
+interface ScoringProfile {
+  id: string;
+  type_key: string | null; // null = the global default/fallback profile
   motor_weight: number;
   price_weight: number;
   feature_weight: number;
@@ -44,9 +46,16 @@ interface ToolTypeAdmin {
   label: string;
   aliases: string[];
   family: string | null;
+  primary_criterion: "motor" | "heat_technology" | "none";
   enabled: boolean;
   custom: boolean;
 }
+
+const CRITERION_LABELS: Record<string, string> = {
+  motor: "Motor",
+  heat_technology: "Heat/Plate Technology",
+  none: "None",
+};
 
 const TOOL_TYPE_FAMILY_LABELS: Record<string, string> = {
   clipper_trimmer_shaver: "Clippers, Trimmers & Shavers",
@@ -71,11 +80,15 @@ export default function CompetitorMatchingAdminPage() {
   const [families, setFamilies] = useState<MotorFamily[]>([]);
   const [misses, setMisses] = useState<MotorTechMiss[]>([]);
   const [brandedNames, setBrandedNames] = useState<BrandedMotorName[]>([]);
-  const [weights, setWeights] = useState<Weights | null>(null);
-  const [weightInputs, setWeightInputs] = useState({ motor: "0.45", price: "0.35", feature: "0.20" });
+  const [scoringProfiles, setScoringProfiles] = useState<ScoringProfile[]>([]);
+  // "" (empty string, not null — <select> values can't be null) selects the
+  // global default profile itself; any other value is a real type_key.
+  const [selectedProfileTypeKey, setSelectedProfileTypeKey] = useState<string>("");
+  const [profileInputs, setProfileInputs] = useState({ motor: "45", price: "35", feature: "20" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingWeights, setSavingWeights] = useState(false);
+  const [resettingProfile, setResettingProfile] = useState(false);
   const [newFamilyText, setNewFamilyText] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [newBranded, setNewBranded] = useState({ brandName: "", brandedTerm: "", familyKey: "" });
@@ -90,21 +103,22 @@ export default function CompetitorMatchingAdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const [famRes, weightRes, missRes, brandedRes, brandedMissRes, toolTypesRes] = await Promise.all([
+      const [famRes, profilesRes, missRes, brandedRes, brandedMissRes, toolTypesRes] = await Promise.all([
         fetch("/api/admin/motor-families"),
-        fetch("/api/admin/competitor-matching-config"),
+        fetch("/api/scoring-profiles"),
         fetch("/api/admin/motor-families/misses"),
         fetch("/api/admin/branded-motor-map"),
         fetch("/api/admin/motor-families/branded-misses"),
         fetch("/api/admin/tool-types"),
       ]);
       const famData = await famRes.json();
-      const weightData = await weightRes.json();
+      const profilesData = await profilesRes.json();
       const missData = await missRes.json();
       if (!famRes.ok) throw new Error(famData.error || "Failed to load motor families");
-      if (!weightRes.ok) throw new Error(weightData.error || "Failed to load weights");
+      if (!profilesRes.ok) throw new Error(profilesData.error || "Failed to load scoring profiles");
       setFamilies(famData.families || []);
-      setWeights(weightData.weights);
+      const profiles: ScoringProfile[] = profilesData.profiles || [];
+      setScoringProfiles(profiles);
       if (missRes.ok) setMisses(missData.misses || []);
       if (brandedRes.ok) {
         const brandedData = await brandedRes.json();
@@ -118,11 +132,14 @@ export default function CompetitorMatchingAdminPage() {
         const toolTypesData = await toolTypesRes.json();
         setToolTypesAdmin(toolTypesData.toolTypes || []);
       }
-      setWeightInputs({
-        motor: String(weightData.weights.motor_weight),
-        price: String(weightData.weights.price_weight),
-        feature: String(weightData.weights.feature_weight),
-      });
+      // Re-derive the currently-selected profile's inputs from the freshly
+      // loaded list (own row if present, else the global default) — keeps
+      // the editor in sync after every load()/save()/reset().
+      const own = selectedProfileTypeKey ? profiles.find(p => p.type_key === selectedProfileTypeKey) : undefined;
+      const resolved = own || profiles.find(p => p.type_key === null);
+      if (resolved) {
+        setProfileInputs({ motor: String(resolved.motor_weight), price: String(resolved.price_weight), feature: String(resolved.feature_weight) });
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load competitor matching config");
     } finally {
@@ -135,23 +152,62 @@ export default function CompetitorMatchingAdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  // Switches which profile the editor shows — own row if the type has one,
+  // else the global default's current values (with an "using global
+  // default" note in the UI, since saving here would CREATE that type's
+  // own override row, not silently edit the shared default).
+  function handleSelectProfile(typeKey: string) {
+    setSelectedProfileTypeKey(typeKey);
+    const own = typeKey ? scoringProfiles.find(p => p.type_key === typeKey) : undefined;
+    const resolved = own || scoringProfiles.find(p => p.type_key === null);
+    if (resolved) {
+      setProfileInputs({ motor: String(resolved.motor_weight), price: String(resolved.price_weight), feature: String(resolved.feature_weight) });
+    }
+  }
+
   async function handleSaveWeights() {
     setSavingWeights(true);
     try {
-      const res = await fetch("/api/admin/competitor-matching-config", {
-        method: "PATCH",
+      const res = await fetch("/api/admin/scoring-profiles", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ motor: Number(weightInputs.motor), price: Number(weightInputs.price), feature: Number(weightInputs.feature) }),
+        body: JSON.stringify({
+          typeKey: selectedProfileTypeKey || null,
+          motor: Number(profileInputs.motor),
+          price: Number(profileInputs.price),
+          feature: Number(profileInputs.feature),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to save weights");
-      setWeights(data.weights);
-      setWeightInputs({ motor: String(data.weights.motor_weight), price: String(data.weights.price_weight), feature: String(data.weights.feature_weight) });
-      toast.success("Weights saved — normalized to sum to 1.0");
+      toast.success(selectedProfileTypeKey ? "Profile saved for this tool type" : "Global default profile saved");
+      await load();
     } catch (err: any) {
       toast.error(err.message || "Failed to save weights");
     } finally {
       setSavingWeights(false);
+    }
+  }
+
+  // Deletes the type-specific override row so resolution falls back to the
+  // global default — never available for the global default row itself.
+  async function handleResetProfile() {
+    if (!selectedProfileTypeKey) return;
+    setResettingProfile(true);
+    try {
+      const res = await fetch("/api/admin/scoring-profiles", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ typeKey: selectedProfileTypeKey }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to reset profile");
+      toast.success("Reset to global default");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to reset profile");
+    } finally {
+      setResettingProfile(false);
     }
   }
 
@@ -379,7 +435,11 @@ export default function CompetitorMatchingAdminPage() {
     );
   }
 
-  const weightSum = (Number(weightInputs.motor) || 0) + (Number(weightInputs.price) || 0) + (Number(weightInputs.feature) || 0);
+  const weightSum = (Number(profileInputs.motor) || 0) + (Number(profileInputs.price) || 0) + (Number(profileInputs.feature) || 0);
+  const effectivePct = (raw: string) => (weightSum > 0 ? Math.round(((Number(raw) || 0) / weightSum) * 100) : 0);
+  const selectedToolType = toolTypesAdmin.find(t => t.type_key === selectedProfileTypeKey);
+  const criterionLabel = selectedProfileTypeKey ? (CRITERION_LABELS[selectedToolType?.primary_criterion || "motor"] || "Motor") : "Motor";
+  const hasOwnProfile = !!selectedProfileTypeKey && scoringProfiles.some(p => p.type_key === selectedProfileTypeKey);
   const domains = Array.from(new Set(families.map(f => f.domain)));
 
   return (
@@ -399,49 +459,84 @@ export default function CompetitorMatchingAdminPage() {
       ) : (
         <>
           <div className="border border-border rounded-xl p-4 space-y-3">
-            <h2 className="text-xs font-bold text-text-primary">Scoring Weights</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-xs font-bold text-text-primary">Scoring Weights</h2>
+              <select
+                value={selectedProfileTypeKey}
+                onChange={e => handleSelectProfile(e.target.value)}
+                className="px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+              >
+                <option value="">Global default</option>
+                {toolTypesAdmin.map(t => (
+                  <option key={t.type_key} value={t.type_key}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[10px] text-text-muted">
+              Enter any non-negative numbers expressing RELATIVE importance — no need to sum to 1 or 100, the effective share is computed automatically.
+              {selectedProfileTypeKey && !hasOwnProfile && " This type has no profile of its own yet — showing the global default; saving here creates its own override."}
+            </p>
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Motor</label>
+                <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{criterionLabel}</label>
                 <input
-                  type="number" step="0.01" min="0" max="1"
-                  value={weightInputs.motor}
-                  onChange={e => setWeightInputs(prev => ({ ...prev, motor: e.target.value }))}
+                  type="number" step="1" min="0"
+                  value={profileInputs.motor}
+                  onChange={e => setProfileInputs(prev => ({ ...prev, motor: e.target.value }))}
                   className="mt-1 w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                 />
+                <p className="mt-0.5 text-[10px] text-text-muted">→ {effectivePct(profileInputs.motor)}%</p>
               </div>
               <div>
                 <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Price</label>
                 <input
-                  type="number" step="0.01" min="0" max="1"
-                  value={weightInputs.price}
-                  onChange={e => setWeightInputs(prev => ({ ...prev, price: e.target.value }))}
+                  type="number" step="1" min="0"
+                  value={profileInputs.price}
+                  onChange={e => setProfileInputs(prev => ({ ...prev, price: e.target.value }))}
                   className="mt-1 w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                 />
+                <p className="mt-0.5 text-[10px] text-text-muted">→ {effectivePct(profileInputs.price)}%</p>
               </div>
               <div>
                 <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Features</label>
                 <input
-                  type="number" step="0.01" min="0" max="1"
-                  value={weightInputs.feature}
-                  onChange={e => setWeightInputs(prev => ({ ...prev, feature: e.target.value }))}
+                  type="number" step="1" min="0"
+                  value={profileInputs.feature}
+                  onChange={e => setProfileInputs(prev => ({ ...prev, feature: e.target.value }))}
                   className="mt-1 w-full px-2.5 py-1.5 text-xs border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                 />
+                <p className="mt-0.5 text-[10px] text-text-muted">→ {effectivePct(profileInputs.feature)}%</p>
               </div>
             </div>
             <div className="flex items-center justify-between">
-              <p className="text-[10px] text-text-muted">
-                Sum: {weightSum.toFixed(2)} {Math.abs(weightSum - 1) > 0.001 ? "— will be normalized to 1.0 on save" : ""}
-              </p>
-              <button
-                type="button"
-                onClick={handleSaveWeights}
-                disabled={savingWeights}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
-              >
-                {savingWeights ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                <span>Save weights</span>
-              </button>
+              {weightSum <= 0 ? (
+                <p className="text-[10px] text-danger">At least one criterion must be &gt; 0</p>
+              ) : (
+                <p className="text-[10px] text-text-muted">
+                  {criterionLabel} {profileInputs.motor || 0} → {effectivePct(profileInputs.motor)}% · Price {profileInputs.price || 0} → {effectivePct(profileInputs.price)}% · Features {profileInputs.feature || 0} → {effectivePct(profileInputs.feature)}%
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                {selectedProfileTypeKey && hasOwnProfile && (
+                  <button
+                    type="button"
+                    onClick={handleResetProfile}
+                    disabled={resettingProfile}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold text-text-muted hover:text-danger transition-colors disabled:opacity-50"
+                  >
+                    {resettingProfile ? "Resetting…" : "Reset to default"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSaveWeights}
+                  disabled={savingWeights || weightSum <= 0}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {savingWeights ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  <span>Save {selectedProfileTypeKey ? "profile" : "global default"}</span>
+                </button>
+              </div>
             </div>
           </div>
 
