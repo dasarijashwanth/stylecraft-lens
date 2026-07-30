@@ -17,6 +17,14 @@ interface ProjectInput {
   // precedent already set by productUrl/asin below).
   toolType?: string;
   companyContext?: string;
+  // Canonical motor family (lib/validations.ts's MOTOR_FAMILY_VALUES) +
+  // optional display-only branded name, from the analyze/new-project
+  // forms' Motor Type select — see lib/analysisEngine.ts's AnalysisContext
+  // for the full priority/backward-compat explanation. motorTech is the
+  // legacy free-text field, kept only for projects created before this
+  // select existed.
+  motorFamily?: string;
+  motorBrandedName?: string;
   motorTech?: string;
   keyDiff?: string;
   pricePoint?: string;
@@ -44,6 +52,8 @@ function toProjectShape(row: any) {
     category: row.category,
     toolType: row.tool_type,
     companyContext: row.company_context,
+    motorFamily: row.motor_family,
+    motorBrandedName: row.motor_branded_name,
     motorTech: row.motor_tech,
     keyDiff: row.key_diff,
     pricePoint: row.price_point,
@@ -78,6 +88,8 @@ export async function createProject(userId: string, orgId: string, data: Project
         category: data.category ?? null,
         tool_type: data.toolType ?? null,
         company_context: data.companyContext ?? null,
+        motor_family: data.motorFamily ?? null,
+        motor_branded_name: data.motorBrandedName ?? null,
         motor_tech: data.motorTech ?? null,
         key_diff: data.keyDiff ?? null,
         price_point: data.pricePoint ?? null,
@@ -124,6 +136,8 @@ export async function createProject(userId: string, orgId: string, data: Project
       category: data.category || null,
       toolType: data.toolType || null,
       companyContext: data.companyContext || null,
+      motorFamily: data.motorFamily || null,
+      motorBrandedName: data.motorBrandedName || null,
       motorTech: data.motorTech || null,
       keyDiff: data.keyDiff || null,
       pricePoint: data.pricePoint || null,
@@ -232,6 +246,8 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   category: "category",
   toolType: "tool_type",
   companyContext: "company_context",
+  motorFamily: "motor_family",
+  motorBrandedName: "motor_branded_name",
   motorTech: "motor_tech",
   keyDiff: "key_diff",
   pricePoint: "price_point",

@@ -577,7 +577,12 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
     // that can fall through to "Not available."
     {
       label: "Motor Type",
-      getValue: (c) => (c.motor_match_tier === "unverified" ? "Unverified" : c.motor_type || null),
+      getValue: (c) =>
+        c.motor_match_tier === "unverified"
+          ? "Unverified"
+          : c.motor_type
+          ? (c.motor_branded_name ? `${c.motor_type} (${c.motor_branded_name})` : c.motor_type)
+          : null,
     },
     { label: "Amazon Price", getValue: (c) => c.price || null },
     { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null), getEmptyLabel: amazonOnlyEmptyLabel },

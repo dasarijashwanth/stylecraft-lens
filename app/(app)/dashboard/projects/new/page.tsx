@@ -16,6 +16,30 @@ interface MotorFamilyOption {
   aliases: string[];
 }
 
+function normalizeMotorToken(s: string): string {
+  return (s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, " ").trim();
+}
+
+// Lightweight, self-contained mirror of lib/motor-taxonomy.ts's
+// matchMotorFamily (whole-word alias containment) — deliberately NOT
+// importing that module here, since it transitively pulls in server-only
+// code (Supabase admin client, Rainforest calls) that must never reach a
+// "use client" bundle. Families arrive from GET /api/motor-families already
+// sorted by sort_order, so iterating in array order approximates the same
+// first-match-wins precedence.
+function detectMotorFamilyFromText(text: string, families: MotorFamilyOption[]): string | null {
+  const tokens = new Set(normalizeMotorToken(text).split(/\s+/).filter(Boolean));
+  if (tokens.size === 0) return null;
+  for (const f of families) {
+    const candidates = [f.label, f.family_key.replace(/_/g, " "), ...f.aliases];
+    for (const c of candidates) {
+      const cTokens = normalizeMotorToken(c).split(/\s+/).filter(Boolean);
+      if (cTokens.length > 0 && cTokens.every(t => tokens.has(t))) return f.family_key;
+    }
+  }
+  return null;
+}
+
 export default function NewProjectPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -36,7 +60,13 @@ export default function NewProjectPage() {
   
   // Advanced / Precision fields
   const [companyContext, setCompanyContext] = useState("");
-  const [motorTech, setMotorTech] = useState("");
+  // Canonical motor type — one of the 7 fixed families (lib/validations.ts's
+  // MOTOR_FAMILY_VALUES); matching/grounding always uses this, never
+  // motorBrandedName below. motorBrandedName is an optional, display-only
+  // marketing name (e.g. "EON Digital Brushless Motor") shown in documents
+  // alongside the canonical family, never used for matching.
+  const [motorFamily, setMotorFamily] = useState("");
+  const [motorBrandedName, setMotorBrandedName] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
 
   // Product anchor — optional, drives the real-time TDS snapshot + GTM
@@ -46,14 +76,24 @@ export default function NewProjectPage() {
   const [asin, setAsin] = useState("");
   const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
 
-  // Populates the Motor Technology <datalist> with the real taxonomy
-  // (lib/motor-taxonomy.ts) — mirrors app/(app)/dashboard/analyze/page.tsx.
+  // Populates the Motor Type <select> with the real, fixed 7-family
+  // taxonomy (lib/motor-taxonomy.ts) — mirrors
+  // app/(app)/dashboard/analyze/page.tsx.
   useEffect(() => {
     fetch("/api/motor-families")
       .then(r => r.json())
       .then(data => setMotorFamilies(data.families || []))
       .catch(() => {});
   }, []);
+
+  // Live auto-detect: as soon as the branded-name text resolves to a real
+  // family, auto-select it — but only while no family is selected yet, so
+  // this never fights a choice the user already made or confirmed.
+  useEffect(() => {
+    if (motorFamily || !motorBrandedName.trim() || motorFamilies.length === 0) return;
+    const detected = detectMotorFamilyFromText(motorBrandedName, motorFamilies);
+    if (detected) setMotorFamily(detected);
+  }, [motorBrandedName, motorFamilies, motorFamily]);
 
   // Suggests the whole form from the most recent analysis that hasn't been
   // linked to a project yet — lets a user go straight from finishing an
@@ -81,7 +121,8 @@ export default function NewProjectPage() {
         if (ctx.toolType) setToolType(prev => prev ? prev : ctx.toolType);
         setPricePoint(prev => prev.trim() ? prev : (ctx.pricePoint || ""));
         setCompanyContext(prev => prev.trim() ? prev : (ctx.companyContext || ""));
-        setMotorTech(prev => prev.trim() ? prev : (ctx.motorTech || ""));
+        setMotorFamily(prev => prev ? prev : (ctx.motorFamily || ""));
+        setMotorBrandedName(prev => prev.trim() ? prev : (ctx.motorBrandedName || (ctx.motorFamily ? "" : ctx.motorTech) || ""));
         setKeyDiff(prev => prev.trim() ? prev : (ctx.keyDiff || ""));
 
         toast(`Suggested from your recent analysis: "${ctx.productName}"`);
@@ -103,6 +144,11 @@ export default function NewProjectPage() {
       errs.description = "Add at least 10 characters for sharper results";
     }
     if (!toolType) errs.toolType = "Select the exact tool type";
+    // Motor Type is hidden entirely for Hair Care & Styling (not applicable
+    // to those tool types) — required whenever it's actually shown.
+    if (industry !== "haircare-styling" && !motorFamily) {
+      errs.motorFamily = "Select the motor type";
+    }
     const priceNum = parsePriceToNumber(pricePoint);
     if (!pricePoint.trim() || priceNum === null || priceNum <= 0) {
       errs.pricePoint = "Enter a target price greater than $0";
@@ -122,6 +168,15 @@ export default function NewProjectPage() {
 
     setLoading(true);
     try {
+      // Legacy free-text fallback for any code path not yet updated to read
+      // motorFamily/motorBrandedName directly — the branded name if given,
+      // else the canonical family's own label, never blank when a family is
+      // selected.
+      const motorFamilyLabel = motorFamilies.find(f => f.family_key === motorFamily)?.label || "";
+      const motorTechFallback = motorFamilyLabel
+        ? (motorBrandedName.trim() ? `${motorFamilyLabel} (${motorBrandedName.trim()})` : motorFamilyLabel)
+        : motorBrandedName.trim();
+
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -138,7 +193,9 @@ export default function NewProjectPage() {
           // Never submit a motor type for Hair Care & Styling — the field
           // only applies to Grooming & Barbering, even if a catalog
           // auto-fill left a stale value sitting in state.
-          motorTech: industry === "haircare-styling" ? undefined : (motorTech.trim() || undefined),
+          motorFamily: industry === "haircare-styling" ? undefined : (motorFamily || undefined),
+          motorBrandedName: industry === "haircare-styling" ? undefined : (motorBrandedName.trim() || undefined),
+          motorTech: industry === "haircare-styling" ? undefined : (motorTechFallback || undefined),
           keyDiff: keyDiff.trim() || undefined,
           productUrl: productUrl.trim() || undefined,
           asin: asin.trim() || undefined,
@@ -161,6 +218,15 @@ export default function NewProjectPage() {
       setLoading(false);
     }
   };
+
+  // Canonical family label + branded name in parens when given (e.g.
+  // "Brushless Motor (EON Digital Brushless Motor)") — pure derived text for
+  // the review-step summary below.
+  const motorSummaryLabel = (() => {
+    const label = motorFamilies.find(f => f.family_key === motorFamily)?.label;
+    if (!label) return "";
+    return motorBrandedName.trim() ? `${label} (${motorBrandedName.trim()})` : label;
+  })();
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -228,11 +294,11 @@ export default function NewProjectPage() {
                 value={industry}
                 onChange={(e) => {
                   setIndustry(e.target.value);
-                  // Motor technology (rotary/magnetic/pivot clipper-style
+                  // Motor Type (rotary/magnetic/pivot clipper-style
                   // motors) only applies to Grooming & Barbering tools —
                   // clear any prior selection so a stale motor type never
                   // gets submitted for a Hair Care & Styling product.
-                  if (e.target.value === "haircare-styling") setMotorTech("");
+                  if (e.target.value === "haircare-styling") { setMotorFamily(""); setMotorBrandedName(""); }
                   // Tool Type options are Industry-dependent (see
                   // toolTypesForIndustry) — a Tool Type valid under the old
                   // Industry is meaningless once the Industry no longer
@@ -417,26 +483,40 @@ export default function NewProjectPage() {
           <h2 className="text-sm font-bold text-text-primary">Precision hardware targets</h2>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Motor technology — Grooming & Barbering only (clipper/trimmer/
-                shaver-style motors); not applicable to Hair Care & Styling tools. */}
+            {/* Motor Type — Grooming & Barbering only (clipper/trimmer/
+                shaver-style motors); not applicable to Hair Care & Styling
+                tools. Fixed 7-family canonical list — our own branding
+                (e.g. "EON Digital Brushless Motor") is a Brushless Motor
+                for matching purposes; the branded name is a separate,
+                optional display-only field below. */}
             {industry !== "haircare-styling" && (
               <div className="space-y-1">
-                <label className="font-semibold text-text-primary block">Motor technology</label>
+                <label className="font-semibold text-text-primary block">Motor type *</label>
+                <select
+                  value={motorFamily}
+                  onChange={(e) => {
+                    setMotorFamily(e.target.value);
+                    if (errors.motorFamily) setErrors(prev => { const n = { ...prev }; delete n.motorFamily; return n; });
+                  }}
+                  className={`w-full px-3 py-2 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent ${
+                    errors.motorFamily ? "border-danger" : "border-border"
+                  }`}
+                >
+                  <option value="">Select motor type…</option>
+                  {motorFamilies.map(f => (
+                    <option key={f.family_key} value={f.family_key}>{f.label}</option>
+                  ))}
+                </select>
+                {errors.motorFamily && <p className="text-[10px] text-danger">{errors.motorFamily}</p>}
                 <input
                   type="text"
-                  list="motor-family-options"
-                  value={motorTech}
-                  onChange={(e) => setMotorTech(e.target.value)}
-                  placeholder="e.g. Vector, Magnetic, Rotary, Brushless DC…"
+                  value={motorBrandedName}
+                  onChange={(e) => setMotorBrandedName(e.target.value)}
+                  placeholder="Branded motor name (optional) — e.g. EON Digital Brushless Motor"
                   className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
                 />
-                <datalist id="motor-family-options">
-                  {motorFamilies.map(f => (
-                    <option key={f.family_key} value={f.label} />
-                  ))}
-                </datalist>
                 <p className="text-[10px] text-text-muted">
-                  Claude searches for {(toolType ? TOOL_TYPE_LABELS[toolType].toLowerCase() : "matching")} products with this motor technology first, then narrows by price. Free text is fine — an unrecognized entry is kept as-is, never guessed.
+                  Competitors are matched on the motor family. Your branded motor name appears in documents but matching uses the universal type.
                 </p>
               </div>
             )}
@@ -460,7 +540,7 @@ export default function NewProjectPage() {
             real value right before the project is created (no new state). */}
         {productName.trim() && toolType && (
           <p className="text-[11px] text-text-secondary bg-surface-3/30 border border-border rounded-lg px-4 py-2.5">
-            Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {TOOL_TYPE_LABELS[toolType]}, {motorTech.trim() || "motor tech unspecified"}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
+            Analyzing: <span className="font-semibold text-text-primary">{productName.trim()}</span> — {TOOL_TYPE_LABELS[toolType]}, {motorSummaryLabel || "motor type unspecified"}, {pricePoint.trim() || "price unspecified"}, {TARGET_MARKET_LABELS[targetMarket]} market
             {keyDiff.trim() && <> · differentiator: {keyDiff.trim()}</>}
           </p>
         )}

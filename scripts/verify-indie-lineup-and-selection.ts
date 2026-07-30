@@ -63,8 +63,8 @@ function makeFamily(overrides: any): any {
   return { id: `mfam_${overrides.family_key}`, domain: "clipper_trimmer_shaver", aliases: [], modifier: false, adjacent_families: [], enabled: true, sort_order: 0, ...overrides };
 }
 const FAMILIES = [
-  makeFamily({ family_key: "rotary", label: "Rotary", aliases: ["rotary motor"], sort_order: 0 }),
-  makeFamily({ family_key: "magnetic_vector", label: "Magnetic / Vector", aliases: ["electromagnetic", "vector", "magnetic"], sort_order: 1 }),
+  makeFamily({ family_key: "rotary", label: "Rotary Motor", aliases: ["rotary", "rotary motor"], sort_order: 0 }),
+  makeFamily({ family_key: "vector", label: "Vector Motor", aliases: ["vector", "in3", "electromagnetic vector"], sort_order: 1 }),
 ];
 
 function makeIdentity(): any {

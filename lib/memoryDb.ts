@@ -42,6 +42,8 @@ export interface MockProject {
   category?: string | null;
   toolType?: string | null;
   companyContext?: string | null;
+  motorFamily?: string | null;
+  motorBrandedName?: string | null;
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;
@@ -324,6 +326,10 @@ export interface MockFaqSearchMiss {
 export interface MockMotorTechMiss {
   id: string;
   term: string;
+  // Set only for a branded-name miss (lib/db/motor-families.ts's
+  // logBrandedMotorMiss) — null for the original plain-motorTech-miss case.
+  brandName?: string | null;
+  aiGuessedFamily?: string | null;
   createdAt: Date;
 }
 
@@ -665,19 +671,32 @@ class MemoryDatabase {
     }
   }
 
-  // Mirrors supabase_schema.sql's motor_families seed INSERT exactly.
+  // Mirrors supabase_schema.sql's motor_families seed INSERT + Section 25's
+  // canonical-7-family restructure exactly — this seeds the restructure's
+  // END STATE directly (memoryDb has no migration concept, it just seeds
+  // once), not the UPDATE/INSERT steps themselves. "linear" and
+  // "brushless_digital" stay present but disabled (folded into Pivot and
+  // Brushless respectively) rather than removed, matching the SQL's
+  // non-destructive disable. Array ORDER matters — it becomes sort_order,
+  // which matchMotorFamily checks in sequence: "vector" must come before
+  // "magnetic" (matching the real SQL's sort_order, where "vector" kept
+  // magnetic_vector's original low sort_order=1 and the new "magnetic" row
+  // was appended last at sort_order=8) so text containing the more specific
+  // "electromagnetic vector" resolves to Vector, not Magnetic, before
+  // Magnetic's own bare "electromagnetic" alias gets a chance to match.
   seedMotorFamilyDefaults() {
     if (this.motorFamilies.length > 0) return;
     const now = new Date();
-    const defs: { key: string; label: string; domain: string; aliases: string[]; modifier?: boolean; adjacent?: string[] }[] = [
-      { key: "rotary", label: "Rotary", domain: "clipper_trimmer_shaver", aliases: ["rotary motor"] },
-      { key: "magnetic_vector", label: "Magnetic / Vector", domain: "clipper_trimmer_shaver", aliases: ["electromagnetic", "vector", "magnetic"], adjacent: ["pivot", "linear"] },
-      { key: "pivot", label: "Pivot", domain: "clipper_trimmer_shaver", aliases: ["pivot motor"], adjacent: ["magnetic_vector"] },
-      { key: "linear", label: "Linear", domain: "clipper_trimmer_shaver", aliases: ["linear magnetic"], adjacent: ["magnetic_vector"] },
-      { key: "ac_motor", label: "AC Motor", domain: "beauty", aliases: ["ac motor"] },
-      { key: "dc_motor", label: "DC Motor", domain: "beauty", aliases: ["dc motor"] },
-      { key: "brushless_digital", label: "Brushless Digital", domain: "beauty", aliases: ["brushless digital motor", "digital motor"] },
-      { key: "brushless", label: "Brushless (modifier)", domain: "clipper_trimmer_shaver", aliases: ["brushless dc", "bldc", "brushless"], modifier: true },
+    const defs: { key: string; label: string; domain: string; aliases: string[]; modifier?: boolean; adjacent?: string[]; enabled?: boolean }[] = [
+      { key: "rotary", label: "Rotary Motor", domain: "clipper_trimmer_shaver", aliases: ["rotary", "rotary motor"] },
+      { key: "vector", label: "Vector Motor", domain: "clipper_trimmer_shaver", aliases: ["vector", "in3", "electromagnetic vector"] },
+      { key: "pivot", label: "Pivot Motor", domain: "clipper_trimmer_shaver", aliases: ["pivot", "pivot motor", "linear", "linear magnetic"] },
+      { key: "linear", label: "Linear", domain: "clipper_trimmer_shaver", aliases: ["linear magnetic"], enabled: false },
+      { key: "ac_motor", label: "AC Motor", domain: "beauty", aliases: ["ac motor", "ac", "alternating current"] },
+      { key: "dc_motor", label: "DC Motor", domain: "beauty", aliases: ["dc motor", "dc", "direct current"] },
+      { key: "brushless_digital", label: "Brushless Digital", domain: "beauty", aliases: ["brushless digital motor", "digital motor"], enabled: false },
+      { key: "brushless", label: "Brushless Motor", domain: "clipper_trimmer_shaver", aliases: ["brushless", "bldc", "brushless dc", "digital brushless", "eon digital brushless", "digital motor", "brushless digital motor"] },
+      { key: "magnetic", label: "Magnetic Motor", domain: "clipper_trimmer_shaver", aliases: ["magnetic", "electromagnetic"] },
     ];
     defs.forEach((d, i) => {
       this.motorFamilies.push({
@@ -688,7 +707,7 @@ class MemoryDatabase {
         aliases: d.aliases,
         modifier: d.modifier ?? false,
         adjacentFamilies: d.adjacent ?? [],
-        enabled: true,
+        enabled: d.enabled ?? true,
         sortOrder: i,
         createdAt: now,
         updatedAt: now,

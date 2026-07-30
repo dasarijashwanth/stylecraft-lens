@@ -74,7 +74,7 @@ export function matchMotorFamily(text: string, families: MotorFamilyRow[]): Matc
 // comparison uses the same normalizeBrandToken equality this codebase
 // already uses for brand matching elsewhere), so a proprietary term is only
 // ever trusted for the brand that actually owns it.
-export function matchBrandedMotorName(brand: string, text: string, brandedNames: BrandedMotorNameRow[], families: MotorFamilyRow[]): MatchedMotor | null {
+export function matchBrandedMotorName(brand: string, text: string, brandedNames: BrandedMotorNameRow[], families: MotorFamilyRow[]): (MatchedMotor & { brandedTerm: string }) | null {
   const brandToken = normalizeBrandToken(brand || "");
   if (!brandToken) return null;
   const textTokens = new Set(normalizeBrandToken(text || "").split(/\s+/).filter(Boolean));
@@ -86,9 +86,47 @@ export function matchBrandedMotorName(brand: string, text: string, brandedNames:
     if (!aliasMatchesText(entry.branded_term, textTokens)) continue;
     const family = families.find(f => f.enabled && f.family_key === entry.family_key);
     if (!family) continue;
-    return { familyKey: family.family_key, label: family.label, modifierKey: null, modifierLabel: null };
+    return { familyKey: family.family_key, label: family.label, modifierKey: null, modifierLabel: null, brandedTerm: entry.branded_term };
   }
   return null;
+}
+
+export interface NormalizedMotor {
+  family: MatchedMotor | null;
+  // The brand's own registered proprietary term (e.g. "IN3") — set ONLY
+  // when a brand-scoped branded map entry actually matched, since that's
+  // the one case where there's a real display value beyond the canonical
+  // family label itself (a spec row reading "Motor Type: Brushless" has
+  // nothing to add over the label "Brushless Motor"). Null whenever
+  // resolution fell through to plain generic family matching.
+  brandedName: string | null;
+}
+
+// Single unified entry point every motor-entry point should call instead of
+// invoking matchBrandedMotorName/matchMotorFamily separately. `opts.brand` +
+// `opts.brandedNames` are optional — when given (competitor extraction), a
+// brand's own proprietary term is checked first; when omitted (our own
+// product, e.g. the analyze form's canonical-family select), this falls
+// straight to generic family matching — "EON Digital Brushless Motor"
+// already resolves via Brushless's own seeded aliases, no brand-scoping
+// needed for our own product.
+export function normalizeMotor(
+  raw: string,
+  families: MotorFamilyRow[],
+  opts?: { brand?: string | null; brandedNames?: BrandedMotorNameRow[] }
+): NormalizedMotor {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return { family: null, brandedName: null };
+
+  if (opts?.brand && opts.brandedNames?.length) {
+    const branded = matchBrandedMotorName(opts.brand, trimmed, opts.brandedNames, families);
+    if (branded) {
+      const { brandedTerm, ...family } = branded;
+      return { family, brandedName: brandedTerm };
+    }
+  }
+
+  return { family: matchMotorFamily(trimmed, families), brandedName: null };
 }
 
 // exact (same family) > adjacent (either family lists the other in its

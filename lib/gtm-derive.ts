@@ -9,8 +9,9 @@
 // AI or "N/A", never guessed.
 //
 // Source hierarchy (highest authority first): the project record itself
-// (name, description, category, motorTech, keyDiff, pricePoint,
-// companyContext — entered directly by the team) > project documents
+// (name, description, category, motorFamily/motorBrandedName (or legacy
+// motorTech), keyDiff, pricePoint, companyContext — entered directly by the
+// team) > project documents
 // (Competitive Analysis, TDS, Sales Kit) > real web search (all 77 fields
 // are eligible — see lib/gtm-generate.ts's callAi/applyWebSearchFallback)
 // > N/A.
@@ -33,10 +34,45 @@ export interface ProjectRecord {
   description?: string | null;
   category?: string | null;
   toolType?: string | null;
+  // Canonical motor family key (lib/validations.ts's MOTOR_FAMILY_VALUES) +
+  // optional display-only branded name — see motorLabel() below.
+  // motorTech is the legacy free-text field, kept only as a fallback for
+  // projects created before the canonical select existed.
+  motorFamily?: string | null;
+  motorBrandedName?: string | null;
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;
   companyContext?: string | null;
+}
+
+// The 7 canonical family labels, fixed by design — mirrors
+// lib/validations.ts's MOTOR_FAMILY_VALUES and the seed labels in
+// supabase_schema.sql's Section 25 / lib/memoryDb.ts's
+// seedMotorFamilyDefaults. Duplicated as a small static map here (rather
+// than fetching lib/db/motor-families.ts's live table) because this module
+// must stay synchronous/DB-free — every other field here is derived from
+// plain in-memory sources, and this list never changes independently of a
+// code change anyway.
+const MOTOR_FAMILY_LABELS: Record<string, string> = {
+  magnetic: "Magnetic Motor",
+  pivot: "Pivot Motor",
+  rotary: "Rotary Motor",
+  brushless: "Brushless Motor",
+  vector: "Vector Motor",
+  ac_motor: "AC Motor",
+  dc_motor: "DC Motor",
+};
+
+// Canonical family label, plus the branded name in parens when given (e.g.
+// "Brushless Motor (EON Digital Brushless Motor)") — never the branded name
+// alone, so grounding/display always leads with the universal type. Returns
+// "" when motorFamily isn't one of the 7 canonical keys (a legacy project
+// with only free-text motorTech), letting the caller fall back to that.
+function motorLabel(motorFamily?: string | null, motorBrandedName?: string | null): string {
+  const label = motorFamily ? MOTOR_FAMILY_LABELS[motorFamily] : undefined;
+  if (!label) return "";
+  return motorBrandedName?.trim() ? `${label} (${motorBrandedName.trim()})` : label;
 }
 
 export function deriveFieldsFromSources(
@@ -53,6 +89,10 @@ export function deriveFieldsFromSources(
   const t = tds || {};
   const ca = activeReport?.competitive_analysis || {};
   const pricing = activeReport?.pricing_analysis || {};
+  // Canonical family + branded name combined for display — "" for a legacy
+  // project with no motorFamily, letting the firstOf() calls below fall
+  // back to the old free-text motorTech.
+  const motorTypeLabel = motorLabel(project.motorFamily, project.motorBrandedName);
 
   // General — project record wins where it directly answers the field.
   set("item", firstOf([project.productName, "project_record"]));
@@ -61,7 +101,7 @@ export function deriveFieldsFromSources(
   set("positioning_statement", pick(ca.positioning_recommendation, "active_report"));
   set("approved_pricing", firstOf([project.pricePoint, "project_record"], [t.approved_pricing, "tds"], [pricing.price_positioning, "active_report"]));
   set("performance", firstOf(
-    [[project.motorTech, t.motor_rpm].filter(Boolean).join(" · "), "project_record"],
+    [[motorTypeLabel || project.motorTech, t.motor_rpm].filter(Boolean).join(" · "), "project_record"],
     [[t.motor_type, t.motor_rpm, t.motor_speed].filter(Boolean).join(" · "), "tds"]
   ));
   set("features_full_list", pick((salesKit?.key_features || []).map((f: any) => f.headline).filter(Boolean).join("; "), "sales_kit"));
@@ -92,8 +132,10 @@ export function deriveFieldsFromSources(
   set("care_directions", pick(t.care_directions, "tds"));
   set("product_description", pick(t.product_description, "tds"));
 
-  // Motor — project.motorTech (team-entered) outranks TDS's captured specs.
-  set("motor_type", firstOf([project.motorTech, "project_record"], [t.motor_type, "tds"]));
+  // Motor — the canonical family (+ branded name in parens, team-entered)
+  // outranks TDS's captured specs; a legacy project with no motorFamily
+  // falls back to the old free-text motorTech.
+  set("motor_type", firstOf([motorTypeLabel || project.motorTech, "project_record"], [t.motor_type, "tds"]));
   set("motor_rpm", pick(t.motor_rpm, "tds"));
   set("motor_run_time", pick(t.motor_run_time, "tds"));
   set("motor_speed", pick(t.motor_speed, "tds"));

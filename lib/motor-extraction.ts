@@ -8,7 +8,7 @@
 import type { RainforestSpec } from "./rainforest";
 import type { MotorFamilyRow } from "./db/motor-families";
 import type { BrandedMotorNameRow } from "./db/branded-motor-names";
-import { matchMotorFamily, matchBrandedMotorName, MatchedMotor } from "./motor-taxonomy";
+import { matchMotorFamily, normalizeMotor, MatchedMotor } from "./motor-taxonomy";
 import type { IdentityCard } from "./product-identification";
 import { isRealAnswer } from "./field-answer-state";
 
@@ -20,6 +20,11 @@ export type MotorConfirmedVia = "branded_map" | "spec_table" | "title" | "bullet
 export interface CompetitorMotorExtraction extends MatchedMotor {
   sourceQuote: string;
   confirmedVia: MotorConfirmedVia;
+  // The brand's own proprietary marketing name (e.g. "IN3", "Ultra Torque
+  // X9") when resolved via the branded map — null when resolution fell
+  // through to plain generic family matching. Surfaced alongside the
+  // canonical family so displays can show "Vector Motor (IN3)".
+  brandedName: string | null;
 }
 
 const MOTOR_SPEC_LABELS = ["motor type", "motor technology", "motor"];
@@ -42,8 +47,8 @@ export function extractCompetitorMotorType(
   if (opts?.brand && opts.brandedNames?.length) {
     const brandedTexts = [product.title, ...(product.feature_bullets || []), product.description].filter((t): t is string => !!t);
     for (const text of brandedTexts) {
-      const matched = matchBrandedMotorName(opts.brand, text, opts.brandedNames, families);
-      if (matched) return { ...matched, sourceQuote: text, confirmedVia: "branded_map" };
+      const normalized = normalizeMotor(text, families, { brand: opts.brand, brandedNames: opts.brandedNames });
+      if (normalized.family) return { ...normalized.family, brandedName: normalized.brandedName, sourceQuote: text, confirmedVia: "branded_map" };
     }
   }
 
@@ -52,22 +57,22 @@ export function extractCompetitorMotorType(
   for (const spec of specAndAttr) {
     const nameLower = (spec.name || "").toLowerCase();
     if (MOTOR_SPEC_LABELS.some(label => nameLower.includes(label))) {
-      const matched = matchMotorFamily(spec.value, families);
-      if (matched) return { ...matched, sourceQuote: `${spec.name}: ${spec.value}`, confirmedVia: "spec_table" };
+      const normalized = normalizeMotor(spec.value, families);
+      if (normalized.family) return { ...normalized.family, brandedName: normalized.brandedName, sourceQuote: `${spec.name}: ${spec.value}`, confirmedVia: "spec_table" };
     }
   }
 
   // Title next — often states the motor name directly (e.g. "... Vector
   // Motor Clipper ...") and wasn't scanned at all before this.
   if (product.title) {
-    const matched = matchMotorFamily(product.title, families);
-    if (matched) return { ...matched, sourceQuote: product.title, confirmedVia: "title" };
+    const normalized = normalizeMotor(product.title, families);
+    if (normalized.family) return { ...normalized.family, brandedName: normalized.brandedName, sourceQuote: product.title, confirmedVia: "title" };
   }
 
   // Fall back to feature bullets — verbatim Amazon listing text.
   for (const bullet of product.feature_bullets || []) {
-    const matched = matchMotorFamily(bullet, families);
-    if (matched) return { ...matched, sourceQuote: bullet, confirmedVia: "bullets" };
+    const normalized = normalizeMotor(bullet, families);
+    if (normalized.family) return { ...normalized.family, brandedName: normalized.brandedName, sourceQuote: bullet, confirmedVia: "bullets" };
   }
 
   // Last resort: the listing description — quote the specific matching
@@ -75,34 +80,63 @@ export function extractCompetitorMotorType(
   if (product.description) {
     const sentences = product.description.split(/(?<=[.!?])\s+/);
     for (const sentence of sentences) {
-      const matched = matchMotorFamily(sentence, families);
-      if (matched) return { ...matched, sourceQuote: sentence.trim(), confirmedVia: "description" };
+      const normalized = normalizeMotor(sentence, families);
+      if (normalized.family) return { ...normalized.family, brandedName: normalized.brandedName, sourceQuote: sentence.trim(), confirmedVia: "description" };
+    }
+  }
+
+  // Nothing matched, generic or branded — but if the listing text plausibly
+  // names a proprietary motor phrase (mentions "motor" at all) for a known
+  // brand, flag it for the taxonomy admin (logBrandedMotorMiss,
+  // /dashboard/admin/competitor-matching's "Unclassified Branded Motor
+  // Names" panel) rather than silently dropping it. Fire-and-forget dynamic
+  // import — this cascade stays synchronous (the competitor-scoring hot
+  // path deliberately never awaits AI/DB work here), so logging is
+  // best-effort only and never blocks or fails extraction.
+  if (opts?.brand) {
+    const candidateTexts = [product.title, ...specAndAttr.map(s => `${s.name}: ${s.value}`), ...(product.feature_bullets || []), product.description]
+      .filter((t): t is string => !!t);
+    const unmatched = candidateTexts.find(t => /\bmotor\b/i.test(t));
+    if (unmatched) {
+      const brand = opts.brand;
+      import("./db/motor-families").then(({ logBrandedMotorMiss }) => logBrandedMotorMiss(brand, unmatched)).catch(() => {});
     }
   }
 
   return null;
 }
 
-export type OurMotorSource = "project_gtm" | "motor_tech_field" | "identity_text";
+export type OurMotorSource = "motor_family_field" | "project_gtm" | "motor_tech_field" | "identity_text";
 
 export interface OurMotorResolution extends MatchedMotor {
   source: OurMotorSource;
 }
 
-// Priority order (per the plan): (1) the linked project's GTM motor_type
-// field — a real, grounded answer if the pipeline already generated one;
-// (2) the analyze form's existing "Motor technology" select
-// (context.motorTech) — a different, coarser vocabulary than this
-// taxonomy, so treated as a soft hint, not authoritative; (3) the Identity
-// Card's own text (whatItIs/keyAttributes/evidence quotes). Returns null
-// when none of these resolve — the caller pauses-and-asks, but only when
-// isMotorizedCategory() says this product's category needs a motor type
-// at all.
+// Priority order: (1) an explicit canonical family selected directly on
+// THIS analysis's own form (context.motorFamily, the Motor Type select) —
+// already one of the 7 canonical families, resolved by a direct family_key
+// lookup rather than fuzzy text matching, and the most current signal since
+// it reflects what the user picked for this specific run; (2) the linked
+// project's GTM motor_type field — a real, grounded answer if the pipeline
+// already generated one; (3) the legacy free-text "Motor technology" field
+// (context.motorTech, kept only for analyses created before the canonical
+// select existed) — a coarser vocabulary, so treated as a soft hint, fuzzy-
+// matched; (4) the Identity Card's own text (whatItIs/keyAttributes/
+// evidence quotes). Returns null when none of these resolve — the caller
+// pauses-and-asks, but only when isMotorizedCategory() says this product's
+// category needs a motor type at all.
 export async function resolveOurMotorType(
-  input: { motorTech?: string; projectId: string | null },
+  input: { motorFamily?: string; motorTech?: string; projectId: string | null },
   identity: Pick<IdentityCard, "whatItIs" | "keyAttributes" | "evidence">,
   families: MotorFamilyRow[]
 ): Promise<OurMotorResolution | null> {
+  if (input.motorFamily) {
+    const family = families.find(f => f.enabled && f.family_key === input.motorFamily);
+    if (family) {
+      return { familyKey: family.family_key, label: family.label, modifierKey: null, modifierLabel: null, source: "motor_family_field" };
+    }
+  }
+
   if (input.projectId) {
     try {
       const { getDocumentByProject, getDocumentFields } = await import("./db/documents");

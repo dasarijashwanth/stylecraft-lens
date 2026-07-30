@@ -46,12 +46,22 @@ async function main() {
     console.log(`✗ Table "motor_families": ${famErr.message}`);
     ok = false;
   } else {
-    console.log(`✓ Table "motor_families" exists (${families?.length ?? 0} row(s), expected 8)`);
-    const expectedKeys = ["rotary", "magnetic_vector", "pivot", "linear", "ac_motor", "dc_motor", "brushless_digital", "brushless"];
+    console.log(`✓ Table "motor_families" exists (${families?.length ?? 0} row(s), expected 9)`);
+    // Post Section-25 migration: 7 active canonical families + 2 disabled
+    // legacy rows kept for history (linear folded into pivot, brushless_digital
+    // folded into brushless) — see supabase_schema.sql's Section 25 comment.
+    const expectedKeys = ["rotary", "magnetic", "vector", "pivot", "ac_motor", "dc_motor", "brushless", "linear", "brushless_digital"];
     for (const key of expectedKeys) {
       const found = families?.some(f => f.family_key === key);
       console.log(found ? `  ✓ seeded: ${key}` : `  ✗ MISSING: ${key}`);
       if (!found) ok = false;
+    }
+    const brushlessRow = families?.find(f => f.family_key === "brushless");
+    if (brushlessRow && brushlessRow.modifier === true) {
+      console.log(`  ✗ "brushless" is still modifier:true — run the updated Section 25 SQL`);
+      ok = false;
+    } else if (brushlessRow) {
+      console.log(`  ✓ "brushless" is a standalone family (modifier:false)`);
     }
   }
 

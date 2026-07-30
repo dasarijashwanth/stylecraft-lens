@@ -11,6 +11,16 @@ export const TOOL_TYPE_VALUES = [
   "clipper", "trimmer", "shaver", "dryer", "flat_iron", "curling_iron", "hot_brush", "other_styling", "combo",
 ] as const;
 
+// The 7 canonical motor families, fixed by design (unlike Tool Type, this
+// list is NOT user-extensible) — every motor-entry point (form, extraction,
+// matching, display, GTM/TDS) normalizes to exactly one of these. Kept as a
+// literal tuple here for the same reason as TOOL_TYPE_VALUES above; must
+// stay in sync with the 7 enabled rows seeded by supabase_schema.sql's
+// Section 25 migration / lib/memoryDb.ts's seedMotorFamilyDefaults.
+export const MOTOR_FAMILY_VALUES = [
+  "magnetic", "pivot", "rotary", "brushless", "vector", "ac_motor", "dc_motor",
+] as const;
+
 // Normalizes and validates any URL input
 export function normalizeUrl(input: string): string | null {
   if (!input || input.trim() === "") return null;
@@ -59,6 +69,11 @@ export const ProjectSchema = z.object({
   category:        z.string().max(100).optional(),
   toolType:        z.enum(TOOL_TYPE_VALUES),
   companyContext:  z.string().max(1000).optional(),
+  motorFamily:     z.enum(MOTOR_FAMILY_VALUES).optional(),
+  motorBrandedName: z.string().max(150).optional(),
+  // Legacy free-text fallback — no longer written by the form, kept
+  // optional so old projects/analyses persisted before the canonical
+  // motorFamily select existed keep reading back correctly.
   motorTech:       z.string().max(100).optional(),
   keyDiff:         z.string().max(200).optional(),
   pricePoint:      RequiredPricePoint,
@@ -72,6 +87,8 @@ export const AnalysisFormSchema = z.object({
   category: z.string().optional(),
   toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
   companyContext: z.string().max(1000).optional(),
+  motorFamily: z.enum(MOTOR_FAMILY_VALUES).optional(),
+  motorBrandedName: z.string().max(150).optional(),
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
   pricePoint: RequiredPricePoint,
@@ -86,6 +103,8 @@ export const NewProjectSchema = z.object({
   category: z.string().optional(),
   toolType: z.enum(TOOL_TYPE_VALUES, { message: "Select the exact tool type" }),
   companyContext: z.string().max(1000).optional(),
+  motorFamily: z.enum(MOTOR_FAMILY_VALUES).optional(),
+  motorBrandedName: z.string().max(150).optional(),
   motorTech: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
   pricePoint: RequiredPricePoint,

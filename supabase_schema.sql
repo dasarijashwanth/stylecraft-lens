@@ -901,3 +901,86 @@ CREATE TABLE IF NOT EXISTS branded_motor_names (
 );
 ALTER TABLE branded_motor_names ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for branded_motor_names" ON branded_motor_names FOR ALL USING (true) WITH CHECK (true);
+
+-- 25. CANONICAL 7-FAMILY MOTOR TAXONOMY — one-time restructure of the 8
+-- families Section (motor_families' original seed) into exactly 7 fixed
+-- canonical families used everywhere motor type enters the system (form,
+-- extraction, matching, display, GTM/TDS): Magnetic, Pivot, Rotary,
+-- Brushless, Vector, AC, DC Motor. Idempotent/safely re-runnable — every
+-- statement is keyed by family_key and guarded so running this twice is a
+-- no-op the second time.
+--
+-- (a) Promote "brushless" from a modifier to a standalone family, merging
+-- in "brushless_digital"'s aliases (now redundant, disabled below) plus the
+-- new canonical branded-name aliases.
+UPDATE motor_families
+SET label = 'Brushless Motor',
+    modifier = false,
+    aliases = ARRAY['brushless','bldc','brushless dc','digital brushless','eon digital brushless','digital motor','brushless digital motor'],
+    adjacent_families = '{}'::text[]
+WHERE family_key = 'brushless';
+UPDATE motor_families SET enabled = false WHERE family_key = 'brushless_digital';
+
+-- (b) Split "magnetic_vector" into two standalone families: rename the
+-- existing row to "vector" (keeps its history/id), insert a new "magnetic"
+-- row. The spec's own alias list has "electromagnetic" under both —
+-- resolved by giving Vector the more specific "electromagnetic vector"
+-- phrase and Magnetic the bare "electromagnetic", matching
+-- matchMotorFamily's first-match-wins alias order.
+UPDATE motor_families
+SET family_key = 'vector',
+    label = 'Vector Motor',
+    aliases = ARRAY['vector','in3','electromagnetic vector'],
+    adjacent_families = '{}'::text[]
+WHERE family_key = 'magnetic_vector';
+INSERT INTO motor_families (family_key, label, domain, aliases, modifier, adjacent_families, sort_order)
+VALUES ('magnetic', 'Magnetic Motor', 'clipper_trimmer_shaver', ARRAY['magnetic','electromagnetic'], false, ARRAY[]::text[], 8)
+ON CONFLICT (family_key) DO NOTHING;
+
+-- (c) Fold "linear" into Pivot Motor (mechanically closest — both
+-- non-rotary reciprocating drives) rather than keeping it as a 7th active
+-- family; disable the standalone row so existing references aren't lost,
+-- just no longer independently matched.
+UPDATE motor_families
+SET label = 'Pivot Motor',
+    aliases = ARRAY['pivot','pivot motor','linear','linear magnetic'],
+    adjacent_families = '{}'::text[]
+WHERE family_key = 'pivot';
+UPDATE motor_families SET enabled = false WHERE family_key = 'linear';
+
+-- (d) Canonical relabeling + no-adjacency default for the two families
+-- untouched by (a)-(c).
+UPDATE motor_families SET label = 'Rotary Motor', aliases = ARRAY['rotary','rotary motor'], adjacent_families = '{}'::text[] WHERE family_key = 'rotary';
+UPDATE motor_families SET label = 'AC Motor', aliases = ARRAY['ac motor','ac','alternating current'], adjacent_families = '{}'::text[] WHERE family_key = 'ac_motor';
+UPDATE motor_families SET label = 'DC Motor', aliases = ARRAY['dc motor','dc','direct current'], adjacent_families = '{}'::text[] WHERE family_key = 'dc_motor';
+
+-- 26. CANONICAL MOTOR FIELDS ON PROJECTS — additive columns for the
+-- analyze/new-project forms' Motor Type select (lib/validations.ts's
+-- MOTOR_FAMILY_VALUES). motor_family is always one of the 7 canonical
+-- family_key values from motor_families above; motor_branded_name is the
+-- optional, display-only marketing name typed alongside it (e.g. "EON
+-- Digital Brushless Motor") — matching/grounding always uses motor_family,
+-- never this. The old free-text motor_tech column is untouched and kept
+-- for backward compatibility — old projects/analyses created before this
+-- select existed keep reading back correctly (lib/motor-extraction.ts's
+-- resolveOurMotorType falls back to fuzzy-matching motor_tech only when
+-- motor_family is absent).
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS motor_family VARCHAR(50);
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS motor_branded_name VARCHAR(150);
+
+-- 27. BRANDED MOTOR MISS COLUMNS — extends Section 21's
+-- motor_tech_search_misses (rather than a new table) so a competitor's
+-- unrecognized brand-proprietary motor phrase (e.g. scraped listing text
+-- mentioning a made-up marketing name that matched neither the generic
+-- taxonomy nor the branded map) can be logged and surfaced on
+-- /dashboard/admin/competitor-matching for one-click addition to
+-- branded_motor_names (Section 24), same as a plain unmatched motorTech
+-- entry already is. brand_name/ai_guessed_family are NULL for the original
+-- plain-motorTech-miss use case — only populated by the new
+-- logBrandedMotorMiss path (lib/db/motor-families.ts). ai_guessed_family is
+-- filled lazily by an admin-triggered "Classify with AI" batch action
+-- (app/api/admin/motor-families/branded-misses/route.ts), never
+-- automatically during analysis — keeps this off the analysis pipeline's
+-- hot path entirely.
+ALTER TABLE motor_tech_search_misses ADD COLUMN IF NOT EXISTS brand_name VARCHAR(255);
+ALTER TABLE motor_tech_search_misses ADD COLUMN IF NOT EXISTS ai_guessed_family VARCHAR(50);

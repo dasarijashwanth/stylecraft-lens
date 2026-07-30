@@ -49,6 +49,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       description: project.description,
       category: project.category,
       toolType: projectAny.toolType,
+      motorFamily: projectAny.motorFamily,
+      motorBrandedName: projectAny.motorBrandedName,
       motorTech: project.motorTech,
       keyDiff: project.keyDiff,
       pricePoint: project.pricePoint,

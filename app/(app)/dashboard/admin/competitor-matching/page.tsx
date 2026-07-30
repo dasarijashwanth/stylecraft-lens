@@ -38,6 +38,14 @@ interface BrandedMotorName {
   enabled: boolean;
 }
 
+interface BrandedMotorMiss {
+  brand_name: string;
+  term: string;
+  count: number;
+  last_searched_at: string;
+  ai_guessed_family: string | null;
+}
+
 const DOMAIN_LABELS: Record<string, string> = {
   clipper_trimmer_shaver: "Clippers, Trimmers & Shavers",
   beauty: "Beauty Tools",
@@ -57,16 +65,20 @@ export default function CompetitorMatchingAdminPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [newBranded, setNewBranded] = useState({ brandName: "", brandedTerm: "", familyKey: "" });
   const [savingBranded, setSavingBranded] = useState(false);
+  const [brandedMisses, setBrandedMisses] = useState<BrandedMotorMiss[]>([]);
+  const [classifying, setClassifying] = useState(false);
+  const [dismissingMiss, setDismissingMiss] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [famRes, weightRes, missRes, brandedRes] = await Promise.all([
+      const [famRes, weightRes, missRes, brandedRes, brandedMissRes] = await Promise.all([
         fetch("/api/admin/motor-families"),
         fetch("/api/admin/competitor-matching-config"),
         fetch("/api/admin/motor-families/misses"),
         fetch("/api/admin/branded-motor-map"),
+        fetch("/api/admin/motor-families/branded-misses"),
       ]);
       const famData = await famRes.json();
       const weightData = await weightRes.json();
@@ -79,6 +91,10 @@ export default function CompetitorMatchingAdminPage() {
       if (brandedRes.ok) {
         const brandedData = await brandedRes.json();
         setBrandedNames(brandedData.brandedNames || []);
+      }
+      if (brandedMissRes.ok) {
+        const brandedMissData = await brandedMissRes.json();
+        setBrandedMisses(brandedMissData.misses || []);
       }
       setWeightInputs({
         motor: String(weightData.weights.motor_weight),
@@ -249,6 +265,48 @@ export default function CompetitorMatchingAdminPage() {
     }
   }
 
+  // Prefills the Branded Motor Names add-form below (per-field state
+  // already backs that form) — the admin still confirms/adjusts the family
+  // and clicks Add themselves, this just saves the retyping.
+  function handlePrefillBrandedFromMiss(miss: BrandedMotorMiss) {
+    setNewBranded({ brandName: miss.brand_name, brandedTerm: miss.term, familyKey: miss.ai_guessed_family || "" });
+    toast.success(`Prefilled the Branded Motor Names form below — review and click Add`);
+  }
+
+  async function handleClassifyBrandedMisses() {
+    setClassifying(true);
+    try {
+      const res = await fetch("/api/admin/motor-families/branded-misses", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to classify branded motor misses");
+      setBrandedMisses(data.misses || []);
+      toast.success(data.updated > 0 ? `AI classified ${data.updated} term(s)` : "No new classifications — check back after more analyses run, or add manually");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to classify branded motor misses");
+    } finally {
+      setClassifying(false);
+    }
+  }
+
+  async function handleDismissBrandedMiss(miss: BrandedMotorMiss) {
+    const key = `${miss.brand_name}|${miss.term}`;
+    setDismissingMiss(key);
+    try {
+      const res = await fetch("/api/admin/motor-families/branded-misses", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandName: miss.brand_name, term: miss.term }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to dismiss");
+      setBrandedMisses(prev => prev.filter(m => !(m.brand_name === miss.brand_name && m.term === miss.term)));
+    } catch (err: any) {
+      toast.error(err.message || "Failed to dismiss");
+    } finally {
+      setDismissingMiss(null);
+    }
+  }
+
   if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-[300px]">
@@ -411,7 +469,7 @@ export default function CompetitorMatchingAdminPage() {
             <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
               <h2 className="text-xs font-bold text-text-primary">Branded Motor Names</h2>
               <p className="text-[10px] text-text-muted mt-0.5">
-                A brand&apos;s own proprietary marketing name for a motor (e.g. &quot;IN3&quot; → Magnetic / Vector) — kept separate from the generic aliases above since a proprietary term only applies to the brand that owns it, never to every brand&apos;s products.
+                A brand&apos;s own proprietary marketing name for a motor (e.g. &quot;IN3&quot; → Vector Motor) — kept separate from the generic aliases above since a proprietary term only applies to the brand that owns it, never to every brand&apos;s products.
               </p>
             </div>
             <div className="p-4 space-y-2">
@@ -504,6 +562,62 @@ export default function CompetitorMatchingAdminPage() {
                     <span className="text-text-muted">{m.count}x · last {new Date(m.last_searched_at).toLocaleDateString()}</span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {brandedMisses.length > 0 && (
+            <div className="border border-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-surface-3/30 border-b border-border flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xs font-bold text-text-primary">Unclassified Branded Motor Names</h2>
+                  <p className="text-[10px] text-text-muted mt-0.5">
+                    Competitor listing text that named a proprietary motor phrase but matched neither the generic taxonomy nor a known brand entry above. &quot;Use this →&quot; prefills the Branded Motor Names form so you can confirm the family and add it in one click.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClassifyBrandedMisses}
+                  disabled={classifying}
+                  className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-surface-1 border border-border hover:border-accent text-text-primary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {classifying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  <span>Classify with AI</span>
+                </button>
+              </div>
+              <div className="p-4 space-y-1.5">
+                {brandedMisses.map(m => {
+                  const guessedFamily = families.find(f => f.family_key === m.ai_guessed_family);
+                  const key = `${m.brand_name}|${m.term}`;
+                  return (
+                    <div key={key} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-surface-1 text-[11px]">
+                      <div className="flex-1 min-w-0">
+                        <span className="font-semibold text-text-primary">{m.brand_name}</span>
+                        <span className="text-text-muted"> — &quot;{m.term}&quot;</span>
+                        {guessedFamily && (
+                          <span className="text-text-muted"> · AI guess: <span className="font-semibold text-text-primary">{guessedFamily.label}</span></span>
+                        )}
+                        <span className="text-text-muted"> · {m.count}x · last {new Date(m.last_searched_at).toLocaleDateString()}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handlePrefillBrandedFromMiss(m)}
+                        className="shrink-0 px-2 py-1 rounded text-[10px] font-bold border border-accent/40 text-accent hover:bg-accent/10 transition-colors"
+                      >
+                        Use this →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDismissBrandedMiss(m)}
+                        disabled={dismissingMiss === key}
+                        className="shrink-0 p-1 text-text-muted hover:text-danger transition-colors"
+                        title="Dismiss"
+                      >
+                        {dismissingMiss === key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

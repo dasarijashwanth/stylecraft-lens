@@ -143,7 +143,7 @@ async function main() {
   console.log("\n[A.4] selectByCompositeScore — the brand-site-only candidate is motor-grounded and selectable");
   {
     const motorFamilies = await listMotorFamilies();
-    const ourMotor = { familyKey: "magnetic_vector", label: "Magnetic / Vector", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
+    const ourMotor = { familyKey: "vector", label: "Vector Motor", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
     const ctx = {
       motorFamilies, ourMotor,
       ourSpecs: { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null },
@@ -178,7 +178,7 @@ async function main() {
   console.log("\n[B] selectByCompositeScore — motor evidence required before brand, wrong-motor product only ever a last resort");
   {
     const motorFamilies = await listMotorFamilies();
-    const ourMotor = { familyKey: "magnetic_vector", label: "Magnetic / Vector", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
+    const ourMotor = { familyKey: "vector", label: "Vector Motor", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
     const ctx = {
       motorFamilies, ourMotor,
       ourSpecs: { rpm: null, runTimeMinutes: null, cordless: null, buildMaterial: null, bladeTech: null },

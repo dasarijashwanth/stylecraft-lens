@@ -58,6 +58,18 @@ export interface AnalysisContext {
   description: string;
   category?: string;
   companyContext?: string;
+  // Canonical motor family key (one of lib/validations.ts's
+  // MOTOR_FAMILY_VALUES), selected directly from the form's Motor Type
+  // select — authoritative, never fuzzy-matched, since it's already one of
+  // the 7 canonical families. motorBrandedName is the optional, display-only
+  // marketing name typed alongside it (e.g. "EON Digital Brushless Motor")
+  // — never used for matching/grounding, only shown in documents/PDF next
+  // to the canonical family. motorTech is the legacy free-text field kept
+  // for backward compatibility with analyses created before this select
+  // existed — resolveOurMotorType (lib/motor-extraction.ts) only falls back
+  // to fuzzy-matching it when motorFamily is absent.
+  motorFamily?: string;
+  motorBrandedName?: string;
   motorTech?: string;
   keyDiff?: string;
   pricePoint?: string;
@@ -86,6 +98,8 @@ function buildFormInputsSnapshot(context: AnalysisContext) {
     industry: context.industry,
     targetMarket: context.targetMarket,
     toolType: context.toolType ?? null,
+    motorFamily: context.motorFamily ?? null,
+    motorBrandedName: context.motorBrandedName ?? null,
     motorTech: context.motorTech ?? null,
     keyDiff: context.keyDiff ?? null,
     pricePoint: context.pricePoint ?? null,
@@ -913,6 +927,10 @@ export function selectByCompositeScore(
       motor_type: motorExtraction?.label ?? null,
       motor_family_key: motorExtraction?.familyKey ?? null,
       motor_modifier: motorExtraction?.modifierLabel ?? null,
+      // The brand's own proprietary marketing name (e.g. "IN3"), shown
+      // alongside the canonical family — null unless normalizeMotor resolved
+      // it via the branded map (lib/db/branded-motor-names.ts).
+      motor_branded_name: motorExtraction?.brandedName ?? null,
       motor_source_quote: motorExtraction?.sourceQuote ?? null,
       // Which cascade step actually resolved the match, and where to see it
       // for yourself — surfaced next to motor_source_quote in the UI/PDF so
@@ -1383,7 +1401,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   const motorFamilies = await listMotorFamilies();
   const brandedNames = await listBrandedMotorNames();
   const motorRequired = isMotorizedCategory(identityCard);
-  const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
+  const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
   if (motorRequired && !ourMotor) {
     return {
       ok: false,
@@ -1628,7 +1646,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const motorFamilies = await listMotorFamilies();
       const brandedNames = await listBrandedMotorNames();
       const motorRequired = isMotorizedCategory(identityCard);
-      const ourMotor = await resolveOurMotorType({ motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
+      const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identityCard, motorFamilies);
       if (motorRequired && !ourMotor) {
         const question = {
           question: `What motor technology does ${context.productName} use? (e.g. "brushless rotary", "magnetic/vector", "pivot")`,

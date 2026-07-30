@@ -60,12 +60,18 @@ interface Competitor {
   inclusion_rationale?: string;
   // Set by lib/analysisEngine.ts's selectByCompositeScore — motor type is
   // the #1 selection priority (lib/motor-taxonomy.ts/lib/motor-extraction.ts),
-  // then price, then comparable specs. motor_type is the canonical family
-  // label (e.g. "Magnetic / Vector"), always populated with SOMETHING for a
-  // selected competitor (never blank) — "unverified" tier means neither
-  // side's motor type could be determined, not that they differ.
+  // then price, then comparable specs. motor_type is always one of the 7
+  // canonical family labels (e.g. "Brushless Motor"), never a brand's own
+  // marketing name — always populated with SOMETHING for a selected
+  // competitor (never blank) — "unverified" tier means neither side's motor
+  // type could be determined, not that they differ.
   motor_type?:            string | null;
   motor_modifier?:         string | null;
+  // The brand's own proprietary term (e.g. "IN3") when resolved via the
+  // branded map (lib/db/branded-motor-names.ts) — display this alongside
+  // motor_type ("Vector Motor (IN3)"), never in place of it; matching always
+  // happens on motor_type/motor_family_key only.
+  motor_branded_name?:     string | null;
   motor_source_quote?:     string | null;
   motor_match_tier?:       "exact" | "adjacent" | "different" | "unverified";
   motor_score?:            number;
@@ -165,6 +171,14 @@ function TimeoutChip({ onRetry, label }: { onRetry: () => void; label?: string }
 // "request failed" must read differently, since they mean very different
 // things (the product genuinely has no reviews vs. the source was
 // unreachable this time).
+// Canonical family label, plus the brand's own proprietary term in parens
+// when known (e.g. "Vector Motor (IN3)") — never the branded name alone,
+// since matching/comparison always happens on the canonical family.
+function motorLabelWithBranded(c: Pick<Competitor, "motor_type" | "motor_branded_name">): string {
+  if (!c.motor_type) return "";
+  return c.motor_branded_name ? `${c.motor_type} (${c.motor_branded_name})` : c.motor_type;
+}
+
 function describeTier(t: TierResult): string {
   if (!t.attempted) return "not attempted (no ASIN)";
   if (t.outcome === "success") return t.itemCount != null ? `found ${t.itemCount}` : "found supporting content";
@@ -470,11 +484,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
             {c.motor_match_tier === "unverified" ? (
               "Motor type could not be confirmed for one or both products"
             ) : c.motor_match_tier === "exact" ? (
-              `Same motor type (${c.motor_type})`
+              `Same motor type (${motorLabelWithBranded(c)})`
             ) : c.motor_match_tier === "adjacent" ? (
-              `Related motor technology (${c.motor_type} vs. yours)`
+              `Related motor technology (${motorLabelWithBranded(c)} vs. yours)`
             ) : (
-              `Different motor type (${c.motor_type || "unknown"} vs. yours)`
+              `Different motor type (${motorLabelWithBranded(c) || "unknown"} vs. yours)`
             )}
             {c.motor_source_quote && <span className="italic text-text-muted"> — &quot;{c.motor_source_quote}&quot;</span>}
           </p>
@@ -572,7 +586,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           )}
           {c.motor_match_tier === "different" && (
             <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title="No exact or adjacent-motor candidate was available for this slot.">
-              Different motor type ({c.motor_type || "unknown"})
+              Different motor type ({motorLabelWithBranded(c) || "unknown"})
             </span>
           )}
         </div>

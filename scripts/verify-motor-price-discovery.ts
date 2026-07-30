@@ -127,7 +127,7 @@ async function main() {
   console.log("\n[2] selectByCompositeScore — motor grounding from forwarded specs/bullets, price band, differentiator boost");
   {
     const motorFamilies = await listMotorFamilies();
-    const ourMotor = { familyKey: "magnetic_vector", label: "Magnetic / Vector", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
+    const ourMotor = { familyKey: "vector", label: "Vector Motor", modifierKey: null, modifierLabel: null, source: "motor_tech_field" as const };
 
     // Grounded via forwarded specifications (the exact bug this plan
     // fixes in enrichCompetitorsWithRainforest) — should resolve "exact".

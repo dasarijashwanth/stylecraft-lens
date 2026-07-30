@@ -46,6 +46,8 @@ export async function PATCH(
     if (body.category !== undefined) updateData.category = body.category || null;
     if (body.toolType !== undefined) updateData.toolType = body.toolType || null;
     if (body.companyContext !== undefined) updateData.companyContext = body.companyContext || null;
+    if (body.motorFamily !== undefined) updateData.motorFamily = body.motorFamily || null;
+    if (body.motorBrandedName !== undefined) updateData.motorBrandedName = body.motorBrandedName || null;
     if (body.motorTech !== undefined) updateData.motorTech = body.motorTech || null;
     if (body.keyDiff !== undefined) updateData.keyDiff = body.keyDiff || null;
     if (body.pricePoint !== undefined) updateData.pricePoint = body.pricePoint || null;

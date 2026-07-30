@@ -29,10 +29,39 @@ export interface TdsProjectRecord {
   description?: string | null;
   category?: string | null;
   toolType?: string | null;
+  // Canonical motor family key + optional display-only branded name — see
+  // motorLabel() below. motorTech is the legacy free-text field, kept only
+  // as a fallback for projects created before the canonical select existed.
+  motorFamily?: string | null;
+  motorBrandedName?: string | null;
   motorTech?: string | null;
   keyDiff?: string | null;
   pricePoint?: string | null;
   companyContext?: string | null;
+}
+
+// The 7 canonical family labels, fixed by design — mirrors
+// lib/validations.ts's MOTOR_FAMILY_VALUES (see lib/gtm-derive.ts's own
+// identical constant; duplicated rather than imported to keep these two
+// twin-but-separate document pipelines decoupled, same as this file's own
+// TdsProjectRecord vs. gtm-derive.ts's ProjectRecord).
+const MOTOR_FAMILY_LABELS: Record<string, string> = {
+  magnetic: "Magnetic Motor",
+  pivot: "Pivot Motor",
+  rotary: "Rotary Motor",
+  brushless: "Brushless Motor",
+  vector: "Vector Motor",
+  ac_motor: "AC Motor",
+  dc_motor: "DC Motor",
+};
+
+// Canonical family label, plus the branded name in parens when given.
+// Returns "" for a legacy project with no motorFamily, letting the caller
+// fall back to the old free-text motorTech.
+function motorLabel(motorFamily?: string | null, motorBrandedName?: string | null): string {
+  const label = motorFamily ? MOTOR_FAMILY_LABELS[motorFamily] : undefined;
+  if (!label) return "";
+  return motorBrandedName?.trim() ? `${label} (${motorBrandedName.trim()})` : label;
 }
 
 function buildSystemInstruction(productTitle: string, schema: TdsField[]) {
@@ -69,7 +98,7 @@ function projectRecordText(project: TdsProjectRecord): string {
     productName: project.productName,
     description: project.description,
     category: project.category,
-    motorTech: project.motorTech,
+    motorTech: motorLabel(project.motorFamily, project.motorBrandedName) || project.motorTech,
     keyDiff: project.keyDiff,
     pricePoint: project.pricePoint,
     companyContext: project.companyContext,
@@ -108,9 +137,10 @@ export async function generateTdsFields(
 
   // A few fields the project record itself directly answers (team-entered,
   // outranks whatever the AI extracted) — same priority GTM's own
-  // derivation gives project.motorTech/pricePoint.
-  if (project.motorTech && result.motor_type?.source === "none") {
-    result.motor_type = { answer: project.motorTech, source: "project_record" };
+  // derivation gives project.motorFamily/motorTech/pricePoint.
+  const motorTypeLabel = motorLabel(project.motorFamily, project.motorBrandedName) || project.motorTech;
+  if (motorTypeLabel && result.motor_type?.source === "none") {
+    result.motor_type = { answer: motorTypeLabel, source: "project_record" };
   }
   if (project.pricePoint && result.approved_pricing?.source === "none") {
     result.approved_pricing = { answer: project.pricePoint, source: "project_record" };
