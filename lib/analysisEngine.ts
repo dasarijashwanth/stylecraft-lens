@@ -2,10 +2,11 @@ import { prisma } from "./db";
 import { memoryDb } from "./memoryDb";
 import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
-import { getAmazonProduct, resolveAsinBySearch, hasRainforestKey, searchAmazonCategory } from "./rainforest";
+import { getAmazonProduct, fetchAmazonProductFresh, resolveAsinBySearch, hasRainforestKey, searchAmazonCategory, type RainforestProduct } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
-import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck, updatePhase1BrandProgress } from "./db/analyses";
+import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck, updatePhase1BrandProgress, patchAnalysisPhaseResults, resetPhase3ForRegeneration } from "./db/analyses";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
+import { extractAsinFromUrl } from "./snapshot-capture";
 import { createReportFromAnalysis } from "./db/reports";
 import { buildPhase3Prompt } from "./prompts/phase3";
 import { getMarketData } from "./market-data";
@@ -24,8 +25,9 @@ import { computePriceBand, deriveTierKeyword, isWithinBand, buildOutOfBandLabel,
 import { getDocumentByProject, getDocumentFields } from "./db/documents";
 import { resolveLegacyBrandsForIdentity, type ResolvedLegacyRegistry } from "./legacy-brand-registry";
 import { searchCuratedLegacyBrands, normalizeBrandToken, type BrandProgressEntry } from "./legacy-brand-discovery";
-import { listMotorFamilies } from "./db/motor-families";
+import { listMotorFamilies, logMotorTechMiss } from "./db/motor-families";
 import type { MotorFamilyRow } from "./db/motor-families";
+import { recordCorrection, getActiveCorrectionsForToolType, type CorrectionReason, type CompetitorCorrectionRow } from "./db/competitor-corrections";
 import { listBrandedMotorNames } from "./db/branded-motor-names";
 import type { BrandedMotorNameRow } from "./db/branded-motor-names";
 import { getScoringProfileForToolType } from "./db/scoring-profiles";
@@ -85,6 +87,105 @@ export function resolvePrimaryCriterion(identity: Pick<IdentityCard, "category" 
   const row = identity.toolType ? toolTypes.find(t => t.type_key === identity.toolType) : undefined;
   if (row) return row.primary_criterion;
   return isMotorizedCategory(identity, toolTypes) ? "motor" : "none";
+}
+
+export interface CorrectionSignals {
+  blockedAsins: Set<string>;
+  penalizedAsins: Set<string>;
+  corrections: CompetitorCorrectionRow[];
+}
+
+// Turns a tool type's active (non-expired) correction history into
+// discovery-time signals — "ASINs replaced with reason 'Wrong product
+// entirely' or 'Discontinued' are excluded from future candidate pools...
+// 2+ independent corrections -> hard exclude; 1 correction -> heavy score
+// penalty" (never both at once for the same ASIN). Counted per-ASIN
+// regardless of WHICH analysis/tool-type-instance reported it — the same
+// wrong pick reported twice by two different users/analyses is exactly
+// the "independently corrected twice" case that earns a hard exclude.
+// Exported for the same offline-verify reason as buildPhase1Prompt below.
+export function buildCorrectionSignals(corrections: CompetitorCorrectionRow[]): CorrectionSignals {
+  const counts = new Map<string, number>();
+  for (const corr of corrections) {
+    if (corr.reason !== "wrong_product" && corr.reason !== "discontinued") continue;
+    const asin = corr.old_asin.toUpperCase();
+    counts.set(asin, (counts.get(asin) || 0) + 1);
+  }
+  const blockedAsins = new Set<string>();
+  const penalizedAsins = new Set<string>();
+  counts.forEach((count, asin) => {
+    if (count >= 2) blockedAsins.add(asin);
+    else penalizedAsins.add(asin);
+  });
+  return { blockedAsins, penalizedAsins, corrections };
+}
+
+// PART 3.2 (preference signal) — "Better/more relevant competitor exists"
+// corrections, scoped to the SAME matching context (tool type — already
+// implicit in correctionSignals — plus motor/heat-tech family and price
+// band), become a small known-good seed CHECKED EARLY (before any AI
+// discovery search runs this round). Re-verified live via getAmazonProduct
+// first — "never trusted stale" — so a since-discontinued or repriced
+// "better competitor" never gets silently re-injected forever. Capped
+// small so this never dominates a normal discovery round; a candidate
+// that no longer resolves live is just skipped, never surfaced as an error.
+export async function seedKnownGoodCandidates(
+  correctionSignals: CorrectionSignals,
+  tier: "legacy" | "emerging",
+  primaryCriterion: "motor" | "heat_technology" | "none",
+  ourMotor: OurMotorResolution | null,
+  ourHeatTech: OurHeatTechResolution | null,
+  priceBand: string | null
+): Promise<any[]> {
+  const ourFamilyKey = primaryCriterion === "motor" ? (ourMotor?.familyKey ?? null) : primaryCriterion === "heat_technology" ? (ourHeatTech?.familyKey ?? null) : null;
+  const relevant = correctionSignals.corrections.filter(corr => {
+    if (corr.reason !== "better_competitor") return false;
+    if (priceBand && corr.price_band && corr.price_band !== priceBand) return false;
+    if (primaryCriterion === "motor" && ourFamilyKey && corr.motor_family && corr.motor_family !== ourFamilyKey) return false;
+    if (primaryCriterion === "heat_technology" && ourFamilyKey && corr.heat_tech_family && corr.heat_tech_family !== ourFamilyKey) return false;
+    return true;
+  });
+
+  const seen = new Set<string>();
+  const seeds: any[] = [];
+  for (const corr of relevant) {
+    const asin = corr.new_asin.toUpperCase();
+    if (seen.has(asin) || seeds.length >= 3) continue;
+    seen.add(asin);
+    const product = await getAmazonProduct(asin);
+    if (!product) continue;
+    seeds.push({
+      name: product.title, brand: product.brand, tier,
+      asin: product.asin, amazon_url: product.amazon_url, price: product.price, price_raw: product.price_raw,
+      rating: product.rating_str, review_count: product.reviews_str, monthly_sales: product.monthly_str, bsr_rank: product.bsr,
+      initials: (product.brand || product.title || "??").substring(0, 2).toUpperCase(),
+      key_features: [], strengths: [], weaknesses: [], recent_news: [], top_feature_summary: "",
+      specifications: product.specifications, attributes: product.attributes, feature_bullets: product.feature_bullets, description: product.description,
+      verified_by_rainforest: true,
+      known_good_seed: true,
+      inclusion_rationale: "Previously identified by a user as a better-fit competitor for this category.",
+    });
+  }
+  return seeds;
+}
+
+// PART 3.4 (prompt-level feedback digest) — a compact summary of this tool
+// type's correction history, concatenated into the discovery AI's
+// extraInstruction (same mechanism fillRoundExtraInstruction already
+// uses) so the model itself steers away from already-corrected mistakes,
+// not just the post-hoc blocklist filter applied to whatever it returns.
+// Capped to the 10 most recent entries (corrections arrive newest-first
+// from getActiveCorrectionsForToolType) so the prompt stays lean
+// regardless of how much history accumulates.
+export function buildCorrectionsGuidance(corrections: CompetitorCorrectionRow[]): string | null {
+  const recent = corrections.slice(0, 10);
+  const rejected = recent.filter(c => c.reason === "wrong_product" || c.reason === "discontinued").map(c => c.old_title || c.old_asin);
+  const preferred = recent.filter(c => c.reason === "better_competitor").map(c => c.new_title || c.new_asin);
+  if (rejected.length === 0 && preferred.length === 0) return null;
+  const parts: string[] = [];
+  if (rejected.length > 0) parts.push(`Previously rejected by users for this category: ${rejected.join(", ")} (avoid similar picks).`);
+  if (preferred.length > 0) parts.push(`Previously preferred by users: ${preferred.join(", ")} (similar profiles rank higher).`);
+  return parts.join(" ");
 }
 
 export interface AnalysisContext {
@@ -908,6 +1009,13 @@ export interface CompositeScoringContext {
   // computeFeatureScore's differentiator blend is skipped entirely
   // (see that function's own header comment).
   keyDiff?: string | null;
+  // PART 3 of the editable-ASIN correction-learning loop
+  // (buildCorrectionSignals) — ASINs with exactly ONE independent
+  // "wrong_product"/"discontinued" correction against them (2+ is a hard
+  // exclude, applied earlier at candidate-filter time, never reaches
+  // scoring at all) get a fixed composite-score penalty here instead of
+  // being dropped outright — still eligible, just deprioritized.
+  penalizedAsins?: Set<string>;
 }
 
 // Replaces applyPriceBandGate's plain "in-band first, then closest to
@@ -1013,7 +1121,14 @@ export function selectByCompositeScore(
     const candidateText = [c.name, ...(Array.isArray(c.feature_bullets) ? c.feature_bullets : []), c.description || ""].filter(Boolean).join(" ");
     const differentiatorMatch = ctx.keyDiff ? matchesDifferentiator(ctx.keyDiff, candidateText) : null;
     const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs, differentiatorMatch);
-    const compositeScore = computeCompositeScore(criterionScore, priceScore, featureScore, ctx.weights);
+    // PART 3 correction-learning penalty — a single independent
+    // "wrong_product"/"discontinued" report against this exact ASIN
+    // deprioritizes it (still eligible) rather than excluding it outright
+    // (that's the 2+-corrections hard-exclude, already applied before this
+    // candidate ever reached scoring — see the ~4 candidate-filter sites
+    // in runAnalysisStep).
+    const isPenalized = !!ctx.penalizedAsins?.has((c.asin || "").toUpperCase());
+    const compositeScore = computeCompositeScore(criterionScore, priceScore, featureScore, ctx.weights) * (isPenalized ? 0.7 : 1);
 
     const outOfBand = !isWithinBand(c._resolvedPrice, primaryBand);
     const { _resolvedPrice, ai_claimed_price, ...rest } = c;
@@ -1301,57 +1416,65 @@ async function enrichCompetitorsWithRainforest(competitors: any[], toolTypes: To
         };
       }
 
-      // Real, verbatim bullet points from the live listing replace whatever
-      // the AI guessed — kept in the same {headline,...} shape the UI
-      // already renders, but the text itself is never AI-invented once a
-      // real listing is verified.
-      const realFeatures = product.feature_bullets.slice(0, 6).map(bullet => ({
-        headline: bullet,
-        source: "Amazon",
-        attribution: "From the Amazon listing:",
-        detail: "",
-      }));
-
-      return {
-        ...c,
-        asin: product.asin,
-        price: product.price,
-        price_raw: product.price_raw,
-        last_updated: product.last_updated,
-        rating: product.rating_str,
-        review_count: product.reviews_str,
-        monthly_sales: product.monthly_str || c.monthly_sales,
-        bsr_rank: product.bsr || c.bsr_rank,
-        amazon_url: product.amazon_url,
-        image: product.image,
-        images: product.images.length ? product.images : (product.image ? [product.image] : []),
-        manufacturer: product.manufacturer,
-        model_number: product.model_number,
-        description: product.description,
-        key_features: realFeatures.length > 0 ? realFeatures : c.key_features,
-        // Raw grounding data — forwarded (not just folded into the
-        // display-shaped key_features above) so extractCompetitorMotorType
-        // (lib/motor-extraction.ts) and matchesDifferentiator
-        // (lib/differentiator-match.ts) have real listing text to search
-        // instead of silently resolving to "unverified"/no-match forever.
-        specifications: product.specifications,
-        attributes: product.attributes,
-        feature_bullets: product.feature_bullets,
-        verified_by_rainforest: true,
-        // Preserves any existing sources.brand_site (a curated hybrid
-        // candidate re-grounded here) while recording this real Amazon
-        // pull — c.sources is undefined for every non-curated candidate,
-        // in which case this is simply { brand_site: undefined, amazon }.
-        sources: {
-          ...(c.sources || {}),
-          amazon: {
-            asin: product.asin, url: product.amazon_url, price: product.price, price_raw: product.price_raw,
-            rating: product.rating_str, review_count: product.reviews_str, bsr_rank: product.bsr, monthly_sales: product.monthly_str,
-            retrieved_at: new Date().toISOString(),
-          },
-        },
-      };
+      return mergeRainforestProductIntoCompetitor(c, product);
   });
+}
+
+// Shared by enrichCompetitorsWithRainforest's per-item enrichment above and
+// replaceCompetitor's forced refetch below — the exact same real-listing
+// merge logic in exactly one place so a manual ASIN swap produces a
+// competitor object indistinguishable in shape from one discovered
+// normally. Real, verbatim bullet points from the live listing replace
+// whatever the AI guessed — kept in the same {headline,...} shape the UI
+// already renders, but the text itself is never AI-invented once a real
+// listing is verified.
+function mergeRainforestProductIntoCompetitor(c: any, product: RainforestProduct): any {
+  const realFeatures = product.feature_bullets.slice(0, 6).map(bullet => ({
+    headline: bullet,
+    source: "Amazon",
+    attribution: "From the Amazon listing:",
+    detail: "",
+  }));
+
+  return {
+    ...c,
+    asin: product.asin,
+    price: product.price,
+    price_raw: product.price_raw,
+    last_updated: product.last_updated,
+    rating: product.rating_str,
+    review_count: product.reviews_str,
+    monthly_sales: product.monthly_str || c.monthly_sales,
+    bsr_rank: product.bsr || c.bsr_rank,
+    amazon_url: product.amazon_url,
+    image: product.image,
+    images: product.images.length ? product.images : (product.image ? [product.image] : []),
+    manufacturer: product.manufacturer,
+    model_number: product.model_number,
+    description: product.description,
+    key_features: realFeatures.length > 0 ? realFeatures : c.key_features,
+    // Raw grounding data — forwarded (not just folded into the
+    // display-shaped key_features above) so extractCompetitorMotorType
+    // (lib/motor-extraction.ts) and matchesDifferentiator
+    // (lib/differentiator-match.ts) have real listing text to search
+    // instead of silently resolving to "unverified"/no-match forever.
+    specifications: product.specifications,
+    attributes: product.attributes,
+    feature_bullets: product.feature_bullets,
+    verified_by_rainforest: true,
+    // Preserves any existing sources.brand_site (a curated hybrid
+    // candidate re-grounded here) while recording this real Amazon
+    // pull — c.sources is undefined for every non-curated candidate,
+    // in which case this is simply { brand_site: undefined, amazon }.
+    sources: {
+      ...(c.sources || {}),
+      amazon: {
+        asin: product.asin, url: product.amazon_url, price: product.price, price_raw: product.price_raw,
+        rating: product.rating_str, review_count: product.reviews_str, bsr_rank: product.bsr, monthly_sales: product.monthly_str,
+        retrieved_at: new Date().toISOString(),
+      },
+    },
+  };
 }
 
 // Pricing has no separate resolver/search step of its own (see
@@ -1500,6 +1623,10 @@ interface Phase2ResolvedContext {
   weights: any;
   ourSpecs: any;
   ourLineupPercentile: number;
+  // The correction-learning signals (see buildCorrectionSignals) — fetched
+  // once per phase run, same "cheap re-read" precedent as motorFamilies/
+  // toolTypes above.
+  correctionSignals: CorrectionSignals;
 }
 
 type Phase2ContextResult =
@@ -1542,6 +1669,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   // Same "cheap re-read" precedent as motorFamilies/brandedNames above —
   // never module-level state (see this file's own header on why).
   const toolTypes = await listToolTypes();
+  const correctionSignals = buildCorrectionSignals(identityCard.toolType ? await getActiveCorrectionsForToolType(identityCard.toolType) : []);
 
   const registry = await resolveLegacyBrandsForIdentity(identityCard, toolTypes);
   const registryBrandTokens = registry
@@ -1607,7 +1735,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
     };
   }
 
-  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } };
+  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile, correctionSignals } };
 }
 
 // Shared by Phase 1's and Phase 2a's multi-round fill loop (see the header
@@ -1853,6 +1981,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const ourSpecs = context.projectId
         ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
         : extractOurSpecsFromTds(null);
+      // The correction-learning signals (PART 3 of the editable-ASIN
+      // feature) — fetched once here, same "cheap re-read" precedent as
+      // motorFamilies/toolTypes above.
+      const correctionSignals = buildCorrectionSignals(identityCard.toolType ? await getActiveCorrectionsForToolType(identityCard.toolType) : []);
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
         brandedNames,
@@ -1865,6 +1997,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         ourSpecs,
         weights,
         keyDiff: context.keyDiff ?? null,
+        penalizedAsins: correctionSignals.penalizedAsins,
       };
 
       // Curated legacy-brand registry (lib/db/legacy-brands.ts) takes
@@ -1900,6 +2033,13 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       let pool: any[] = record.phase1_result?.__phase1Pool ?? [];
       let legacyRegistrySnapshot: any = record.phase1_result?.__phase1RegistrySnapshot ?? null;
       const searchesBeforeThisRound = webSearchCount;
+
+      // PART 3.2 (preference signal) — "better_competitor" corrections
+      // scoped to this exact matching context become a small known-good
+      // seed, checked BEFORE any AI discovery search runs this round.
+      if (fill.round === 1 && pool.length === 0) {
+        pool = await seedKnownGoodCandidates(correctionSignals, "legacy", primaryCriterion, ourMotor, ourHeatTech, targetPriceRaw != null ? deriveTierKeyword(targetPriceRaw) : null);
+      }
 
       if (fill.round === 1) {
         if (registry) {
@@ -1938,7 +2078,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             criterionPhrasing(primaryCriterion).term
           );
 
-          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard, toolTypes);
+          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard, toolTypes)
+            .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()));
 
           // Real motor-grounding fix — curated candidates from the Amazon leg
           // (lib/legacy-brand-discovery.ts's toCandidate, a type=search result
@@ -2000,15 +2141,17 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             brands: registry.brands.map(b => ({ brand_name: b.brand_name, aliases: b.aliases, sort_order: b.sort_order, source_lists: b.sourceLists ?? null })),
           };
         } else {
+          const correctionsGuidance = buildCorrectionsGuidance(correctionSignals.corrections);
           const aiResult: any = await withAiFallback(
             "Phase 1",
-            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, undefined, primaryCriterion) : null,
-            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, undefined, primaryCriterion) : null,
+            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, correctionsGuidance ?? undefined, primaryCriterion) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, correctionsGuidance ?? undefined, primaryCriterion) : null,
             () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
             startTime
           );
           webSearchCount += aiResult.web_searches_performed || 0;
-          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes);
+          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes)
+            .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()));
           if (hasRainforestKey) {
             aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType);
           }
@@ -2022,7 +2165,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // racing the curated search's own time budget); for the non-
         // registry branch it's simply a broader/relaxed re-ask. ----
         const usedBrands = new Set(pool.map((c: any) => normalizeBrandToken(c.brand || "")));
-        const extraInstruction = fillRoundExtraInstruction(fill.round, "legacy");
+        const correctionsGuidance = buildCorrectionsGuidance(correctionSignals.corrections);
+        const extraInstruction = [fillRoundExtraInstruction(fill.round, "legacy"), correctionsGuidance].filter(Boolean).join("\n\n");
         const aiResult: any = await withAiFallback(
           `Phase 1 (fill round ${fill.round})`,
           hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion) : null,
@@ -2034,6 +2178,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
 
         let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes)
           .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
+          .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()))
           .map((c: any) => (registry ? { ...c, curated_brand: false, brand_list_status: "not_curated" } : c));
         if (hasRainforestKey) {
           aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType);
@@ -2125,7 +2270,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await setPendingQuestion(analysisId, resolved.pendingQuestion);
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: resolved.pendingQuestion };
       }
-      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile } = resolved.ctx;
+      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile, correctionSignals } = resolved.ctx;
 
       if (record.phase2_result?.__phase2Stage !== "discovered") {
         // ----------------------------------------------------
@@ -2142,8 +2287,15 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         let pool: any[] = record.phase2_result?.__phase2Pool ?? [];
         const searchesBeforeThisRound = webSearchCount;
 
+        // PART 3.2 (preference signal) — same known-good seed as Phase 1's
+        // fill loop, scoped to "emerging" here.
+        if (fill.round === 1 && pool.length === 0) {
+          pool = await seedKnownGoodCandidates(correctionSignals, "emerging", primaryCriterion, ourMotor, ourHeatTech, targetPriceRaw != null ? deriveTierKeyword(targetPriceRaw) : null);
+        }
+
         const usedBrands = new Set(pool.map((c: any) => normalizeBrandToken(c.brand || "")));
-        const extraInstruction = fill.round === 1 ? undefined : fillRoundExtraInstruction(fill.round, "emerging");
+        const correctionsGuidance = buildCorrectionsGuidance(correctionSignals.corrections);
+        const extraInstruction = [fill.round === 1 ? null : fillRoundExtraInstruction(fill.round, "emerging"), correctionsGuidance].filter(Boolean).join("\n\n") || undefined;
         const result: any = await withAiFallback(
           fill.round === 1 ? "Phase 2" : `Phase 2 (fill round ${fill.round})`,
           hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion) : null,
@@ -2157,6 +2309,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           newCompetitors = newCompetitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
         }
         newCompetitors = newCompetitors.filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")));
+        newCompetitors = newCompetitors.filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()));
         webSearchCount += result.web_searches_performed || 0;
         pool = mergeNewCandidatesIntoPool(pool, newCompetitors);
 
@@ -2173,6 +2326,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           ourSpecs, ourLineupPercentile, indieLineups: new Map(),
           weights,
           keyDiff: context.keyDiff ?? null,
+          penalizedAsins: correctionSignals.penalizedAsins,
         };
         const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "emerging", identityCard, 5, trialCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
 
@@ -2259,6 +2413,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         ourLineupPercentile,
         indieLineups,
         keyDiff: context.keyDiff ?? null,
+        penalizedAsins: correctionSignals.penalizedAsins,
       };
       result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true, allowStaticFallbackTopup: true });
       const stillShortEmerging = 5 - result.competitors.length;
@@ -2440,6 +2595,236 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
     await failAnalysis(analysisId, message);
     return { analysisId, phase: record.phase, status: "failed", stepResult: null, totalSearches: webSearchCount, error: message };
   }
+}
+
+// ----------------------------------------------------
+// EDITABLE ASIN: a user manually replacing a wrongly-selected competitor.
+// ----------------------------------------------------
+
+// Accepts either a plain 10-char ASIN or a pasted Amazon product URL
+// (/dp/{ASIN}, /gp/product/{ASIN}) — same acceptance shape as the "product
+// URL" field on project creation (lib/snapshot-capture.ts's own
+// extractAsinFromUrl, reused directly here rather than duplicated).
+// Returns null (never a guess) when neither form is recognizable.
+export function resolveAsinFromInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (/^[A-Z0-9]{10}$/i.test(trimmed)) return trimmed.toUpperCase();
+  return extractAsinFromUrl(trimmed);
+}
+
+// Substring-scans phase3_result's free-prose competitor-naming fields for
+// the OLD competitor's name/brand — the only structured competitor
+// reference this codebase's synthesis output has is
+// top_threats[].competitor_name; everything else (market_gaps,
+// top_opportunities, positioning_recommendation, strategic_recommendations,
+// quick_wins) is plain prose with no citation-to-competitor index. A hit
+// here doesn't rewrite anything — it only flags phase3_result as possibly
+// stale so the UI can offer a one-click full re-synthesis (see
+// resetPhase3ForRegeneration) rather than either silently leaving wrong
+// text or re-running an AI call on every single swap.
+export function phase3MentionsCompetitor(phase3Result: any, oldName: string, oldBrand: string | undefined): boolean {
+  if (!phase3Result) return false;
+  const needles = [oldName, oldBrand].filter((s): s is string => !!s && s.trim().length > 2).map(s => s.toLowerCase());
+  if (needles.length === 0) return false;
+
+  const haystacks: string[] = [
+    ...(Array.isArray(phase3Result.market_gaps) ? phase3Result.market_gaps : []),
+    ...(Array.isArray(phase3Result.quick_wins) ? phase3Result.quick_wins : []),
+    phase3Result.positioning_recommendation,
+    ...(Array.isArray(phase3Result.top_threats) ? phase3Result.top_threats.flatMap((t: any) => [t.competitor_name, t.threat_description]) : []),
+    ...(Array.isArray(phase3Result.top_opportunities) ? phase3Result.top_opportunities.map((o: any) => o.description) : []),
+    ...(Array.isArray(phase3Result.strategic_recommendations) ? phase3Result.strategic_recommendations.map((r: any) => r.explanation) : []),
+  ].filter((s): s is string => typeof s === "string" && s.length > 0);
+
+  return haystacks.some(text => needles.some(needle => text.toLowerCase().includes(needle)));
+}
+
+export interface ReplaceCompetitorResult {
+  competitor: any;
+  synthesisPossiblyStale: boolean;
+}
+
+// Refetches ONE competitor's full Amazon data by a user-supplied ASIN and
+// rebuilds its entry in place — never re-ranks against siblings (the
+// corrected competitor keeps its existing slot; that's the entire point of
+// a targeted human correction, not a fresh discovery run). Price/feature
+// scoring here deliberately uses the simpler absolute-price/no-lineup path
+// even for an emerging/indie competitor — relative-lineup pricing needs
+// each brand's full price lineup (lib/indie-brand-lineup.ts), a
+// discovery-time-only concept not worth reconstructing for a single
+// manual swap whose card no longer shows the "Why this competitor"
+// scoring rationale anyway (replaced by "Manually selected by {user}").
+export async function replaceCompetitor(
+  analysisId: string,
+  oldAsin: string,
+  newAsin: string,
+  actorUserId: string | null,
+  correction: { reason: CorrectionReason; note?: string | null }
+): Promise<ReplaceCompetitorResult> {
+  const record: any = await getAnalysis(analysisId);
+  if (!record) throw new Error("Analysis not found");
+
+  const identity: IdentityCard | null = hasResult(record.phase0_result) ? record.phase0_result : null;
+  if (!identity) throw new Error("Analysis has no confirmed product identity yet — cannot replace a competitor before Phase 0 completes");
+
+  const context: AnalysisContext = { id: analysisId, orgId: record.org_id || "dev_org_id", userId: record.user_id, projectId: record.project_id || null, ...(record.context || {}) };
+
+  const phase1Result = hasResult(record.phase1_result) ? record.phase1_result : null;
+  const phase2Result = hasResult(record.phase2_result) ? record.phase2_result : null;
+  const phase3Result = hasResult(record.phase3_result) ? record.phase3_result : null;
+
+  let foundIn: "phase1" | "phase2" | null = null;
+  let oldCompetitor: any = null;
+  if (phase1Result?.competitors) {
+    const idx = phase1Result.competitors.findIndex((c: any) => c.asin === oldAsin);
+    if (idx >= 0) { foundIn = "phase1"; oldCompetitor = phase1Result.competitors[idx]; }
+  }
+  if (!foundIn && phase2Result?.competitors) {
+    const idx = phase2Result.competitors.findIndex((c: any) => c.asin === oldAsin);
+    if (idx >= 0) { foundIn = "phase2"; oldCompetitor = phase2Result.competitors[idx]; }
+  }
+  if (!foundIn || !oldCompetitor) throw new Error(`No competitor with ASIN "${oldAsin}" found on this analysis`);
+
+  const allExistingAsins = new Set([...(phase1Result?.competitors || []), ...(phase2Result?.competitors || [])].map((c: any) => c.asin).filter(Boolean));
+  if (allExistingAsins.has(newAsin)) throw new Error(`ASIN "${newAsin}" is already one of this analysis's other competitors`);
+
+  const product = await fetchAmazonProductFresh(newAsin);
+  if (!product) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}"`);
+  // No cache write-through needed here: newAsin has never been cached
+  // under this analysis before, so any later getAmazonProduct(newAsin)
+  // call (e.g. CompetitorCard's own review/news/key-features lookups)
+  // simply cache-misses and fetches fresh itself on first access — there
+  // is no stale entry to invalidate for a brand-new ASIN.
+
+  const toolTypes = await listToolTypes();
+  const primaryCriterion = resolvePrimaryCriterion(identity, toolTypes);
+
+  let newCompetitor = mergeRainforestProductIntoCompetitor({ ...oldCompetitor, key_features: [], strengths: [], weaknesses: [], recent_news: [] }, product);
+
+  if (primaryCriterion === "motor") {
+    const motorFamilies = await listMotorFamilies();
+    const brandedNames = await listBrandedMotorNames();
+    const ourMotor = await resolveOurMotorType({ motorFamily: context.motorFamily, motorTech: context.motorTech, projectId: context.projectId }, identity, motorFamilies);
+    const motorExtraction = extractCompetitorMotorType({ ...newCompetitor, title: newCompetitor.name }, motorFamilies, { brand: newCompetitor.brand, brandedNames });
+    const motorMatchTier = computeMotorMatchTier(ourMotor?.familyKey ?? null, motorExtraction?.familyKey ?? null, motorFamilies);
+    newCompetitor = {
+      ...newCompetitor,
+      motor_type: motorExtraction?.label ?? null,
+      motor_family_key: motorExtraction?.familyKey ?? null,
+      motor_modifier: motorExtraction?.modifierLabel ?? null,
+      motor_branded_name: motorExtraction?.brandedName ?? null,
+      motor_source_quote: motorExtraction?.sourceQuote ?? null,
+      motor_confirmed_via: motorExtraction?.confirmedVia ?? null,
+      motor_source_url: motorExtraction ? (newCompetitor.sources?.brand_site?.url || newCompetitor.amazon_url || null) : null,
+      motor_match_tier: motorMatchTier,
+      motor_score: computeMotorScore(motorMatchTier),
+    };
+  } else if (primaryCriterion === "heat_technology") {
+    const heatTechFamilies = await listHeatTechFamilies();
+    const brandedHeatTechNames = await listBrandedHeatTechNames();
+    const ourHeatTech = await resolveOurHeatTech({ heatTechFamily: context.heatTechFamily, heatTechRaw: context.heatTechRaw, projectId: context.projectId }, identity, heatTechFamilies);
+    const heatTechExtraction = extractCompetitorHeatTech({ ...newCompetitor, title: newCompetitor.name }, heatTechFamilies, { brand: newCompetitor.brand, brandedNames: brandedHeatTechNames });
+    const heatTechMatchTier = computeHeatTechMatchTier(ourHeatTech?.familyKey ?? null, heatTechExtraction?.familyKey ?? null);
+    newCompetitor = {
+      ...newCompetitor,
+      heat_tech_type: heatTechExtraction?.label ?? null,
+      heat_tech_family_key: heatTechExtraction?.familyKey ?? null,
+      heat_tech_branded_name: heatTechExtraction?.brandedName ?? null,
+      heat_tech_source_quote: heatTechExtraction?.sourceQuote ?? null,
+      heat_tech_confirmed_via: heatTechExtraction?.confirmedVia ?? null,
+      heat_tech_source_url: heatTechExtraction ? (newCompetitor.sources?.brand_site?.url || newCompetitor.amazon_url || null) : null,
+      heat_tech_match_tier: heatTechMatchTier,
+      heat_tech_score: computeMotorScore(heatTechMatchTier),
+    };
+  }
+
+  const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identity);
+  const priceScore = targetPriceRaw != null && typeof newCompetitor.price_raw === "number" ? computePriceScoreAbsolute(newCompetitor.price_raw, targetPriceRaw) : 0;
+  const theirSpecs = extractCompetitorSpecs(newCompetitor);
+  const ourSpecs = context.projectId ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId)) : extractOurSpecsFromTds(null);
+  const candidateText = [newCompetitor.name, ...(Array.isArray(newCompetitor.feature_bullets) ? newCompetitor.feature_bullets : []), newCompetitor.description || ""].filter(Boolean).join(" ");
+  const differentiatorMatch = context.keyDiff ? matchesDifferentiator(context.keyDiff, candidateText) : null;
+  const featureScore = computeFeatureScore(ourSpecs, theirSpecs, differentiatorMatch);
+  const weights = context.weightOverride ?? await getScoringProfileForToolType(identity.toolType);
+  const criterionScore = newCompetitor.motor_score ?? newCompetitor.heat_tech_score ?? 0;
+
+  // Recomputed honestly rather than assumed false — a human-corrected pick
+  // can still genuinely fall outside the price band (e.g. a deliberately
+  // pricier "better competitor" swap); "warn, don't block" applies here
+  // too, so the existing out-of-band disclosure just reflects reality.
+  const primaryBand = targetPriceRaw != null ? computePriceBand(targetPriceRaw, foundIn === "phase1" ? "legacy" : "emerging", 0) : null;
+  const isOutOfBand = !!primaryBand && typeof newCompetitor.price_raw === "number" && !isWithinBand(newCompetitor.price_raw, primaryBand);
+
+  newCompetitor = {
+    ...newCompetitor,
+    price_score: priceScore,
+    price_logic: "absolute",
+    feature_score: featureScore,
+    differentiator_match: differentiatorMatch,
+    composite_score: computeCompositeScore(criterionScore, priceScore, featureScore, weights),
+    manually_selected: true,
+    manually_selected_by: actorUserId,
+    manually_selected_at: new Date().toISOString(),
+    replaced_from_asin: oldAsin,
+    out_of_band: isOutOfBand,
+    out_of_band_reason: isOutOfBand ? buildOutOfBandLabel(newCompetitor.price_raw, primaryBand!) : null,
+  };
+
+  const patch: { phase1_result?: object; phase2_result?: object; phase3_result?: object } = {};
+  if (foundIn === "phase1") {
+    patch.phase1_result = { ...phase1Result, competitors: phase1Result.competitors.map((c: any) => (c.asin === oldAsin ? newCompetitor : c)) };
+  } else {
+    patch.phase2_result = { ...phase2Result, competitors: phase2Result.competitors.map((c: any) => (c.asin === oldAsin ? newCompetitor : c)) };
+  }
+
+  const synthesisPossiblyStale = phase3MentionsCompetitor(phase3Result, oldCompetitor.name, oldCompetitor.brand);
+  if (synthesisPossiblyStale && phase3Result) {
+    patch.phase3_result = { ...phase3Result, synthesis_possibly_stale: true };
+  }
+
+  await patchAnalysisPhaseResults(analysisId, patch);
+
+  try {
+    await persistPricingProvenance([newCompetitor], analysisId);
+  } catch (e) {
+    console.warn("Failed to persist pricing provenance for replaced competitor:", e);
+  }
+
+  const toolType = identity.toolType || "";
+  await recordCorrection({
+    analysisId,
+    projectId: context.projectId,
+    toolType,
+    motorFamily: primaryCriterion === "motor" ? (newCompetitor.motor_family_key ?? null) : null,
+    heatTechFamily: primaryCriterion === "heat_technology" ? (newCompetitor.heat_tech_family_key ?? null) : null,
+    priceBand: targetPriceRaw != null ? deriveTierKeyword(targetPriceRaw) : null,
+    oldAsin,
+    oldTitle: oldCompetitor.name ?? null,
+    newAsin,
+    newTitle: newCompetitor.name ?? null,
+    reason: correction.reason,
+    note: correction.note ?? null,
+    userId: actorUserId,
+  });
+
+  // PART 3.3 (root-cause routing) — a "Wrong motor/plate-heat type"
+  // correction re-uses the ALREADY-BUILT admin-inspectable miss log
+  // (lib/db/motor-families.ts's motor_tech_search_misses table, surfaced
+  // on the Competitor Matching admin page) rather than inventing a new
+  // flagging system, for the motor-criterion case where that log already
+  // exists. No heat-tech-criterion equivalent miss log exists yet (this
+  // session's Heat/Plate Technology work never built one) — adding a
+  // parallel table + admin surface for this single secondary signal is
+  // scoped out for now rather than invented on the spot.
+  if (correction.reason === "wrong_motor" && primaryCriterion === "motor") {
+    try {
+      await logMotorTechMiss(oldCompetitor.motor_type || oldCompetitor.name || oldAsin);
+    } catch (e) {
+      console.warn("Failed to log motor-tech miss for correction:", e);
+    }
+  }
+
+  return { competitor: newCompetitor, synthesisPossiblyStale };
 }
 
 // ----------------------------------------------------

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAmazonProduct } from "@/hooks/useAmazonProduct";
-import { ChevronDown, ChevronUp, ExternalLink, Star, RefreshCw, Newspaper, TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Star, RefreshCw, Newspaper, TrendingUp, TrendingDown, Minus, AlertTriangle, Pencil, X, Check } from "lucide-react";
 import type { ReviewAnalysis, TierResult, ListingStats } from "@/lib/amazon-review-analysis";
 import type { ProductNewsResult } from "@/lib/product-news";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
@@ -12,6 +12,16 @@ import { SkeletonRows } from "@/components/ui/Skeleton";
 import { SectionSourceLine, SourceUnavailableCaption } from "./SectionSourceLine";
 import { assertProvenance, domainOf, formatReviewDate } from "@/lib/provenance-format";
 import type { ReviewEvidence } from "@/lib/amazon-review-analysis";
+import { CorrectionReasonValues } from "@/lib/validations";
+
+const CORRECTION_REASON_LABELS: Record<string, string> = {
+  wrong_product: "Wrong product entirely (not the right tool type)",
+  wrong_model: "Wrong model — right brand, wrong tier/price",
+  wrong_motor: "Wrong motor/plate-heat type",
+  better_competitor: "Better/more relevant competitor exists (this one)",
+  discontinued: "Discontinued / unavailable product",
+  other: "Other",
+};
 
 interface Competitor {
   name:               string;
@@ -111,6 +121,14 @@ interface Competitor {
     brand_site: { url: string; price: string | null; price_raw: number | null; retrieved_at: string } | null;
     amazon: { asin: string; url: string; price: string | null; price_raw: number | null; rating: string | null; review_count: string | null; bsr_rank: string | null; monthly_sales: string | null; retrieved_at: string } | null;
   };
+  // Set by lib/analysisEngine.ts's replaceCompetitor after a user manually
+  // swapped this competitor's ASIN — replaces the composite-score-based
+  // "Why this competitor" rationale with a plain provenance note, since a
+  // human override has no scoring rationale to explain.
+  manually_selected?: boolean;
+  manually_selected_by?: string | null;
+  manually_selected_at?: string | null;
+  replaced_from_asin?: string | null;
 }
 
 interface CompetitorCardProps {
@@ -134,6 +152,12 @@ interface CompetitorCardProps {
   // hides either section.
   buyerSentimentEnabled?: boolean;
   newsUpdatesEnabled?: boolean;
+  // Fired after a successful ASIN swap (lib/analysisEngine.ts's
+  // replaceCompetitor via POST .../competitors/replace) — the parent
+  // (ResultsPanel, then analyze/page.tsx) owns the actual analysis state
+  // and patches its phase1/phase2 competitors array in place; this card
+  // never mutates its own `competitor` prop directly.
+  onReplaced?: (oldAsin: string, updatedCompetitor: any, synthesisPossiblyStale: boolean) => void;
 }
 
 type FeaturesState =
@@ -369,7 +393,7 @@ export function EmptySlotCard({ reason }: { reason: string }) {
   );
 }
 
-export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true }: CompetitorCardProps) {
+export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true, onReplaced }: CompetitorCardProps) {
   // All 4 sections load automatically on mount — collapsing is purely a
   // visual/reading-convenience toggle, never a fetch trigger.
   const [featuresOpen, setFeaturesOpen] = useState(true);
@@ -452,6 +476,72 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
   const displayModelNumber  = live?.model_number ?? c.model_number ?? null;
   const criterionKind = resolveCriterionKind(c);
 
+  // Editable ASIN — edit (pencil) opens an inline input; submitting it
+  // fetches a preview (POST .../competitors/preview) and shows a confirm
+  // panel before anything actually changes (typo-ASIN disasters guard).
+  // Confirming records a required reason and calls .../competitors/replace,
+  // which rebuilds this competitor server-side and returns the full
+  // updated object — bubbled up via onReplaced so the parent (which owns
+  // the actual analysis state) can patch it in.
+  const [editingAsin, setEditingAsin] = useState(false);
+  const [asinInput, setAsinInput] = useState("");
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<{ asin: string; title: string; brand: string; price: string; image: string | null; toolTypeMismatchWarning: string | null; duplicateAsin: boolean } | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [correctionReason, setCorrectionReason] = useState<string>("wrong_product");
+  const [correctionNote, setCorrectionNote] = useState("");
+  const [replacing, setReplacing] = useState(false);
+
+  function resetAsinEdit() {
+    setEditingAsin(false);
+    setAsinInput("");
+    setPreview(null);
+    setPreviewError(null);
+    setCorrectionReason("wrong_product");
+    setCorrectionNote("");
+  }
+
+  async function handlePreviewAsin() {
+    if (!asinInput.trim() || !analysisId) return;
+    setPreviewing(true);
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/competitors/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asinOrUrl: asinInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Could not preview that product");
+      setPreview(data);
+    } catch (err: any) {
+      setPreviewError(err.message || "Could not preview that product");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function handleConfirmReplace() {
+    if (!preview || !analysisId || preview.duplicateAsin) return;
+    setReplacing(true);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/competitors/replace`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldAsin: c.asin, asinOrUrl: preview.asin, reason: correctionReason, note: correctionNote.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to replace competitor");
+      onReplaced?.(c.asin, data.competitor, data.synthesisPossiblyStale);
+      resetAsinEdit();
+    } catch (err: any) {
+      setPreviewError(err.message || "Failed to replace competitor");
+    } finally {
+      setReplacing(false);
+    }
+  }
+
   // Per-section citation numbering — same URL cited twice in one section
   // keeps one number (components/analyze/CitationMarker.tsx).
   const featuresCitations = useCitationNumbering();
@@ -491,15 +581,145 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           </div>
         </div>
 
-        {amazonUrl ? (
-          <a href={amazonUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[10px] font-semibold text-accent hover:underline shrink-0" title={`View ${c.name} on Amazon`}>
-            <span>View on Amazon</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        ) : (
-          <span className="text-[10px] text-text-muted italic shrink-0">ASIN unavailable</span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {amazonUrl ? (
+            <a href={amazonUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[10px] font-semibold text-accent hover:underline" title={`View ${c.name} on Amazon`}>
+              <span>View on Amazon</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          ) : (
+            <span className="text-[10px] text-text-muted italic">ASIN unavailable</span>
+          )}
+          {analysisId && !editingAsin && (
+            <button
+              type="button"
+              onClick={() => { setEditingAsin(true); setAsinInput(c.asin || ""); }}
+              title="Wrong competitor? Edit its ASIN to replace it"
+              className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-text-primary transition-colors"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Editable ASIN — pencil-triggered inline swap flow: type/paste an
+          ASIN or Amazon URL, preview the real product, pick why, confirm.
+          Warns (tool-type mismatch) rather than blocks; duplicate ASIN is
+          the one hard block, since that's a genuine error, not a judgment
+          call. */}
+      {editingAsin && (
+        <div className="rounded-lg border border-accent/40 bg-surface-3/30 p-3 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] font-bold text-text-muted uppercase tracking-wider">Replace this competitor</span>
+            <button type="button" onClick={resetAsinEdit} className="p-0.5 rounded hover:bg-surface-3 text-text-muted hover:text-text-primary">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+
+          {!preview ? (
+            <>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={asinInput}
+                  onChange={(e) => { setAsinInput(e.target.value); setPreviewError(null); }}
+                  placeholder="New ASIN (e.g. B0ABCDEFGH) or Amazon product URL"
+                  className="flex-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handlePreviewAsin}
+                  disabled={previewing || !asinInput.trim()}
+                  className="px-3 py-1.5 text-[11px] font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
+                >
+                  {previewing ? "Looking up…" : "Preview"}
+                </button>
+              </div>
+              {previewError && <p className="text-[10px] text-danger">{previewError}</p>}
+            </>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="flex items-start gap-2.5 p-2 rounded-lg bg-surface-1 border border-border/60">
+                {preview.image && <img src={preview.image} alt={preview.title} className="w-12 h-12 object-contain rounded shrink-0" />}
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold text-text-primary leading-snug">
+                    Replace <span className="line-through text-text-muted">{c.name}</span> with{" "}
+                    <span>{preview.title}</span>?
+                  </p>
+                  <p className="text-[10px] text-text-muted mt-0.5">{preview.brand} · {preview.price}</p>
+                </div>
+              </div>
+
+              {preview.duplicateAsin && (
+                <p className="text-[10px] text-danger font-semibold">This ASIN is already one of this analysis&apos;s other competitors — pick a different one.</p>
+              )}
+              {preview.toolTypeMismatchWarning && !preview.duplicateAsin && (
+                <p className="text-[10px] text-warning">{preview.toolTypeMismatchWarning}</p>
+              )}
+
+              {!preview.duplicateAsin && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Why are you replacing this competitor?</label>
+                    <div className="space-y-1">
+                      {CorrectionReasonValues.map((reasonValue) => (
+                        <label key={reasonValue} className="flex items-center gap-1.5 text-[10px] text-text-secondary cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`correction-reason-${c.asin}`}
+                            value={reasonValue}
+                            checked={correctionReason === reasonValue}
+                            onChange={() => setCorrectionReason(reasonValue)}
+                          />
+                          {CORRECTION_REASON_LABELS[reasonValue]}
+                        </label>
+                      ))}
+                    </div>
+                    {correctionReason === "other" && (
+                      <input
+                        type="text"
+                        value={correctionNote}
+                        onChange={(e) => setCorrectionNote(e.target.value)}
+                        placeholder="Briefly explain why"
+                        className="w-full mt-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                      />
+                    )}
+                  </div>
+
+                  {previewError && <p className="text-[10px] text-danger">{previewError}</p>}
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleConfirmReplace}
+                      disabled={replacing}
+                      className="flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <Check className="w-3 h-3" />
+                      {replacing ? "Replacing…" : "Confirm Replace"}
+                    </button>
+                    <button type="button" onClick={() => setPreview(null)} disabled={replacing} className="px-3 py-1.5 text-[11px] font-semibold text-text-muted hover:text-text-primary transition-colors">
+                      Back
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* "Manually selected" provenance — replaces the auto-generated "Why
+          this competitor" scoring rationale below for a corrected pick,
+          since composite-score reasoning no longer applies to a human
+          override. */}
+      {c.manually_selected && (
+        <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-[10px] text-text-secondary">
+          <span className="font-semibold text-accent">Manually selected</span>
+          {c.replaced_from_asin && <span> — replaced {c.replaced_from_asin}{c.manually_selected_at ? ` on ${new Date(c.manually_selected_at).toLocaleDateString()}` : ""}</span>}
+        </div>
+      )}
 
       {/* "Why this competitor" — motor match, price logic, matched features,
           composite score (lib/analysisEngine.ts's selectByCompositeScore).

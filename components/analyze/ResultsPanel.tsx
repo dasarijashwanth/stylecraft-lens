@@ -72,6 +72,11 @@ interface ResultsPanelProps {
       // this analysis makes that isn't already directly backed by the
       // Phase 1/2 Amazon data above. Absent/empty when nothing was cited.
       citations?: Claim[];
+      // Set by lib/analysisEngine.ts's replaceCompetitor when a swap left
+      // this synthesis possibly naming a since-replaced competitor (a
+      // substring scan, not a guarantee) — surfaces the regenerate banner
+      // below rather than silently leaving stale text or auto-regenerating.
+      synthesis_possibly_stale?: boolean;
     };
   };
   // Best-effort — lets each competitor's live per-section provenance writes
@@ -81,6 +86,15 @@ interface ResultsPanelProps {
   onSaveAsReport: () => void;
   savingReport: boolean;
   onNewAnalysis: () => void;
+  // Bubbled up from CompetitorCard's editable-ASIN flow — the parent
+  // (analyze/page.tsx) owns the actual analysisResult state and patches
+  // phase1/phase2's competitors array in place.
+  onCompetitorReplaced?: (oldAsin: string, updatedCompetitor: any, synthesisPossiblyStale: boolean) => void;
+  // Triggers POST .../regenerate-synthesis then hands control back to the
+  // parent's ProgressPanel view (same phase-3-only re-run, no new
+  // state-machine code) — see the banner below.
+  onRegenerateSynthesis?: () => void;
+  regeneratingSynthesis?: boolean;
 }
 
 // Which criterion actually scored a batch of competitors (motor_*/
@@ -94,7 +108,7 @@ function describeCriterionForCompetitors(competitors: any[]): string | null {
   return null;
 }
 
-export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis }: ResultsPanelProps) {
+export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis, onCompetitorReplaced, onRegenerateSynthesis, regeneratingSynthesis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   // A slot the fill loop couldn't fill (lib/analysisEngine.ts's
   // buildEmptySlotPlaceholder) renders as EmptySlotCard, not a real
@@ -272,6 +286,28 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Synthesis-stale banner — a competitor swap (CompetitorCard's
+          editable-ASIN flow) may have left this section naming a since-
+          replaced competitor (lib/analysisEngine.ts's
+          phase3MentionsCompetitor, a substring scan, not a guarantee).
+          Manual regenerate only — never automatic, since a full Phase 3
+          re-run is a real AI call. */}
+      {phase3.synthesis_possibly_stale && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning/10 px-5 py-3">
+          <p className="text-xs text-warning">
+            Strategy recommendations below may reference a competitor that&apos;s since been replaced.
+          </p>
+          <button
+            type="button"
+            onClick={onRegenerateSynthesis}
+            disabled={regeneratingSynthesis || !onRegenerateSynthesis}
+            className="px-3 py-1.5 text-[11px] font-semibold bg-warning/20 hover:bg-warning/30 text-warning rounded-lg transition-colors disabled:opacity-50 shrink-0"
+          >
+            {regeneratingSynthesis ? "Regenerating…" : "Regenerate"}
+          </button>
         </div>
       )}
 
@@ -508,7 +544,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             phase1.competitors.map((comp, i) => (
               comp.empty_slot
                 ? <EmptySlotCard key={i} reason={comp.reason || "No additional legacy competitor found."} />
-                : <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} />
+                : <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} onReplaced={onCompetitorReplaced} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
@@ -544,7 +580,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             phase2.competitors.map((comp, i) => (
               comp.empty_slot
                 ? <EmptySlotCard key={i} reason={comp.reason || "No additional emerging competitor found."} />
-                : <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} />
+                : <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} onReplaced={onCompetitorReplaced} />
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>

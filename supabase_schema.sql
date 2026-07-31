@@ -1115,3 +1115,38 @@ CREATE TABLE IF NOT EXISTS branded_heat_tech_names (
 );
 ALTER TABLE branded_heat_tech_names ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for branded_heat_tech_names" ON branded_heat_tech_names FOR ALL USING (true) WITH CHECK (true);
+
+-- 33. COMPETITOR CORRECTIONS — a user manually replacing a wrongly-selected
+-- competitor's ASIN, and WHY (lib/analysisEngine.ts's replaceCompetitor).
+-- Append-only, real usage data (no seed rows). Feeds a learning loop for
+-- future discovery runs (lib/db/competitor-corrections.ts): the SAME
+-- (old_asin, reason) pair repeated across independent corrections becomes a
+-- blocklist/penalty signal; new_asin from a "better_competitor" correction
+-- becomes a preference signal, scoped by (tool_type, motor_family OR
+-- heat_tech_family, price_band). heat_tech_family is a parallel column to
+-- motor_family (Section 30's primary_criterion decides which one a given
+-- tool type actually populates) — this table postdates the original spec
+-- that only named motor_family, added here for the motorless criterion
+-- introduced by Sections 29-32. expired_at (not a hard delete) lets an
+-- admin turn a learned rule off while the row stays inspectable — "learning
+-- must stay inspectable and reversible."
+CREATE TABLE IF NOT EXISTS competitor_corrections (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    analysis_id UUID REFERENCES analyses(id) ON DELETE SET NULL,
+    project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+    tool_type VARCHAR(50) NOT NULL,
+    motor_family VARCHAR(50),
+    heat_tech_family VARCHAR(50),
+    price_band VARCHAR(20),
+    old_asin VARCHAR(20) NOT NULL,
+    old_title VARCHAR(500),
+    new_asin VARCHAR(20) NOT NULL,
+    new_title VARCHAR(500),
+    reason VARCHAR(30) NOT NULL,
+    note TEXT,
+    user_id VARCHAR(255),
+    expired_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE competitor_corrections ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for competitor_corrections" ON competitor_corrections FOR ALL USING (true) WITH CHECK (true);

@@ -171,6 +171,73 @@ export async function mergeAnalysisContext(analysisId: string, patch: Record<str
   return patch;
 }
 
+// Targeted patch of one or more phase-result JSONB columns, WITHOUT
+// touching `phase`/`status` — updateAnalysisPhase above always forces
+// status:"running" and advances `phase`, which is exactly right for the
+// phase pipeline's own progression but wrong for patching a single
+// competitor's data on an analysis that may already be "complete" (a
+// manual ASIN correction, lib/analysisEngine.ts's replaceCompetitor, must
+// never make a finished analysis look like it's still processing). Same
+// merge-only shape as mergeAnalysisContext above, just for phase results.
+export async function patchAnalysisPhaseResults(
+  analysisId: string,
+  patch: { phase1_result?: object; phase2_result?: object; phase3_result?: object }
+) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("analyses").update(patch).eq("id", analysisId);
+    if (error) throw error;
+    return;
+  }
+
+  try {
+    const prismaPatch: any = {};
+    if (patch.phase1_result !== undefined) prismaPatch.phase1Result = patch.phase1_result;
+    if (patch.phase2_result !== undefined) prismaPatch.phase2Result = patch.phase2_result;
+    if (patch.phase3_result !== undefined) prismaPatch.phase3Result = patch.phase3_result;
+    await prisma.analysis.update({ where: { id: analysisId }, data: prismaPatch });
+  } catch (e) {
+    console.warn("Prisma failed in patchAnalysisPhaseResults. Falling back to memoryDb.");
+    const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+    if (mockAnalysis) {
+      if (patch.phase1_result !== undefined) mockAnalysis.phase1Result = patch.phase1_result;
+      if (patch.phase2_result !== undefined) mockAnalysis.phase2Result = patch.phase2_result;
+      if (patch.phase3_result !== undefined) mockAnalysis.phase3Result = patch.phase3_result;
+    }
+  }
+}
+
+// Manually re-opens Phase 3 (synthesis) on an already-complete analysis —
+// used by the "Regenerate" banner shown after a competitor swap leaves
+// stale synthesis text (lib/analysisEngine.ts's replaceCompetitor sets
+// phase3_result.synthesis_possibly_stale, this route clears it back to
+// null). Deliberately the one place phase/status ARE reset backward
+// (unlike patchAnalysisPhaseResults above): the client's existing
+// POST .../continue polling loop needs `status:"running"`/`phase:3` to
+// pick this up and re-run the exact same phase-3 branch runAnalysisStep
+// already has, no new state-machine code.
+export async function resetPhase3ForRegeneration(analysisId: string) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin
+      .from("analyses")
+      .update({ phase: 3, status: "running", phase3_result: null })
+      .eq("id", analysisId);
+    if (error) throw error;
+    return;
+  }
+
+  try {
+    await prisma.analysis.update({ where: { id: analysisId }, data: { phase: 3, status: "RUNNING", phase3Result: null as any } });
+  } catch (e) {
+    console.warn("Prisma failed in resetPhase3ForRegeneration. Falling back to memoryDb.");
+    const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+    if (mockAnalysis) {
+      mockAnalysis.phase = 3;
+      mockAnalysis.status = "RUNNING";
+      mockAnalysis.phase3Result = null;
+    }
+  }
+}
+
 // Terminal stored phase is 5, one past the highest real phase index (4 —
 // synthesis, phase 3 0-indexed) — bumped from the old 3-phase pipeline's
 // terminal value of 4 when Product Identification was inserted as a new

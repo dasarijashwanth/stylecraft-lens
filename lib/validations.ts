@@ -122,6 +122,25 @@ export const AnalysisFormSchema = z.object({
   }).refine(w => w.motor + w.price + w.feature > 0, "At least one criterion must be > 0").optional(),
 });
 
+// Same ASIN format check as ProjectSchema/NewProjectSchema's own asin
+// field (lib/product-cache-key.ts's ^[A-Z0-9]{10}$ convention) — not the
+// stricter "B0..." Amazon-specific prefix, since this codebase already
+// accepts any 10-char alphanumeric ASIN elsewhere.
+const AsinValue = z.string().regex(/^[A-Z0-9]{10}$/i, "ASIN must be exactly 10 letters/digits");
+
+export const CorrectionReasonValues = ["wrong_product", "wrong_model", "wrong_motor", "better_competitor", "discontinued", "other"] as const;
+
+export const CompetitorPreviewSchema = z.object({
+  asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
+});
+
+export const CompetitorReplaceSchema = z.object({
+  oldAsin: AsinValue,
+  asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
+  reason: z.enum(CorrectionReasonValues),
+  note: z.string().max(500).optional(),
+});
+
 export const NewProjectSchema = z.object({
   name: z.string().min(2, "Project name must be at least 2 characters").max(100),
   industry: z.string().min(1, "Select an industry"),

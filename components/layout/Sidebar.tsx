@@ -16,7 +16,8 @@ import {
   Presentation,
   Tags,
   Gauge,
-  ToggleLeft
+  ToggleLeft,
+  Undo2
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -49,6 +50,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           { label: "Deck Templates", href: "/dashboard/admin/deck-templates", icon: Presentation },
           { label: "Legacy Brands", href: "/dashboard/admin/legacy-brands", icon: Tags },
           { label: "Competitor Matching", href: "/dashboard/admin/competitor-matching", icon: Gauge },
+          { label: "Competitor Corrections", href: "/dashboard/admin/competitor-corrections", icon: Undo2 },
           { label: "Features", href: "/dashboard/admin/features", icon: ToggleLeft },
         ]
       : []),

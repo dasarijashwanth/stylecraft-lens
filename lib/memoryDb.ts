@@ -325,6 +325,30 @@ export interface MockBrandedHeatTechName {
   updatedAt: Date;
 }
 
+// Real usage data (a user manually correcting a wrongly-selected
+// competitor) — starts empty, same non-seeded precedent as
+// brandedMotorNames/brandedHeatTechNames above. expiredAt (not a hard
+// delete) lets an admin turn a learned rule off while keeping it
+// inspectable in the audit log — see lib/db/competitor-corrections.ts.
+export interface MockCompetitorCorrection {
+  id: string;
+  analysisId: string | null;
+  projectId: string | null;
+  toolType: string;
+  motorFamily?: string | null;
+  heatTechFamily?: string | null;
+  priceBand?: string | null;
+  oldAsin: string;
+  oldTitle?: string | null;
+  newAsin: string;
+  newTitle?: string | null;
+  reason: string;
+  note?: string | null;
+  userId?: string | null;
+  expiredAt?: Date | null;
+  createdAt: Date;
+}
+
 export interface MockBrandedMotorName {
   id: string;
   brandName: string;
@@ -500,6 +524,10 @@ class MemoryDatabase {
   // Technology criterion (motorless styling tools) — same seeding precedent.
   heatTechFamilies: MockHeatTechFamily[] = [];
   brandedHeatTechNames: MockBrandedHeatTechName[] = [];
+  // Real usage data (users correcting wrongly-selected competitors) — same
+  // non-seeded, non-persisted-across-restart precedent as
+  // brandedMotorNames/faqVotes above.
+  competitorCorrections: MockCompetitorCorrection[] = [];
   // Same always-seeded precedent — real default Help content, not an
   // empty admin table. Votes/search-misses start empty (real usage data).
   faqs: MockFaq[] = [];

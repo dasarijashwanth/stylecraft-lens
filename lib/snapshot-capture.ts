@@ -27,7 +27,7 @@ export interface CaptureResult {
 // never an automatic title-similarity guess. That lower-confidence path
 // (lib/rainforest.ts's resolveAsinBySearch) exists for competitor
 // discovery, not for identifying THE primary product itself.
-function extractAsinFromUrl(url: string | undefined | null): string | null {
+export function extractAsinFromUrl(url: string | undefined | null): string | null {
   if (!url) return null;
   const match = url.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i);
   return match ? match[1].toUpperCase() : null;

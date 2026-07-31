@@ -343,6 +343,44 @@ export default function AnalyzePage() {
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [savingReport, setSavingReport] = useState(false);
   const [savedReportId, setSavedReportId] = useState<string | null>(null);
+  const [regeneratingSynthesis, setRegeneratingSynthesis] = useState(false);
+
+  // Patches exactly the one competitor a CompetitorCard just replaced
+  // (POST .../competitors/replace) into whichever of phase1/phase2 it
+  // actually lives in — this page owns analysisResult, CompetitorCard
+  // never mutates its own competitor prop directly.
+  function handleCompetitorReplaced(oldAsin: string, updatedCompetitor: any, synthesisPossiblyStale: boolean) {
+    setAnalysisResult((prev: any) => {
+      if (!prev) return prev;
+      const patchList = (list: any[]) => (list || []).map((c: any) => (c.asin === oldAsin ? updatedCompetitor : c));
+      const inPhase1 = (prev.phase1?.competitors || []).some((c: any) => c.asin === oldAsin);
+      return {
+        ...prev,
+        phase1: inPhase1 ? { ...prev.phase1, competitors: patchList(prev.phase1.competitors) } : prev.phase1,
+        phase2: !inPhase1 ? { ...prev.phase2, competitors: patchList(prev.phase2.competitors) } : prev.phase2,
+        phase3: synthesisPossiblyStale && prev.phase3 ? { ...prev.phase3, synthesis_possibly_stale: true } : prev.phase3,
+      };
+    });
+  }
+
+  // Resets Phase 3 server-side then hands control back to the same
+  // ProgressPanel view a fresh analysis uses — it re-fetches phase0-2
+  // results (already complete, instant) and re-runs only the synthesis
+  // call, no new state-machine code needed.
+  async function handleRegenerateSynthesis() {
+    if (!analysisId) return;
+    setRegeneratingSynthesis(true);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/regenerate-synthesis`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to start synthesis regeneration");
+      setViewState("running");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to start synthesis regeneration");
+    } finally {
+      setRegeneratingSynthesis(false);
+    }
+  }
 
   // Pre-fill form if projectId is passed
   useEffect(() => {
@@ -1133,6 +1171,9 @@ export default function AnalyzePage() {
           onSaveAsReport={handleSaveAsReport}
           savingReport={savingReport}
           onNewAnalysis={() => setViewState("form")}
+          onCompetitorReplaced={handleCompetitorReplaced}
+          onRegenerateSynthesis={handleRegenerateSynthesis}
+          regeneratingSynthesis={regeneratingSynthesis}
         />
       )}
     </div>
