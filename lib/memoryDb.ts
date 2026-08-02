@@ -360,6 +360,35 @@ export interface MockBrandedMotorName {
   updatedAt: Date;
 }
 
+// Our own product lineup — selectable at the analyze form's initial stage
+// to auto-fill every analysis field instead of manual entry (replaces the
+// old hardcoded lib/stylecraft-products.ts array). heatTechFamily/
+// heatTechBranded are parallel to motorFamily/motorBranded (same
+// sibling-column precedent as MockCompetitorCorrection above) — a motorless
+// styling tool populates the heat pair instead, per tool_types
+// primaryCriterion. importFlags carries admin-review badges raised during
+// seed/re-import normalization ('incomplete', 'tool_type_needs_review',
+// 'motor_needs_confirmation', 'heat_tech_needs_confirmation') — never a
+// silent guess. active=false is a soft-deactivate, never a hard delete.
+export interface MockCatalogProduct {
+  id: string;
+  name: string;
+  industry: string;
+  targetMarket: string;
+  toolType: string;
+  targetPrice: number | null;
+  description: string | null;
+  motorFamily: string | null;
+  motorBranded: string | null;
+  heatTechFamily: string | null;
+  heatTechBranded: string | null;
+  active: boolean;
+  importFlags: string[];
+  source: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockCompetitorMatchingConfig {
   motorWeight: number;
   priceWeight: number;
@@ -513,9 +542,16 @@ class MemoryDatabase {
   // match any taxonomy family) — same non-seeded, non-persisted-across-
   // restart precedent as faqSearchMisses just below.
   motorTechSearchMisses: MockMotorTechMiss[] = [];
-  // Real usage data (admin-entered brand -> proprietary motor name -> family
-  // mappings) — starts empty, same precedent as legacy brands' official_domains.
+  // Admin-entered brand -> proprietary motor name -> family mappings.
+  // seedBrandedMotorNameDefaults() below always seeds the 6 confirmed
+  // StyleCraft entries (real default data, same precedent as motorFamilies)
+  // — further ad-hoc admin additions for other brands still just push onto
+  // this array, same as legacy brands' official_domains.
   brandedMotorNames: MockBrandedMotorName[] = [];
+  // Same always-seeded precedent as motorFamilies/toolTypes above — real
+  // default product-catalog data (21 GTM-forms products + deduped survivors
+  // of the old lib/stylecraft-products.ts array), not an empty admin table.
+  catalogProducts: MockCatalogProduct[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
   // Replaces competitorMatchingConfig above — per-tool-type weight profiles.
   // Same always-seeded precedent as motorFamilies/toolTypes.
@@ -555,6 +591,8 @@ class MemoryDatabase {
     this.seedToolTypeDefaults();
     this.seedScoringProfileDefaults();
     this.seedHeatTechFamilyDefaults();
+    this.seedBrandedMotorNameDefaults();
+    this.seedCatalogProductDefaults();
     this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
@@ -883,6 +921,7 @@ class MemoryDatabase {
       { key: "ceramic", label: "Ceramic", aliases: ["ceramic", "ceramic plates", "ceramic-coated", "ceramic coated"] },
       { key: "tourmaline", label: "Tourmaline", aliases: ["tourmaline", "tourmaline plates", "tourmaline-ceramic", "tourmaline ceramic"] },
       { key: "ionic", label: "Ionic", aliases: ["ionic", "ion technology", "negative ion"] },
+      { key: "infrared", label: "Infrared", aliases: ["infrared", "infrared technology"] },
     ];
     defs.forEach((d, i) => {
       this.heatTechFamilies.push({
@@ -892,6 +931,143 @@ class MemoryDatabase {
         aliases: d.aliases,
         enabled: true,
         sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 34 branded_motor_names seed INSERT
+  // exactly — StyleCraft's own proprietary motor marketing names, confirmed
+  // against the canonical 7-family taxonomy (Section 25).
+  seedBrandedMotorNameDefaults() {
+    if (this.brandedMotorNames.length > 0) return;
+    const now = new Date();
+    const defs: { term: string; familyKey: string }[] = [
+      { term: "EON Digital Brushless", familyKey: "brushless" },
+      { term: "Digital Brushless", familyKey: "brushless" },
+      { term: "BLDC", familyKey: "brushless" },
+      { term: "Super Torque Rotary", familyKey: "rotary" },
+      { term: "Supercharged Rotary", familyKey: "rotary" },
+      { term: "P.U.R.E Outrunner", familyKey: "brushless" },
+    ];
+    defs.forEach((d, i) => {
+      this.brandedMotorNames.push({
+        id: `bmn_stylecraft_${i}`,
+        brandName: "StyleCraft",
+        brandedTerm: d.term,
+        familyKey: d.familyKey,
+        enabled: true,
+        sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 34 catalog_products seed INSERT
+  // exactly — the 21 GTM-forms products (source: gtm_forms_import, the
+  // authoritative spec) plus the deduped survivors of the old
+  // lib/stylecraft-products.ts array (source: legacy_catalog_import).
+  // Brushes/Apparel/Accessories categories from that old array are
+  // deliberately excluded (no analyzable tool_type). Rows whose motor/
+  // heat-tech text didn't resolve against the taxonomy are seeded with a
+  // null family and 'motor_needs_confirmation'/'heat_tech_needs_confirmation'
+  // in importFlags rather than guessed.
+  seedCatalogProductDefaults() {
+    if (this.catalogProducts.length > 0) return;
+    const now = new Date();
+    const defs: { name: string; industry: string; targetMarket: string; toolType: string; targetPrice: number | null; description: string | null; motorFamily: string | null; motorBranded: string | null; heatTechFamily: string | null; heatTechBranded: string | null; importFlags: string[]; source: string }[] = [
+      { name: "Infared Curler", industry: "haircare-styling", targetMarket: "pro", toolType: "curling_iron", targetPrice: null, description: null, motorFamily: null, motorBranded: null, heatTechFamily: "infrared", heatTechBranded: "Infrared Technology", importFlags: [], source: "gtm_forms_import" },
+      { name: "Orange Saber II Clipper", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 299.95, description: "EON Digital brushless motor up to 7,200rpm, Echo blade with shallow 2.0 cutter, full metal body", motorFamily: "brushless", motorBranded: "EON Digital Brushless", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Orange Saber Trimmer", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 199.95, description: "Digital brushless motor, full metal body, gold X-Pro wide blade with \"The One\" cutter", motorFamily: "brushless", motorBranded: "Digital Brushless", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Xceed Dryer", industry: "haircare-styling", targetMarket: "pro", toolType: "dryer", targetPrice: 299.95, description: null, motorFamily: null, motorBranded: null, heatTechFamily: null, heatTechBranded: null, importFlags: ["incomplete"], source: "gtm_forms_import" },
+      { name: "3versince Trimmer", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 184.95, description: "Hand-sharpened modified blade, super torque rotary motor up to 7,500 rpm, lightweight ergonomic rubber grip", motorFamily: "rotary", motorBranded: "Super Torque Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Anime Clipper", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 249.95, description: "EON Digital brushless motor up to 7,800rpm, Echo taper blade with echo deep tooth cutter, ergonomic lightweight design", motorFamily: "brushless", motorBranded: "EON Digital Brushless", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Anime Trimmer", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 199.95, description: "EON Digital brushless motor up to 7,800rpm, X-Pro wide DLC blade with \"The One\" cutter, ergonomic lightweight design", motorFamily: "brushless", motorBranded: "EON Digital Brushless", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Alpha Up", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 159.95, description: "Super torque rotary motor up to 7,200 rpm, enhanced build quality, DLC faper blade with slim deep tooth cutter", motorFamily: "rotary", motorBranded: "Super Torque Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Hitter Up", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 119.95, description: "Super torque rotary motor up to 6,500 rpm, enhanced build quality, DLC X-Pro wide blade with \"The One\" cutter", motorFamily: "rotary", motorBranded: "Super Torque Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Arbitrage Clipper", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 279.95, description: "Outrunner motor up to 7,200rpm, intuitive torque control, full metal body, Echo blade with shallow 2.0 cutter", motorFamily: "brushless", motorBranded: "P.U.R.E Outrunner", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Retro Dryer", industry: "haircare-styling", targetMarket: "consumer", toolType: "dryer", targetPrice: 139.95, description: null, motorFamily: null, motorBranded: null, heatTechFamily: null, heatTechBranded: null, importFlags: ["incomplete"], source: "gtm_forms_import" },
+      { name: "Multistyler", industry: "haircare-styling", targetMarket: "consumer", toolType: "dryer", targetPrice: 189.95, description: null, motorFamily: null, motorBranded: null, heatTechFamily: null, heatTechBranded: null, importFlags: ["incomplete", "tool_type_needs_review"], source: "gtm_forms_import" },
+      { name: "Smarty Dryer", industry: "haircare-styling", targetMarket: "consumer", toolType: "dryer", targetPrice: 179.95, description: null, motorFamily: "brushless", motorBranded: "BLDC", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Homie Dryer", industry: "haircare-styling", targetMarket: "consumer", toolType: "dryer", targetPrice: 129.95, description: null, motorFamily: null, motorBranded: null, heatTechFamily: null, heatTechBranded: null, importFlags: ["incomplete"], source: "gtm_forms_import" },
+      { name: "Daymond John Clipper", industry: "grooming-barbering", targetMarket: "both", toolType: "clipper", targetPrice: 99.95, description: "Supercharged rotary motor, adjustable speeds up to 7,000/8,000/9,000 rpm, smart LED display, full metal body", motorFamily: "rotary", motorBranded: "Supercharged Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Daymond John Trimmer", industry: "grooming-barbering", targetMarket: "both", toolType: "trimmer", targetPrice: 79.95, description: "Supercharged rotary motor, adjustable speeds up to 7,000/8,000/9,000 rpm, smart LED display, full metal body", motorFamily: "rotary", motorBranded: "Supercharged Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Daymond John Shaver", industry: "grooming-barbering", targetMarket: "both", toolType: "shaver", targetPrice: 79.95, description: "Supercharged rotary motor, adjustable speeds up to 7,000/8,000/9,000 rpm, smart LED display, full metal body", motorFamily: "rotary", motorBranded: "Supercharged Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Red Saber II Clipper", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 299.95, description: "EON Digital brushless motor up to 7,200rpm, Echo blade with shallow 2.0 cutter, full metal body", motorFamily: "brushless", motorBranded: "EON Digital Brushless", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Red Saber Trimmer", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 199.95, description: "Digital brushless motor, full metal body, gold X-Pro wide blade with \"The One\" cutter", motorFamily: "brushless", motorBranded: "Digital Brushless", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Protege 2 Clipper", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 89.95, description: "Super torque rotary motor up to 7,200 rpm, enhanced build quality, stainless steel faper blade with DLC slim deep tooth cutter", motorFamily: "rotary", motorBranded: "Super Torque Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Protege 2 Trimmer", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 79.95, description: "Super torque rotary motor up to 6,500 rpm, enhanced build quality, stainless steel X-Pro wide blade with DLC \"The One\" cutter", motorFamily: "rotary", motorBranded: "Super Torque Rotary", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "gtm_forms_import" },
+      { name: "Saber 2 Professional Hair Clipper with EON Digital Brushless Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 319.95, description: "Professional cordless modular hair clipper with EON Digital Brushless Motor. High torque, premium performance for professional barbers. Available in Gold and Black finishes.", motorFamily: "brushless", motorBranded: "EON Digital Brushless Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "S|C x 360 Jeezy Professional Hair Clipper with IN2 Vector Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 299.95, description: "Signature artist-collaboration clipper with the IN2 Vector Motor — limited-run professional cordless clipper.", motorFamily: "vector", motorBranded: "IN2 Vector Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Instinct Metal Professional Hair Clipper with IN2 Vector Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 299.95, description: "Professional hair clipper with IN2 Vector Motor. Intelligent torque control adjusts power automatically. All-metal construction.", motorFamily: "vector", motorBranded: "IN2 Vector Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Instinct Professional Hair Clipper with IN2 Vector Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 269.95, description: "Professional cordless hair clipper with the IN2 Vector Motor and intuitive torque control, in a lightweight polymer body.", motorFamily: "vector", motorBranded: "IN2 Vector Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Reign Professional Hair Clipper with EON Digital Brushless Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 229.95, description: "Reign Professional Hair Clipper with EON Digital Brushless Motor. Conquer every style. Available in standard and Purple finishes.", motorFamily: "brushless", motorBranded: "EON Digital Brushless Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Rebel 2.0 Professional Hair Clipper with Super C4RBN Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 199.95, description: "Rebel 2.0 Professional Hair Clipper with Super C4RBN Motor. Rebel with a cause — for barbers who demand more.", motorFamily: null, motorBranded: "Super C4RBN Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "S|C x United by Short Hair — Rogue Clipper Collab", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 149.95, description: "Limited-run Rogue clipper collaboration with United by Short Hair, sold exclusively through the UBSH channel.", motorFamily: "magnetic", motorBranded: "9V Microchipped Magnetic Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Rogue Professional Hair Clipper with Microchipped Magnetic Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 129.95, description: "Rogue Professional Hair Clipper with 9V Microchipped Magnetic Motor. Embrace the unconventional.", motorFamily: "magnetic", motorBranded: "9V Microchipped Magnetic Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Ergo Professional Hair Clipper with Microchipped Magnetic Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "clipper", targetPrice: 129.95, description: "Ergo Professional Hair Clipper with a linear microchipped magnetic motor, built for an ergonomic in-hand feel during long shifts.", motorFamily: "magnetic", motorBranded: "Microchipped Magnetic Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Solecito Professional Hair Clipper with Powerful Rotary Motor", industry: "grooming-barbering", targetMarket: "both", toolType: "clipper", targetPrice: 109.95, description: "Solecito Professional Hair Clipper with Powerful Rotary Motor — professional rotary performance at a mid-tier price.", motorFamily: "rotary", motorBranded: "Powerful Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Rival Metal Hair Clipper with Digital Display", industry: "grooming-barbering", targetMarket: "both", toolType: "clipper", targetPrice: 59.95, description: "Rival Metal Hair Clipper with Digital Display. All-metal construction with digital battery indicator.", motorFamily: "brushless", motorBranded: "Digital Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "ACE Cordless Hair Clipper with Rotary Motor", industry: "grooming-barbering", targetMarket: "consumer", toolType: "clipper", targetPrice: 69.95, description: "ACE Cordless Hair Clipper with Rotary Motor. Entry-level professional clipper, frequently discounted.", motorFamily: "rotary", motorBranded: "Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Instinct Metal Professional Hair Trimmer with IN2 Vector Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 239.95, description: "Instinct Metal Professional Hair Trimmer with IN2 Vector Motor and intelligent torque control in an all-metal body.", motorFamily: "vector", motorBranded: "IN2 Vector Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Saber Professional Hair Trimmer with Digital Brushless Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 209.95, description: "Saber Professional Hair Trimmer with Digital Brushless Motor. High energy, low vibration. Best seller. Available in Gold and Black.", motorFamily: "brushless", motorBranded: "Digital Brushless Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Precision Saber Professional Hair Trimmer with Digital Brushless Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 209.95, description: "Precision variant of the Saber trimmer line with a full-metal body and Digital Brushless Motor, tuned for detail line-up work.", motorFamily: "brushless", motorBranded: "Digital Brushless Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Instinct Professional Hair Trimmer with IN2 Vector Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 179.95, description: "Instinct Professional Hair Trimmer with IN2 Vector Motor and intuitive torque control in a lightweight polymer body.", motorFamily: "vector", motorBranded: "IN2 Vector Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Rebel Professional Hair Trimmer with Super-Torque Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 139.95, description: "Rebel Professional Hair Trimmer with a modular Super-Torque Motor for detail and outline work.", motorFamily: null, motorBranded: "Super-Torque Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Flex Professional Hair Trimmer with Super-Torque Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 129.95, description: "Flex Professional Hair Trimmer with Super-Torque Motor, the trimmer half of the Super Set combo.", motorFamily: null, motorBranded: "Super-Torque Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Reign Professional Hair Trimmer with EON Digital Brushless Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "trimmer", targetPrice: 189.95, description: "Reign Professional Hair Trimmer with EON Digital Brushless Motor. Available in standard and Purple finishes.", motorFamily: "brushless", motorBranded: "EON Digital Brushless Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Ace Hair Trimmer with Rotary Motor", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 59.95, description: "Ace Hair Trimmer with Rotary Motor, USB-C rechargeable with 3 guide combs and stainless steel blades.", motorFamily: "rotary", motorBranded: "Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Ace Body Buzzer Hair Trimmer with Supercharged Rotary Motor", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 59.95, description: "Ace Body Buzzer Hair Trimmer with Supercharged Rotary Motor, purpose-built for body grooming.", motorFamily: "rotary", motorBranded: "Supercharged Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Homie Nano Trimmer", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 54.95, description: "Homie Nano Trimmer — compact, portable, precise trimming for home use.", motorFamily: null, motorBranded: "Nano Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Ace Beard Blender Hair Trimmer with Supercharged Rotary Motor", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 37.95, description: "Ace Beard Blender Hair Trimmer with Supercharged Rotary Motor, designed for blending beard fades and edges.", motorFamily: "rotary", motorBranded: "Supercharged Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Schnozzle Water Resistant Nose and Ear Hair Trimmer", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 29.95, description: "Schnozzle Water Resistant Nose and Ear Hair Trimmer in matte black.", motorFamily: null, motorBranded: "Compact Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Ace 3-in-1 Rechargeable Multipurpose Hair Trimmer", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 29.95, description: "Ace 3-in-1 Rechargeable Multipurpose Hair Trimmer. Versatile consumer trimmer for multiple uses.", motorFamily: null, motorBranded: "Rechargeable Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Ace Electric Ear and Nose Hair Trimmer with Dual-Speed Motor", industry: "grooming-barbering", targetMarket: "consumer", toolType: "trimmer", targetPrice: 27.95, description: "Ace Electric Ear and Nose Hair Trimmer with a Dual-Speed Motor for adjustable precision.", motorFamily: null, motorBranded: "Dual-Speed Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Instinct Metal Professional Double Foil Shaver with IN2 Vector Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "shaver", targetPrice: 179.95, description: "Instinct Metal Professional Double Foil Shaver with IN2 Vector Motor and a built-in micro-trimmer. Available in Black and Pink.", motorFamily: "vector", motorBranded: "IN2 Vector Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Rebel Professional Double Foil Shaver with Super-Torque Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "shaver", targetPrice: 84.95, description: "Rebel Professional Double Foil Shaver with Super-Torque Motor and a gold titanium foil head.", motorFamily: null, motorBranded: "Super-Torque Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Ace Waterproof Triple Foil Shaver with Integrated Pop-Up Trimmer", industry: "grooming-barbering", targetMarket: "consumer", toolType: "shaver", targetPrice: 74.95, description: "Ace Waterproof Triple Foil Shaver with an integrated pop-up trimmer for edging.", motorFamily: "rotary", motorBranded: "Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Ace Bald Head 7X Foil Shaver with Supercharged Motor", industry: "grooming-barbering", targetMarket: "consumer", toolType: "shaver", targetPrice: 69.95, description: "Ace Bald Head 7X Foil Shaver with a Supercharged Motor, purpose-built for close head shaves.", motorFamily: null, motorBranded: "Supercharged Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Uno 2.0 Professional Single Foil Shaver with Supercharged Motor", industry: "grooming-barbering", targetMarket: "both", toolType: "shaver", targetPrice: 59.95, description: "Uno 2.0 Professional Single Foil Shaver with Supercharged Motor and USB-C charging.", motorFamily: null, motorBranded: "Supercharged Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Absolute Zero Professional Double Foil Shaver with Rotary Motor", industry: "grooming-barbering", targetMarket: "both", toolType: "shaver", targetPrice: 49.95, description: "Absolute Zero Professional Double Foil Shaver with a built-in retractable trimmer.", motorFamily: "rotary", motorBranded: "Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Uno Professional Single Foil Shaver with Turbocharged Motor", industry: "grooming-barbering", targetMarket: "both", toolType: "shaver", targetPrice: 49.95, description: "Uno Professional Single Foil Shaver with Turbocharged Motor, USB rechargeable and travel-sized. Available in Red.", motorFamily: null, motorBranded: "Turbocharged Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Ace Single Foil Shaver with Built-in Trimmer", industry: "grooming-barbering", targetMarket: "consumer", toolType: "shaver", targetPrice: 37.95, description: "Ace Single Foil Shaver with a built-in trimmer for touch-ups on the go.", motorFamily: null, motorBranded: "Compact Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Rogue Combo Set - Professional Cordless Hair Clipper/Trimmer with 9V Magnetic Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "combo", targetPrice: 219.95, description: "Rogue Combo Set with Clipper and Trimmer. 9V Microchipped Magnetic Motor. Best seller combo.", motorFamily: "magnetic", motorBranded: "9V Magnetic Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Super Set - Rebel Cordless Hair Clipper & Flex Cordless Hair Trimmer Set with Super-Torque Rotary Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "combo", targetPrice: 199.95, description: "Super Set pairing the Rebel Clipper and Flex Trimmer with a Super-Torque Rotary Motor, includes travel case.", motorFamily: "rotary", motorBranded: "Super-Torque Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Rebel Combo Set - Professional Cordless Hair Clipper/Hair Trimmer Set with Super-Torque Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "combo", targetPrice: 189.95, description: "Rebel Combo Set with modular clipper and trimmer sharing a Super-Torque Motor platform.", motorFamily: null, motorBranded: "Super-Torque Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Protégé Combo - Professional Cordless Hair Clipper/Hair Trimmer Combo with Turbocharged Rotary Motor", industry: "grooming-barbering", targetMarket: "pro", toolType: "combo", targetPrice: 179.95, description: "Protégé Combo pairing a clipper and trimmer with a Turbocharged Rotary Motor in a matte metallic black finish.", motorFamily: "rotary", motorBranded: "Turbocharged Rotary Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Sage Professional Lightweight Hair Dryer with Digital LED Display", industry: "haircare-styling", targetMarket: "pro", toolType: "dryer", targetPrice: 199.95, description: "Sage Professional Lightweight Hair Dryer with a Digital Brushless Motor and LED temperature display.", motorFamily: "brushless", motorBranded: "Digital Brushless Motor", heatTechFamily: null, heatTechBranded: null, importFlags: [], source: "legacy_catalog_import" },
+      { name: "Sage 2-in-1 Diffuser & Hair Dryer with Ion Generator", industry: "haircare-styling", targetMarket: "both", toolType: "dryer", targetPrice: 99.95, description: "Sage 2-in-1 Diffuser & Hair Dryer with Ion Generator. Style with wisdom, shine with confidence.", motorFamily: null, motorBranded: "Ion Generator Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Stay-Temp Professional Hair Dryer with Turbo Power Motor", industry: "haircare-styling", targetMarket: "both", toolType: "dryer", targetPrice: 69.95, description: "Stay-Temp Professional Hair Dryer with Turbo Power Motor for fast, consistent-heat drying.", motorFamily: null, motorBranded: "Turbo Power Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Ace Professional Lightweight Foldable Hair Dryer", industry: "haircare-styling", targetMarket: "consumer", toolType: "dryer", targetPrice: 59.95, description: "Ace Professional Lightweight Foldable Hair Dryer built for travel and everyday consumer use.", motorFamily: null, motorBranded: "Standard Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Rival Lightweight Foldable Hair Dryer", industry: "haircare-styling", targetMarket: "consumer", toolType: "dryer", targetPrice: 39.95, description: "Rival Lightweight Foldable Hair Dryer. Compact, travel-friendly design.", motorFamily: null, motorBranded: "Standard Motor", heatTechFamily: null, heatTechBranded: null, importFlags: ["motor_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Sage Professional 1\" Cordless Curling Iron & Wand with Removable Clamp", industry: "haircare-styling", targetMarket: "both", toolType: "curling_iron", targetPrice: 129.95, description: "Sage Professional 1\" Cordless Curling Iron & Wand with a removable clamp for both clamped and wand-style curling. Features a 1\" ceramic barrel.", motorFamily: null, motorBranded: null, heatTechFamily: "ceramic", heatTechBranded: "Ceramic Barrel", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Sage Professional Retractable Styling Brush & Curling Wand 1.25\"", industry: "haircare-styling", targetMarket: "both", toolType: "other_styling", targetPrice: 99.95, description: "Sage Professional Retractable Styling Brush & Curling Wand with a 1.25\" ceramic barrel — bristles retract for wand-style curling.", motorFamily: null, motorBranded: null, heatTechFamily: "ceramic", heatTechBranded: "Ceramic Barrel", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Sage Professional Flat Iron with 1\" Titanium Plates", industry: "haircare-styling", targetMarket: "both", toolType: "flat_iron", targetPrice: 99.95, description: "Sage Professional Flat Iron with 1\" titanium plates for fast, even heat distribution.", motorFamily: null, motorBranded: null, heatTechFamily: "titanium", heatTechBranded: "Titanium Plates", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Stay-Temp Professional Flat Iron with 1\" Titanium Plates", industry: "haircare-styling", targetMarket: "both", toolType: "flat_iron", targetPrice: 89.95, description: "Stay-Temp Professional Flat Iron with 1\" titanium plates and consistent temperature hold.", motorFamily: null, motorBranded: null, heatTechFamily: "titanium", heatTechBranded: "Titanium Plates", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Sage Professional Triple Barrel Deep Waver", industry: "haircare-styling", targetMarket: "both", toolType: "other_styling", targetPrice: 89.95, description: "Sage Professional Triple Barrel Deep Waver for beachy waves in one pass. Ceramic coated barrels.", motorFamily: null, motorBranded: null, heatTechFamily: "ceramic", heatTechBranded: "Ceramic Coated", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Heat Stroke Professional Beard & Hair Styling Cordless Hot Brush", industry: "haircare-styling", targetMarket: "both", toolType: "other_styling", targetPrice: 69.95, description: "Heat Stroke Professional Beard & Hair Styling Cordless Hot Brush for beard straightening and styling.", motorFamily: null, motorBranded: null, heatTechFamily: null, heatTechBranded: null, importFlags: ["heat_tech_needs_confirmation"], source: "legacy_catalog_import" },
+      { name: "Stay-Temp Professional Ceramic Extended Barrel Curling Iron (0.75\"–1.25\")", industry: "haircare-styling", targetMarket: "both", toolType: "curling_iron", targetPrice: 54.95, description: "Stay-Temp Professional Ceramic Extended Barrel Curling Iron, available in 0.75\", 1\", and 1.25\" barrel sizes.", motorFamily: null, motorBranded: null, heatTechFamily: "ceramic", heatTechBranded: "Ceramic Barrel", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Stay-Temp Professional Ceramic Barrel 3/4\" Marcel Curling Iron", industry: "haircare-styling", targetMarket: "both", toolType: "curling_iron", targetPrice: 49.95, description: "Stay-Temp Professional Ceramic Barrel 3/4\" Marcel Curling Iron for classic clamp-free curling technique.", motorFamily: null, motorBranded: null, heatTechFamily: "ceramic", heatTechBranded: "Ceramic Barrel", importFlags: [], source: "legacy_catalog_import" },
+      { name: "Stay-Temp Professional Ceramic Barrel Curling Iron (0.5\"–1.5\")", industry: "haircare-styling", targetMarket: "both", toolType: "curling_iron", targetPrice: 44.95, description: "Stay-Temp Professional Ceramic Barrel Curling Iron, available across five barrel sizes from 0.5\" to 1.5\".", motorFamily: null, motorBranded: null, heatTechFamily: "ceramic", heatTechBranded: "Ceramic Barrel", importFlags: [], source: "legacy_catalog_import" },
+    ];
+    defs.forEach((d, i) => {
+      this.catalogProducts.push({
+        id: `catprod_${i}`,
+        name: d.name,
+        industry: d.industry,
+        targetMarket: d.targetMarket,
+        toolType: d.toolType,
+        targetPrice: d.targetPrice,
+        description: d.description,
+        motorFamily: d.motorFamily,
+        motorBranded: d.motorBranded,
+        heatTechFamily: d.heatTechFamily,
+        heatTechBranded: d.heatTechBranded,
+        active: true,
+        importFlags: d.importFlags,
+        source: d.source,
         createdAt: now,
         updatedAt: now,
       });

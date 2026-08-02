@@ -46,6 +46,7 @@ import {
 import { buildIndieBrandLineups, computePercentileInLineup, type LineupProduct } from "./indie-brand-lineup";
 import { discoverBrandSiteCandidatesForEmerging } from "./brand-site-discovery";
 import { resolveOurLineupTier, percentileForManualTier, type LineupTier } from "./our-product-position";
+import { listCatalogProducts } from "./db/catalog-products";
 import { extractCompetitorSpecs, extractOurSpecsFromTds } from "./spec-extraction";
 import { getTdsFieldsForProject } from "./db/documents";
 import { matchesDifferentiator } from "./differentiator-match";
@@ -222,6 +223,11 @@ export interface AnalysisContext {
   heatTechRaw?: string;
   keyDiff?: string;
   pricePoint?: string;
+  // Set when the analyze form's catalog picker was used to select a real
+  // catalog_products row — an authoritative id, checked FIRST by
+  // resolveOurLineupTier (lib/our-product-position.ts) before falling back
+  // to fuzzy name matching. Absent for manual/custom entries.
+  catalogProductId?: string | null;
   // Set via the pause-and-ask answer route when resolveOurLineupTier
   // (lib/our-product-position.ts) can't match the input to a real
   // StyleCraft catalog product — needed only for indie-brand relative
@@ -250,6 +256,10 @@ export interface AnalysisContext {
 // shape a run right next to the weights that actually used them.
 function buildFormInputsSnapshot(context: AnalysisContext) {
   return {
+    // context.productName IS the catalog product's own name at submission
+    // time when catalogProductId is set (auto-filled by the analyze form's
+    // catalog picker) — no separate DB lookup needed for this display line.
+    catalogProductName: context.catalogProductId ? context.productName : null,
     industry: context.industry,
     targetMarket: context.targetMarket,
     toolType: context.toolType ?? null,
@@ -1719,7 +1729,8 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   // first; a one-field pause-and-ask ("flagship/mid/entry?") only when the
   // product isn't a recognized catalog entry.
   let ourLineupPercentile: number | null = null;
-  const lineupPosition = resolveOurLineupTier(context.productName);
+  const catalogProducts = await listCatalogProducts();
+  const lineupPosition = resolveOurLineupTier(context.productName, catalogProducts, context.catalogProductId);
   if (lineupPosition) {
     ourLineupPercentile = lineupPosition.percentile;
   } else if (context.lineupTier) {

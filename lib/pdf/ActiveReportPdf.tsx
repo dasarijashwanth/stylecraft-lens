@@ -27,6 +27,7 @@ function formInputsSummary(formInputs: any, toolTypes: ToolTypeRow[]): string | 
     ? `Plate/Heat Technology: ${formInputs.heatTechRaw}`
     : null;
   return [
+    formInputs.catalogProductName ? `Source: StyleCraft Catalog — ${formInputs.catalogProductName}` : "Source: Custom entry",
     `Industry: ${industryLabel}`,
     `Tool Type: ${toolTypeLabel}`,
     `Target Market: ${marketLabel}`,

@@ -1150,3 +1150,164 @@ CREATE TABLE IF NOT EXISTS competitor_corrections (
 );
 ALTER TABLE competitor_corrections ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for competitor_corrections" ON competitor_corrections FOR ALL USING (true) WITH CHECK (true);
+
+-- 34. STYLECRAFT PRODUCT CATALOG — our own product lineup, selectable at the
+-- analyze form's initial stage to auto-fill every analysis field (name,
+-- industry, target market, tool type, target price, description, motor/
+-- heat-tech) instead of manual entry. Replaces the old hardcoded
+-- lib/stylecraft-products.ts array (no admin management, no re-import path,
+-- and three independently hand-duplicated fuzzy name-matching
+-- implementations against it). heat_tech_family/heat_tech_branded are
+-- parallel columns to motor_family/motor_branded (same sibling-column
+-- precedent as Section 33's competitor_corrections) — a motorless styling
+-- tool (flat iron/curling iron/hot brush/other_styling) populates the heat
+-- pair instead, per tool_types.primary_criterion (Section 30). import_flags
+-- carries admin-review badges ('incomplete', 'tool_type_needs_review',
+-- 'motor_needs_confirmation', 'heat_tech_needs_confirmation') raised during
+-- seed/re-import normalization — never a silent guess. active=false is a
+-- soft-deactivate (never hard-deleted, same as legacy_brands.enabled).
+CREATE TABLE IF NOT EXISTS catalog_products (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(500) NOT NULL UNIQUE,
+    industry VARCHAR(50) NOT NULL,
+    target_market VARCHAR(20) NOT NULL,
+    tool_type VARCHAR(50) NOT NULL,
+    target_price NUMERIC(10,2),
+    description TEXT,
+    motor_family VARCHAR(50),
+    motor_branded VARCHAR(255),
+    heat_tech_family VARCHAR(50),
+    heat_tech_branded VARCHAR(255),
+    active BOOLEAN NOT NULL DEFAULT true,
+    import_flags TEXT[] NOT NULL DEFAULT '{}',
+    source VARCHAR(30) NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE catalog_products ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for catalog_products" ON catalog_products FOR ALL USING (true) WITH CHECK (true);
+
+-- New heat_tech_families row for the Infared Curler (motorless, primary
+-- criterion Heat Technology) — reuses Section 31's existing admin-editable
+-- table rather than a new one.
+INSERT INTO heat_tech_families (family_key, label, aliases, sort_order) VALUES
+    ('infrared', 'Infrared', ARRAY['infrared', 'infrared technology'], 4)
+ON CONFLICT (family_key) DO NOTHING;
+
+-- New branded_motor_names rows (Section 24's table) for StyleCraft's own
+-- proprietary motor marketing names, confirmed against the canonical
+-- 7-family taxonomy (Section 25). "P.U.R.E Outrunner" maps to Brushless
+-- (outrunner is a brushless architecture) — flagged here for a one-time
+-- admin confirmation via a comment since it's an inferred mapping, not a
+-- verbatim spec term like the other five. Section 24 never gave this table
+-- a uniqueness constraint (it started empty, admin-added-only) — added here
+-- so this INSERT is safely re-runnable.
+CREATE UNIQUE INDEX IF NOT EXISTS branded_motor_names_brand_term_idx ON branded_motor_names (brand_name, branded_term);
+INSERT INTO branded_motor_names (brand_name, branded_term, family_key, sort_order) VALUES
+    ('StyleCraft', 'EON Digital Brushless', 'brushless', 0),
+    ('StyleCraft', 'Digital Brushless', 'brushless', 1),
+    ('StyleCraft', 'BLDC', 'brushless', 2),
+    ('StyleCraft', 'Super Torque Rotary', 'rotary', 3),
+    ('StyleCraft', 'Supercharged Rotary', 'rotary', 4),
+    ('StyleCraft', 'P.U.R.E Outrunner', 'brushless', 5)
+ON CONFLICT (brand_name, branded_term) DO NOTHING;
+
+-- Seed: the 21 GTM-forms products (source='gtm_forms_import', the
+-- authoritative spec — its own closing note says "22" but double-counts
+-- Infared Curler, already row 1 of the same table; 21 is the real distinct
+-- count) plus the deduped survivors of the old lib/stylecraft-products.ts
+-- array (source='legacy_catalog_import') — zero name overlap was found
+-- between the two sets by the same normalize+substring match
+-- lib/our-product-position.ts already uses, so all 73 rows are distinct
+-- products. Brushes/Apparel/Accessories categories from the
+-- old array are deliberately excluded (no analyzable tool_type — plain
+-- non-heated hairbrushes and merch/consumables have no motor or heat-tech
+-- competitive angle), consistent with lib/tool-type-taxonomy.ts's
+-- deriveToolTypeFromCatalogProduct already returning null for Apparel/
+-- Accessories. Motor/heat-tech strings that don't resolve against the
+-- canonical taxonomy above (e.g. "Super-Torque Motor" without the word
+-- "Rotary", "Super C4RBN Motor") are seeded with a NULL family and
+-- 'motor_needs_confirmation'/'heat_tech_needs_confirmation' in import_flags
+-- rather than guessed — visible on the admin Product Catalog page for a
+-- human to resolve. tool_type for the 4 legacy "combo set" rows (Rogue/
+-- Super Set/Rebel/Protégé) is deliberately 'combo', not the 'clipper' that
+-- deriveToolTypeFromCatalogProduct would mechanically produce from their
+-- amazonCategory string "...Clipper Sets" (that string contains the bare
+-- word "Clipper" but none of resolveToolType's COMBO_SIGNALS phrases) — a
+-- 2-tool kit competing only in the standalone-clipper bucket would be
+-- compared against single-tool products it doesn't actually compete with.
+INSERT INTO catalog_products (name, industry, target_market, tool_type, target_price, description, motor_family, motor_branded, heat_tech_family, heat_tech_branded, import_flags, source) VALUES
+('Infared Curler', 'haircare-styling', 'pro', 'curling_iron', NULL, NULL, NULL, NULL, 'infrared', 'Infrared Technology', '{}'::text[], 'gtm_forms_import'),
+('Orange Saber II Clipper', 'grooming-barbering', 'pro', 'clipper', 299.95, 'EON Digital brushless motor up to 7,200rpm, Echo blade with shallow 2.0 cutter, full metal body', 'brushless', 'EON Digital Brushless', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Orange Saber Trimmer', 'grooming-barbering', 'pro', 'trimmer', 199.95, 'Digital brushless motor, full metal body, gold X-Pro wide blade with "The One" cutter', 'brushless', 'Digital Brushless', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Xceed Dryer', 'haircare-styling', 'pro', 'dryer', 299.95, NULL, NULL, NULL, NULL, NULL, ARRAY['incomplete']::text[], 'gtm_forms_import'),
+('3versince Trimmer', 'grooming-barbering', 'pro', 'trimmer', 184.95, 'Hand-sharpened modified blade, super torque rotary motor up to 7,500 rpm, lightweight ergonomic rubber grip', 'rotary', 'Super Torque Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Anime Clipper', 'grooming-barbering', 'pro', 'clipper', 249.95, 'EON Digital brushless motor up to 7,800rpm, Echo taper blade with echo deep tooth cutter, ergonomic lightweight design', 'brushless', 'EON Digital Brushless', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Anime Trimmer', 'grooming-barbering', 'pro', 'trimmer', 199.95, 'EON Digital brushless motor up to 7,800rpm, X-Pro wide DLC blade with "The One" cutter, ergonomic lightweight design', 'brushless', 'EON Digital Brushless', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Alpha Up', 'grooming-barbering', 'pro', 'clipper', 159.95, 'Super torque rotary motor up to 7,200 rpm, enhanced build quality, DLC faper blade with slim deep tooth cutter', 'rotary', 'Super Torque Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Hitter Up', 'grooming-barbering', 'pro', 'trimmer', 119.95, 'Super torque rotary motor up to 6,500 rpm, enhanced build quality, DLC X-Pro wide blade with "The One" cutter', 'rotary', 'Super Torque Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Arbitrage Clipper', 'grooming-barbering', 'pro', 'clipper', 279.95, 'Outrunner motor up to 7,200rpm, intuitive torque control, full metal body, Echo blade with shallow 2.0 cutter', 'brushless', 'P.U.R.E Outrunner', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Retro Dryer', 'haircare-styling', 'consumer', 'dryer', 139.95, NULL, NULL, NULL, NULL, NULL, ARRAY['incomplete']::text[], 'gtm_forms_import'),
+('Multistyler', 'haircare-styling', 'consumer', 'dryer', 189.95, NULL, NULL, NULL, NULL, NULL, ARRAY['incomplete','tool_type_needs_review']::text[], 'gtm_forms_import'),
+('Smarty Dryer', 'haircare-styling', 'consumer', 'dryer', 179.95, NULL, 'brushless', 'BLDC', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Homie Dryer', 'haircare-styling', 'consumer', 'dryer', 129.95, NULL, NULL, NULL, NULL, NULL, ARRAY['incomplete']::text[], 'gtm_forms_import'),
+('Daymond John Clipper', 'grooming-barbering', 'both', 'clipper', 99.95, 'Supercharged rotary motor, adjustable speeds up to 7,000/8,000/9,000 rpm, smart LED display, full metal body', 'rotary', 'Supercharged Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Daymond John Trimmer', 'grooming-barbering', 'both', 'trimmer', 79.95, 'Supercharged rotary motor, adjustable speeds up to 7,000/8,000/9,000 rpm, smart LED display, full metal body', 'rotary', 'Supercharged Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Daymond John Shaver', 'grooming-barbering', 'both', 'shaver', 79.95, 'Supercharged rotary motor, adjustable speeds up to 7,000/8,000/9,000 rpm, smart LED display, full metal body', 'rotary', 'Supercharged Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Red Saber II Clipper', 'grooming-barbering', 'pro', 'clipper', 299.95, 'EON Digital brushless motor up to 7,200rpm, Echo blade with shallow 2.0 cutter, full metal body', 'brushless', 'EON Digital Brushless', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Red Saber Trimmer', 'grooming-barbering', 'pro', 'trimmer', 199.95, 'Digital brushless motor, full metal body, gold X-Pro wide blade with "The One" cutter', 'brushless', 'Digital Brushless', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Protege 2 Clipper', 'grooming-barbering', 'pro', 'clipper', 89.95, 'Super torque rotary motor up to 7,200 rpm, enhanced build quality, stainless steel faper blade with DLC slim deep tooth cutter', 'rotary', 'Super Torque Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Protege 2 Trimmer', 'grooming-barbering', 'pro', 'trimmer', 79.95, 'Super torque rotary motor up to 6,500 rpm, enhanced build quality, stainless steel X-Pro wide blade with DLC "The One" cutter', 'rotary', 'Super Torque Rotary', NULL, NULL, '{}'::text[], 'gtm_forms_import'),
+('Saber 2 Professional Hair Clipper with EON Digital Brushless Motor', 'grooming-barbering', 'pro', 'clipper', 319.95, 'Professional cordless modular hair clipper with EON Digital Brushless Motor. High torque, premium performance for professional barbers. Available in Gold and Black finishes.', 'brushless', 'EON Digital Brushless Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('S|C x 360 Jeezy Professional Hair Clipper with IN2 Vector Motor', 'grooming-barbering', 'pro', 'clipper', 299.95, 'Signature artist-collaboration clipper with the IN2 Vector Motor — limited-run professional cordless clipper.', 'vector', 'IN2 Vector Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Instinct Metal Professional Hair Clipper with IN2 Vector Motor', 'grooming-barbering', 'pro', 'clipper', 299.95, 'Professional hair clipper with IN2 Vector Motor. Intelligent torque control adjusts power automatically. All-metal construction.', 'vector', 'IN2 Vector Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Instinct Professional Hair Clipper with IN2 Vector Motor', 'grooming-barbering', 'pro', 'clipper', 269.95, 'Professional cordless hair clipper with the IN2 Vector Motor and intuitive torque control, in a lightweight polymer body.', 'vector', 'IN2 Vector Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Reign Professional Hair Clipper with EON Digital Brushless Motor', 'grooming-barbering', 'pro', 'clipper', 229.95, 'Reign Professional Hair Clipper with EON Digital Brushless Motor. Conquer every style. Available in standard and Purple finishes.', 'brushless', 'EON Digital Brushless Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Rebel 2.0 Professional Hair Clipper with Super C4RBN Motor', 'grooming-barbering', 'pro', 'clipper', 199.95, 'Rebel 2.0 Professional Hair Clipper with Super C4RBN Motor. Rebel with a cause — for barbers who demand more.', NULL, 'Super C4RBN Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('S|C x United by Short Hair — Rogue Clipper Collab', 'grooming-barbering', 'pro', 'clipper', 149.95, 'Limited-run Rogue clipper collaboration with United by Short Hair, sold exclusively through the UBSH channel.', 'magnetic', '9V Microchipped Magnetic Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Rogue Professional Hair Clipper with Microchipped Magnetic Motor', 'grooming-barbering', 'pro', 'clipper', 129.95, 'Rogue Professional Hair Clipper with 9V Microchipped Magnetic Motor. Embrace the unconventional.', 'magnetic', '9V Microchipped Magnetic Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Ergo Professional Hair Clipper with Microchipped Magnetic Motor', 'grooming-barbering', 'pro', 'clipper', 129.95, 'Ergo Professional Hair Clipper with a linear microchipped magnetic motor, built for an ergonomic in-hand feel during long shifts.', 'magnetic', 'Microchipped Magnetic Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Solecito Professional Hair Clipper with Powerful Rotary Motor', 'grooming-barbering', 'both', 'clipper', 109.95, 'Solecito Professional Hair Clipper with Powerful Rotary Motor — professional rotary performance at a mid-tier price.', 'rotary', 'Powerful Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Rival Metal Hair Clipper with Digital Display', 'grooming-barbering', 'both', 'clipper', 59.95, 'Rival Metal Hair Clipper with Digital Display. All-metal construction with digital battery indicator.', 'brushless', 'Digital Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('ACE Cordless Hair Clipper with Rotary Motor', 'grooming-barbering', 'consumer', 'clipper', 69.95, 'ACE Cordless Hair Clipper with Rotary Motor. Entry-level professional clipper, frequently discounted.', 'rotary', 'Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Instinct Metal Professional Hair Trimmer with IN2 Vector Motor', 'grooming-barbering', 'pro', 'trimmer', 239.95, 'Instinct Metal Professional Hair Trimmer with IN2 Vector Motor and intelligent torque control in an all-metal body.', 'vector', 'IN2 Vector Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Saber Professional Hair Trimmer with Digital Brushless Motor', 'grooming-barbering', 'pro', 'trimmer', 209.95, 'Saber Professional Hair Trimmer with Digital Brushless Motor. High energy, low vibration. Best seller. Available in Gold and Black.', 'brushless', 'Digital Brushless Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Precision Saber Professional Hair Trimmer with Digital Brushless Motor', 'grooming-barbering', 'pro', 'trimmer', 209.95, 'Precision variant of the Saber trimmer line with a full-metal body and Digital Brushless Motor, tuned for detail line-up work.', 'brushless', 'Digital Brushless Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Instinct Professional Hair Trimmer with IN2 Vector Motor', 'grooming-barbering', 'pro', 'trimmer', 179.95, 'Instinct Professional Hair Trimmer with IN2 Vector Motor and intuitive torque control in a lightweight polymer body.', 'vector', 'IN2 Vector Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Rebel Professional Hair Trimmer with Super-Torque Motor', 'grooming-barbering', 'pro', 'trimmer', 139.95, 'Rebel Professional Hair Trimmer with a modular Super-Torque Motor for detail and outline work.', NULL, 'Super-Torque Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Flex Professional Hair Trimmer with Super-Torque Motor', 'grooming-barbering', 'pro', 'trimmer', 129.95, 'Flex Professional Hair Trimmer with Super-Torque Motor, the trimmer half of the Super Set combo.', NULL, 'Super-Torque Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Reign Professional Hair Trimmer with EON Digital Brushless Motor', 'grooming-barbering', 'pro', 'trimmer', 189.95, 'Reign Professional Hair Trimmer with EON Digital Brushless Motor. Available in standard and Purple finishes.', 'brushless', 'EON Digital Brushless Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Ace Hair Trimmer with Rotary Motor', 'grooming-barbering', 'consumer', 'trimmer', 59.95, 'Ace Hair Trimmer with Rotary Motor, USB-C rechargeable with 3 guide combs and stainless steel blades.', 'rotary', 'Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Ace Body Buzzer Hair Trimmer with Supercharged Rotary Motor', 'grooming-barbering', 'consumer', 'trimmer', 59.95, 'Ace Body Buzzer Hair Trimmer with Supercharged Rotary Motor, purpose-built for body grooming.', 'rotary', 'Supercharged Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Homie Nano Trimmer', 'grooming-barbering', 'consumer', 'trimmer', 54.95, 'Homie Nano Trimmer — compact, portable, precise trimming for home use.', NULL, 'Nano Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Ace Beard Blender Hair Trimmer with Supercharged Rotary Motor', 'grooming-barbering', 'consumer', 'trimmer', 37.95, 'Ace Beard Blender Hair Trimmer with Supercharged Rotary Motor, designed for blending beard fades and edges.', 'rotary', 'Supercharged Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Schnozzle Water Resistant Nose and Ear Hair Trimmer', 'grooming-barbering', 'consumer', 'trimmer', 29.95, 'Schnozzle Water Resistant Nose and Ear Hair Trimmer in matte black.', NULL, 'Compact Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Ace 3-in-1 Rechargeable Multipurpose Hair Trimmer', 'grooming-barbering', 'consumer', 'trimmer', 29.95, 'Ace 3-in-1 Rechargeable Multipurpose Hair Trimmer. Versatile consumer trimmer for multiple uses.', NULL, 'Rechargeable Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Ace Electric Ear and Nose Hair Trimmer with Dual-Speed Motor', 'grooming-barbering', 'consumer', 'trimmer', 27.95, 'Ace Electric Ear and Nose Hair Trimmer with a Dual-Speed Motor for adjustable precision.', NULL, 'Dual-Speed Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Instinct Metal Professional Double Foil Shaver with IN2 Vector Motor', 'grooming-barbering', 'pro', 'shaver', 179.95, 'Instinct Metal Professional Double Foil Shaver with IN2 Vector Motor and a built-in micro-trimmer. Available in Black and Pink.', 'vector', 'IN2 Vector Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Rebel Professional Double Foil Shaver with Super-Torque Motor', 'grooming-barbering', 'pro', 'shaver', 84.95, 'Rebel Professional Double Foil Shaver with Super-Torque Motor and a gold titanium foil head.', NULL, 'Super-Torque Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Ace Waterproof Triple Foil Shaver with Integrated Pop-Up Trimmer', 'grooming-barbering', 'consumer', 'shaver', 74.95, 'Ace Waterproof Triple Foil Shaver with an integrated pop-up trimmer for edging.', 'rotary', 'Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Ace Bald Head 7X Foil Shaver with Supercharged Motor', 'grooming-barbering', 'consumer', 'shaver', 69.95, 'Ace Bald Head 7X Foil Shaver with a Supercharged Motor, purpose-built for close head shaves.', NULL, 'Supercharged Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Uno 2.0 Professional Single Foil Shaver with Supercharged Motor', 'grooming-barbering', 'both', 'shaver', 59.95, 'Uno 2.0 Professional Single Foil Shaver with Supercharged Motor and USB-C charging.', NULL, 'Supercharged Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Absolute Zero Professional Double Foil Shaver with Rotary Motor', 'grooming-barbering', 'both', 'shaver', 49.95, 'Absolute Zero Professional Double Foil Shaver with a built-in retractable trimmer.', 'rotary', 'Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Uno Professional Single Foil Shaver with Turbocharged Motor', 'grooming-barbering', 'both', 'shaver', 49.95, 'Uno Professional Single Foil Shaver with Turbocharged Motor, USB rechargeable and travel-sized. Available in Red.', NULL, 'Turbocharged Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Ace Single Foil Shaver with Built-in Trimmer', 'grooming-barbering', 'consumer', 'shaver', 37.95, 'Ace Single Foil Shaver with a built-in trimmer for touch-ups on the go.', NULL, 'Compact Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Rogue Combo Set - Professional Cordless Hair Clipper/Trimmer with 9V Magnetic Motor', 'grooming-barbering', 'pro', 'combo', 219.95, 'Rogue Combo Set with Clipper and Trimmer. 9V Microchipped Magnetic Motor. Best seller combo.', 'magnetic', '9V Magnetic Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Super Set - Rebel Cordless Hair Clipper & Flex Cordless Hair Trimmer Set with Super-Torque Rotary Motor', 'grooming-barbering', 'pro', 'combo', 199.95, 'Super Set pairing the Rebel Clipper and Flex Trimmer with a Super-Torque Rotary Motor, includes travel case.', 'rotary', 'Super-Torque Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Rebel Combo Set - Professional Cordless Hair Clipper/Hair Trimmer Set with Super-Torque Motor', 'grooming-barbering', 'pro', 'combo', 189.95, 'Rebel Combo Set with modular clipper and trimmer sharing a Super-Torque Motor platform.', NULL, 'Super-Torque Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Protégé Combo - Professional Cordless Hair Clipper/Hair Trimmer Combo with Turbocharged Rotary Motor', 'grooming-barbering', 'pro', 'combo', 179.95, 'Protégé Combo pairing a clipper and trimmer with a Turbocharged Rotary Motor in a matte metallic black finish.', 'rotary', 'Turbocharged Rotary Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Sage Professional Lightweight Hair Dryer with Digital LED Display', 'haircare-styling', 'pro', 'dryer', 199.95, 'Sage Professional Lightweight Hair Dryer with a Digital Brushless Motor and LED temperature display.', 'brushless', 'Digital Brushless Motor', NULL, NULL, '{}'::text[], 'legacy_catalog_import'),
+('Sage 2-in-1 Diffuser & Hair Dryer with Ion Generator', 'haircare-styling', 'both', 'dryer', 99.95, 'Sage 2-in-1 Diffuser & Hair Dryer with Ion Generator. Style with wisdom, shine with confidence.', NULL, 'Ion Generator Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Stay-Temp Professional Hair Dryer with Turbo Power Motor', 'haircare-styling', 'both', 'dryer', 69.95, 'Stay-Temp Professional Hair Dryer with Turbo Power Motor for fast, consistent-heat drying.', NULL, 'Turbo Power Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Ace Professional Lightweight Foldable Hair Dryer', 'haircare-styling', 'consumer', 'dryer', 59.95, 'Ace Professional Lightweight Foldable Hair Dryer built for travel and everyday consumer use.', NULL, 'Standard Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Rival Lightweight Foldable Hair Dryer', 'haircare-styling', 'consumer', 'dryer', 39.95, 'Rival Lightweight Foldable Hair Dryer. Compact, travel-friendly design.', NULL, 'Standard Motor', NULL, NULL, ARRAY['motor_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Sage Professional 1" Cordless Curling Iron & Wand with Removable Clamp', 'haircare-styling', 'both', 'curling_iron', 129.95, 'Sage Professional 1" Cordless Curling Iron & Wand with a removable clamp for both clamped and wand-style curling. Features a 1" ceramic barrel.', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import'),
+('Sage Professional Retractable Styling Brush & Curling Wand 1.25"', 'haircare-styling', 'both', 'other_styling', 99.95, 'Sage Professional Retractable Styling Brush & Curling Wand with a 1.25" ceramic barrel — bristles retract for wand-style curling.', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import'),
+('Sage Professional Flat Iron with 1" Titanium Plates', 'haircare-styling', 'both', 'flat_iron', 99.95, 'Sage Professional Flat Iron with 1" titanium plates for fast, even heat distribution.', NULL, NULL, 'titanium', 'Titanium Plates', '{}'::text[], 'legacy_catalog_import'),
+('Stay-Temp Professional Flat Iron with 1" Titanium Plates', 'haircare-styling', 'both', 'flat_iron', 89.95, 'Stay-Temp Professional Flat Iron with 1" titanium plates and consistent temperature hold.', NULL, NULL, 'titanium', 'Titanium Plates', '{}'::text[], 'legacy_catalog_import'),
+('Sage Professional Triple Barrel Deep Waver', 'haircare-styling', 'both', 'other_styling', 89.95, 'Sage Professional Triple Barrel Deep Waver for beachy waves in one pass. Ceramic coated barrels.', NULL, NULL, 'ceramic', 'Ceramic Coated', '{}'::text[], 'legacy_catalog_import'),
+('Heat Stroke Professional Beard & Hair Styling Cordless Hot Brush', 'haircare-styling', 'both', 'other_styling', 69.95, 'Heat Stroke Professional Beard & Hair Styling Cordless Hot Brush for beard straightening and styling.', NULL, NULL, NULL, NULL, ARRAY['heat_tech_needs_confirmation']::text[], 'legacy_catalog_import'),
+('Stay-Temp Professional Ceramic Extended Barrel Curling Iron (0.75"–1.25")', 'haircare-styling', 'both', 'curling_iron', 54.95, 'Stay-Temp Professional Ceramic Extended Barrel Curling Iron, available in 0.75", 1", and 1.25" barrel sizes.', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import'),
+('Stay-Temp Professional Ceramic Barrel 3/4" Marcel Curling Iron', 'haircare-styling', 'both', 'curling_iron', 49.95, 'Stay-Temp Professional Ceramic Barrel 3/4" Marcel Curling Iron for classic clamp-free curling technique.', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import'),
+('Stay-Temp Professional Ceramic Barrel Curling Iron (0.5"–1.5")', 'haircare-styling', 'both', 'curling_iron', 44.95, 'Stay-Temp Professional Ceramic Barrel Curling Iron, available across five barrel sizes from 0.5" to 1.5".', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import')
+ON CONFLICT (name) DO NOTHING;

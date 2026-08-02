@@ -17,7 +17,8 @@ import {
   Tags,
   Gauge,
   ToggleLeft,
-  Undo2
+  Undo2,
+  Package
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -47,6 +48,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     // Role-gated nav entries — workspace owners/admins only.
     ...(user?.role === "OWNER" || user?.role === "ADMIN"
       ? [
+          { label: "Product Catalog", href: "/dashboard/admin/catalog-products", icon: Package },
           { label: "Deck Templates", href: "/dashboard/admin/deck-templates", icon: Presentation },
           { label: "Legacy Brands", href: "/dashboard/admin/legacy-brands", icon: Tags },
           { label: "Competitor Matching", href: "/dashboard/admin/competitor-matching", icon: Gauge },

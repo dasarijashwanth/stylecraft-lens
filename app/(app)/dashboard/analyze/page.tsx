@@ -2,14 +2,18 @@
 
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles, Package, Pencil, Search, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { ProgressPanel } from "@/components/analyze/ProgressPanel";
 import { ResultsPanel } from "@/components/analyze/ResultsPanel";
-import { STYLECRAFT_PRODUCTS, PRODUCT_CATEGORIES } from "@/lib/stylecraft-products";
-import { ToolType, getToolTypeLabel, toolTypesForIndustry, deriveToolTypeFromCatalogProduct } from "@/lib/tool-type-taxonomy";
+import { ToolType, getToolTypeLabel, toolTypesForIndustry } from "@/lib/tool-type-taxonomy";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { parsePriceToNumber } from "@/lib/pricing-analysis";
+import { useAuth } from "@/hooks/useAuth";
+// Type-only import — erased at compile time, so lib/db/catalog-products.ts's
+// runtime code (which imports the server-only Supabase admin client) never
+// reaches this "use client" bundle. Same precedent as ToolTypeRow above.
+import type { CatalogProductRow } from "@/lib/db/catalog-products";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both" };
 
@@ -89,7 +93,9 @@ function detectHeatTechFamilyFromText(text: string, families: HeatTechFamilyOpti
 export default function AnalyzePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  
+  const { user } = useAuth();
+  const isAdmin = user?.role === "OWNER" || user?.role === "ADMIN";
+
   const projectIdParam = searchParams.get("projectId");
   const pastAnalysisId = searchParams.get("id");
 
@@ -100,7 +106,17 @@ export default function AnalyzePage() {
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
   // Form Fields State
-  const [selectedProductId, setSelectedProductId] = useState("");
+  // Source chooser at the initial stage — "catalog" (📦 StyleCraft Catalog,
+  // the default) vs "custom" (✏️ New/Custom Product, the old flat-form
+  // behavior). catalogProductId is the authoritative id threaded onto the
+  // analysis context (see lib/our-product-position.ts's resolveOurLineupTier
+  // and lib/db/reports.ts's matchCatalogProduct, both id-first now).
+  const [productSource, setProductSource] = useState<"catalog" | "custom">("catalog");
+  const [catalogProducts, setCatalogProducts] = useState<CatalogProductRow[]>([]);
+  const [catalogProductId, setCatalogProductId] = useState<string | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogToolTypeFilter, setCatalogToolTypeFilter] = useState("");
+  const [saveToCatalog, setSaveToCatalog] = useState(false);
   const [industry, setIndustry] = useState("grooming-barbering");
   const [targetMarket, setTargetMarket] = useState<"pro" | "consumer" | "both">("both");
   const [productName, setProductName] = useState("");
@@ -152,6 +168,16 @@ export default function AnalyzePage() {
     fetch("/api/heat-tech-families")
       .then(r => r.json())
       .then(data => setHeatTechFamilies(data.families || []))
+      .catch(() => {});
+  }, []);
+
+  // Populates the catalog picker's card grid — the real, DB-backed
+  // StyleCraft product lineup (lib/db/catalog-products.ts), replacing the
+  // old hardcoded lib/stylecraft-products.ts array. Active products only.
+  useEffect(() => {
+    fetch("/api/catalog-products")
+      .then(r => r.json())
+      .then(data => setCatalogProducts(data.products || []))
       .catch(() => {});
   }, []);
 
@@ -295,48 +321,55 @@ export default function AnalyzePage() {
     if (detected) setHeatTechFamily(detected);
   }, [heatTechBrandedName, heatTechFamilies, heatTechFamily]);
 
-  // When product is selected from StylecraftUS catalog
-  function handleProductSelect(productId: string) {
-    setSelectedProductId(productId);
-    if (!productId) return;
-
-    if (productId === "custom") {
-      setProductName("");
-      setIndustry("grooming-barbering");
-      setTargetMarket("both");
-      setDescription("");
-      setCategory("");
-      setToolType("");
-      // Positioning Context asks for THIS product's own positioning facts
-      // (BSR, price tier, target customer), never a company/brand
-      // description — nothing meaningful to prefill here.
-      setCompanyContext("");
-      setMotorFamily("");
-      setMotorBrandedName("");
-      setHeatTechFamily("");
-      setHeatTechBrandedName("");
-      setKeyDiff("");
-      setPricePoint("");
-      return;
-    }
-
-    const product = STYLECRAFT_PRODUCTS.find(p => p.id === productId);
-    if (!product) return;
-
-    setIndustry(product.industry);
-    setTargetMarket(product.targetMarket as any);
-    setProductName(product.name);
-    setDescription(product.description);
-    setCategory(product.amazonCategory);
-    setToolType(deriveToolTypeFromCatalogProduct(product, toolTypes) || "");
-    // Same reasoning as the "custom" branch above — the StyleCraft catalog
-    // has no real BSR/target-customer data per product, so there's nothing
-    // genuine to prefill; leave it for the user to fill in per-product.
+// Clears the form back to a blank slate for manual entry — the "✏️ New/
+  // Custom Product" side of the source chooser. keyDiff/category are left
+  // alone here too (nothing to reset FROM if the user hasn't touched them
+  // yet, and this mirrors handleCatalogProductSelect below never touching
+  // them either).
+  function handleCustomSelect() {
+    setProductSource("custom");
+    setCatalogProductId(null);
+    setSaveToCatalog(false);
+    setProductName("");
+    setIndustry("grooming-barbering");
+    setTargetMarket("both");
+    setDescription("");
+    setCategory("");
+    setToolType("");
+    // Positioning Context asks for THIS product's own positioning facts
+    // (BSR, price tier, target customer), never a company/brand
+    // description — nothing meaningful to prefill here.
     setCompanyContext("");
-    setMotorBrandedName(product.motorType);
-    setMotorFamily(detectMotorFamilyFromText(product.motorType, motorFamilies) || "");
-    setKeyDiff(product.keyFeatures[0] || "");
-    setPricePoint(`$${product.price}`);
+    setMotorFamily("");
+    setMotorBrandedName("");
+    setHeatTechFamily("");
+    setHeatTechBrandedName("");
+    setPricePoint("");
+  }
+
+  // Auto-fills exactly the 7 fields the catalog carries — productName,
+  // industry, targetMarket, toolType, pricePoint, description, and
+  // (mutually exclusive per product) motorFamily+motorBrandedName OR
+  // heatTechFamily+heatTechBrandedName. category/keyDiff are deliberately
+  // NOT touched — the catalog has no data for them, and this never
+  // overwrites something the user already typed. Every field stays freely
+  // editable afterward — this fills, it never locks.
+  function handleCatalogProductSelect(product: CatalogProductRow) {
+    setProductSource("catalog");
+    setCatalogProductId(product.id);
+    setIndustry(product.industry);
+    setTargetMarket(product.target_market as any);
+    setProductName(product.name);
+    setDescription(product.description || "");
+    setToolType(product.tool_type);
+    setPricePoint(product.target_price != null ? `$${product.target_price.toFixed(2)}` : "");
+    // Same reasoning as handleCustomSelect above — no real BSR/target-
+    // customer data per catalog product, nothing genuine to prefill.
+    setCompanyContext("");
+    setMotorFamily(product.motor_family || "");
+    setMotorBrandedName(product.motor_branded || "");
+    setHeatTechFamily(product.heat_tech_family || "");
+    setHeatTechBrandedName(product.heat_tech_branded || "");
   }
 
   // Completed Results State (Aggregated results object)
@@ -554,6 +587,7 @@ export default function AnalyzePage() {
           heatTechRaw: primaryCriterion === "heat_technology" ? (heatTechRawFallback || undefined) : undefined,
           keyDiff: keyDiff.trim() || undefined,
           pricePoint: pricePoint.trim() || undefined,
+          catalogProductId: catalogProductId || undefined,
           weightOverride: showWeightOverride && weightOverrideSum > 0 ? {
             motor: Number(weightOverrideInputs.motor) || 0,
             price: Number(weightOverrideInputs.price) || 0,
@@ -564,6 +598,28 @@ export default function AnalyzePage() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to start analysis");
+
+      // "Save changes back to catalog" — admin-gated (client-side here, the
+      // PATCH route enforces it for real). Best-effort, never blocks the
+      // analysis itself from starting.
+      if (saveToCatalog && catalogProductId && isAdmin) {
+        fetch(`/api/admin/catalog-products/${catalogProductId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: productName.trim(),
+            industry,
+            targetMarket,
+            toolType,
+            targetPrice: parsePriceToNumber(pricePoint),
+            description: description.trim(),
+            motorFamily: primaryCriterion === "motor" ? (motorFamily || null) : null,
+            motorBranded: primaryCriterion === "motor" ? (motorBrandedName.trim() || null) : null,
+            heatTechFamily: primaryCriterion === "heat_technology" ? (heatTechFamily || null) : null,
+            heatTechBranded: primaryCriterion === "heat_technology" ? (heatTechBrandedName.trim() || null) : null,
+          }),
+        }).catch(() => {});
+      }
 
       setAnalysisId(data.analysisId);
       setViewState("running");
@@ -649,7 +705,7 @@ export default function AnalyzePage() {
       {/* VIEW 1: INPUT FORM */}
       {viewState === "form" && (
         <form onSubmit={handleRunAnalysis} className="space-y-6 text-xs">
-          {/* StylecraftUS Quick-fill selector */}
+          {/* Product source chooser */}
           <div className="bg-surface-2 border border-accent/30 rounded-xl p-5 space-y-4 shadow-sm relative overflow-hidden">
             <div className="absolute top-0 right-0 w-24 h-24 bg-accent/5 rounded-full blur-xl pointer-events-none" />
             <div className="flex items-center gap-3">
@@ -657,55 +713,118 @@ export default function AnalyzePage() {
                 <Sparkles className="w-4 h-4 text-accent" />
               </div>
               <div>
-                <h3 className="text-xs font-bold text-text-primary">Select a StylecraftUS product</h3>
-                <p className="text-[10px] text-text-muted mt-0.5">Auto-fills the form with real product specifications</p>
+                <h3 className="text-xs font-bold text-text-primary">Where&apos;s this product from?</h3>
+                <p className="text-[10px] text-text-muted mt-0.5">Pick one of our own products to auto-fill every field, or enter a custom product manually</p>
               </div>
             </div>
 
-            <select
-              value={selectedProductId}
-              onChange={e => handleProductSelect(e.target.value)}
-              className="w-full px-3 py-2.5 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent font-medium text-xs animate-pulse-once"
-            >
-              <option value="">Choose a product to analyze…</option>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setProductSource("catalog")}
+                className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-xs font-semibold transition ${productSource === "catalog" ? "border-accent bg-accent/10 text-accent" : "border-border bg-surface-1 text-text-secondary hover:border-accent/40"}`}
+              >
+                <Package className="w-4 h-4" /> StyleCraft Catalog
+              </button>
+              <button
+                type="button"
+                onClick={handleCustomSelect}
+                className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-xs font-semibold transition ${productSource === "custom" ? "border-accent bg-accent/10 text-accent" : "border-border bg-surface-1 text-text-secondary hover:border-accent/40"}`}
+              >
+                <Pencil className="w-4 h-4" /> New / Custom Product
+              </button>
+            </div>
 
-              {PRODUCT_CATEGORIES.map(cat => {
-                const products = STYLECRAFT_PRODUCTS.filter(p => p.category === cat);
-                if (products.length === 0) return null;
-                return (
-                  <optgroup key={cat} label={`── ${cat} ──────────────────`}>
-                    {products.map(p => (
-                      <option key={p.id} value={p.id}>
-                        {p.shortName} — ${p.price}
-                      </option>
-                    ))}
-                  </optgroup>
-                );
-              })}
+            {productSource === "catalog" && (
+              <div className="space-y-3">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-text-muted absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={catalogSearch}
+                    onChange={e => setCatalogSearch(e.target.value)}
+                    placeholder="Search products…"
+                    className="w-full pl-8 pr-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-xs"
+                  />
+                </div>
 
-              <optgroup label="── Or type your own ──────────">
-                <option value="custom">Enter custom product details…</option>
-              </optgroup>
-            </select>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCatalogToolTypeFilter("")}
+                    className={`px-2 py-1 rounded-full text-[10px] font-semibold border ${!catalogToolTypeFilter ? "border-accent bg-accent/10 text-accent" : "border-border text-text-muted hover:border-accent/40"}`}
+                  >
+                    All
+                  </button>
+                  {toolTypes.filter(t => catalogProducts.some(p => p.tool_type === t.type_key)).map(t => (
+                    <button
+                      key={t.type_key}
+                      type="button"
+                      onClick={() => setCatalogToolTypeFilter(t.type_key)}
+                      className={`px-2 py-1 rounded-full text-[10px] font-semibold border ${catalogToolTypeFilter === t.type_key ? "border-accent bg-accent/10 text-accent" : "border-border text-text-muted hover:border-accent/40"}`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
 
-            {selectedProductId && selectedProductId !== "custom" && (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 p-3 rounded-lg bg-surface-3/50 border border-border text-[10px] text-text-secondary">
-                {(() => {
-                  const p = STYLECRAFT_PRODUCTS.find(x => x.id === selectedProductId)!;
-                  return (
-                    <>
-                      <span className="font-semibold text-text-primary">{p.shortName}</span>
-                      <span>•</span>
-                      <span className="text-accent font-bold">${p.price}</span>
-                      <span>•</span>
-                      <span>{p.motorType}</span>
-                      <span>•</span>
-                      <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline ml-auto flex items-center gap-0.5">
-                        View website ↗
-                      </a>
-                    </>
-                  );
-                })()}
+                <div className="max-h-72 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2 pr-1">
+                  {catalogProducts.length === 0 && (
+                    <p className="text-[10px] text-text-muted col-span-2 text-center py-4">Loading catalog…</p>
+                  )}
+                  {catalogProducts
+                    .filter(p => !catalogToolTypeFilter || p.tool_type === catalogToolTypeFilter)
+                    .filter(p => !catalogSearch.trim() || p.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                    .map(p => {
+                      const isSelected = catalogProductId === p.id;
+                      const isIncomplete = p.import_flags?.includes("incomplete");
+                      const techLabel = p.motor_branded || p.heat_tech_branded;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => handleCatalogProductSelect(p)}
+                          className={`text-left p-3 rounded-lg border transition space-y-1 ${isSelected ? "border-accent bg-accent/10" : "border-border bg-surface-1 hover:border-accent/40"}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-semibold text-text-primary text-xs leading-tight">{p.name}</span>
+                            {isIncomplete && (
+                              <span className="flex items-center gap-0.5 shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-warning/10 border border-warning/25 text-warning">
+                                <AlertTriangle className="w-2.5 h-2.5" /> Incomplete
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-text-muted">
+                            <span>{getToolTypeLabel(p.tool_type, toolTypes)}</span>
+                            {p.target_price != null && (
+                              <>
+                                <span>•</span>
+                                <span className="text-accent font-bold">${p.target_price.toFixed(2)}</span>
+                              </>
+                            )}
+                            {techLabel && (
+                              <>
+                                <span>•</span>
+                                <span>{techLabel}</span>
+                              </>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                </div>
+
+                {catalogProductId && isAdmin && (
+                  <label className="flex items-center gap-2 text-[10px] text-text-secondary pt-2 border-t border-border">
+                    <input
+                      type="checkbox"
+                      checked={saveToCatalog}
+                      onChange={e => setSaveToCatalog(e.target.checked)}
+                      className="rounded"
+                    />
+                    Save changes back to catalog
+                  </label>
+                )}
               </div>
             )}
           </div>

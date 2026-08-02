@@ -69,6 +69,7 @@ function renderFormInputsLine(formInputs: any, toolTypes: ToolTypeRow[]): string
     : null;
 
   const parts = [
+    formInputs.catalogProductName ? `Source: StyleCraft Catalog — ${formInputs.catalogProductName}` : "Source: Custom entry",
     `Industry: ${industryLabel}`,
     `Tool Type: ${toolTypeLabel}`,
     `Target Market: ${marketLabel}`,

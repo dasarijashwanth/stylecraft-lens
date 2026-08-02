@@ -2,22 +2,27 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { prisma } from "@/lib/db";
 import { memoryDb, MockReport } from "@/lib/memoryDb";
-import { STYLECRAFT_PRODUCTS } from "@/lib/stylecraft-products";
+import { listCatalogProducts, CatalogProductRow } from "@/lib/db/catalog-products";
 import { buildPricingAnalysis, isPricingAnalysisEmpty, type PricingAnalysis } from "@/lib/pricing-analysis";
 import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
 import { getAllLatestProvenance, ProvenanceRow } from "@/lib/db/section-provenance";
 import { resolveCacheKey } from "@/lib/product-cache-key";
 
 // Find the catalog entry for a product being analyzed, if it's a known
-// StyleCraft SKU (matched by name/shortName, case- and punctuation-insensitive).
-function matchCatalogProduct(productName: string) {
+// StyleCraft product (matched by name, case- and punctuation-insensitive).
+// catalogProductId, when known, is an authoritative id lookup — checked
+// first, same precedent as lib/our-product-position.ts's resolveOurLineupTier.
+function matchCatalogProduct(productName: string, catalogProducts: CatalogProductRow[], catalogProductId?: string | null): CatalogProductRow | null {
+  if (catalogProductId) {
+    const byId = catalogProducts.find(p => p.id === catalogProductId);
+    if (byId) return byId;
+  }
   if (!productName) return null;
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const target = norm(productName);
-  return STYLECRAFT_PRODUCTS.find(p => {
+  return catalogProducts.find(p => {
     const name = norm(p.name);
-    const short = norm(p.shortName);
-    return target === name || target === short || target.includes(short) || short.includes(target);
+    return target === name || target.includes(name) || name.includes(target);
   }) || null;
 }
 
@@ -44,8 +49,10 @@ function buildTargetAudience(
 
   const industryLabel = industry === "haircare-styling" ? "hair styling and finishing" : "barbering and grooming";
 
+  const catalogTechLabel = catalogProduct?.motor_branded || catalogProduct?.heat_tech_branded;
+  const catalogFeatures = catalogProduct?.description ? catalogProduct.description.split(",").slice(0, 3).join(",").toLowerCase().trim() : "";
   const catalogClause = catalogProduct
-    ? ` They're shopping specifically within ${catalogProduct.category}${catalogProduct.motorType !== "N/A" ? ` (${catalogProduct.motorType} tier)` : ""}, and care most about: ${catalogProduct.keyFeatures.slice(0, 3).join(", ").toLowerCase()}.`
+    ? ` They're shopping specifically within ${catalogProduct.tool_type}${catalogTechLabel ? ` (${catalogTechLabel} tier)` : ""}${catalogFeatures ? `, and care most about: ${catalogFeatures}.` : "."}`
     : "";
 
   const range = priceRange(legacyPrices);
@@ -164,7 +171,8 @@ export async function buildReportSections(analysis: {
   const wins = analysis.phase3?.quick_wins || [];
   const citations = analysis.phase3?.citations || [];
 
-  const catalogProduct = matchCatalogProduct(analysis.productName);
+  const catalogProduct = matchCatalogProduct(analysis.productName, await listCatalogProducts());
+  const catalogDefaultPrice = catalogProduct?.target_price != null ? `$${catalogProduct.target_price.toFixed(2)}` : null;
   const legacyPrices = p1Comps.map((c: any) => c.price).filter(Boolean);
 
   const sectionProvenanceRows = await collectCompetitorProvenance([...p1Comps, ...p2Comps]);
@@ -220,7 +228,7 @@ export async function buildReportSections(analysis: {
         competitors: [...p1Comps, ...p2Comps],
         targetPriceCandidates: [
           [analysis.pricePoint, "project_record"],
-          [catalogProduct?.pricePoint, "catalog_default"],
+          [catalogDefaultPrice, "catalog_default"],
         ],
         identity: analysis.identity,
       }),
@@ -231,14 +239,14 @@ export async function buildReportSections(analysis: {
       recommendations: recommendations,
       quick_wins: wins,
       positioning: positioning,
-      notes: buildGoToMarketNotes(positioning, wins, legacyPrices, analysis.pricePoint ?? catalogProduct?.pricePoint),
+      notes: buildGoToMarketNotes(positioning, wins, legacyPrices, analysis.pricePoint ?? catalogDefaultPrice ?? undefined),
     },
     content_form: {
       product_name: analysis.productName,
       key_messages: opps.map((o: any) => o.action || o.detail || o.description || ""),
       target_audience: buildTargetAudience(
         analysis.productName,
-        analysis.targetMarket ?? catalogProduct?.targetMarket,
+        analysis.targetMarket ?? catalogProduct?.target_market,
         analysis.industry ?? catalogProduct?.industry,
         catalogProduct,
         gaps,
@@ -472,14 +480,15 @@ async function recomputeLegacyPricingAnalysis(report: any): Promise<PricingAnaly
     }
   } catch { /* best-effort only — a missing/broken GTM doc must never block viewing the report */ }
 
-  const catalogProduct = matchCatalogProduct(report.projects?.product_name || "");
+  const catalogProduct = matchCatalogProduct(report.projects?.product_name || "", await listCatalogProducts());
+  const catalogDefaultPrice = catalogProduct?.target_price != null ? `$${catalogProduct.target_price.toFixed(2)}` : null;
 
   return buildPricingAnalysis({
     competitors,
     targetPriceCandidates: [
       [report.projects?.price_point, "project_record"],
       [gtmApprovedPricing, "gtm_approved_pricing"],
-      [catalogProduct?.pricePoint, "catalog_default"],
+      [catalogDefaultPrice, "catalog_default"],
     ],
     identity: report.analyses?.phase0_result || undefined,
   });

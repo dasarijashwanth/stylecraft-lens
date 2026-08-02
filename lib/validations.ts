@@ -110,6 +110,11 @@ export const AnalysisFormSchema = z.object({
   heatTechRaw: z.string().optional(),
   keyDiff: z.string().max(200).optional(),
   pricePoint: RequiredPricePoint,
+  // Set when the analyze form's catalog picker was used to select a real
+  // catalog_products row — see lib/our-product-position.ts's
+  // resolveOurLineupTier, which checks this before falling back to fuzzy
+  // name matching. Absent for manual/custom entries.
+  catalogProductId: z.string().uuid().optional(),
   // Optional "Adjust weights for this analysis" override (lib/db/scoring-
   // profiles.ts) — free-form relative-importance numbers, no sum-to-1
   // constraint (see lib/competitor-scoring.ts's computeCompositeScore for
