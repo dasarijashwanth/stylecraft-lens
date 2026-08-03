@@ -41,6 +41,8 @@ export async function POST(request: Request) {
       motorBranded: body.motorBranded ?? null,
       heatTechFamily: body.heatTechFamily ?? null,
       heatTechBranded: body.heatTechBranded ?? null,
+      brand: body.brand ?? null,
+      sku: body.sku ?? null,
       importFlags: body.importFlags ?? [],
       source: "manual",
     });

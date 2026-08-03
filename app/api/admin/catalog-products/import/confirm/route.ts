@@ -46,6 +46,8 @@ export async function POST(request: Request) {
           motorBranded: row.motorBranded,
           heatTechFamily: row.heatTechFamily,
           heatTechBranded: row.heatTechBranded,
+          brand: row.brand,
+          sku: row.sku,
           importFlags: row.importFlags,
         });
         updated++;
@@ -61,6 +63,8 @@ export async function POST(request: Request) {
           motorBranded: row.motorBranded,
           heatTechFamily: row.heatTechFamily,
           heatTechBranded: row.heatTechBranded,
+          brand: row.brand,
+          sku: row.sku,
           importFlags: row.importFlags,
           source: row.source,
         });

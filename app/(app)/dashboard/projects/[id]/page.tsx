@@ -36,6 +36,7 @@ import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-field-schema";
+import { ComparisonChartPicker, type ComparisonChartSlot } from "@/components/analyze/ComparisonChartPicker";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
 import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillReport } from "@/lib/field-answer-state";
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
@@ -1371,6 +1372,31 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
     }
   }
 
+  // Used by the Comparison Chart picker (structured slots) and the
+  // Manufacturer quick-pick (clearing the ambiguous flag on confirm) —
+  // both need an immediate save with a real sourceDetail, unlike the plain
+  // textarea path's debounced saveField.
+  async function saveFieldWithDetail(fieldId: string, value: string, sourceDetail: any) {
+    if (!documentId) return;
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], answer: value, source_detail: sourceDetail, flagged: false } }));
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/gtm/${documentId}/fields/${fieldId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: value, sourceDetail }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "saved" }));
+      setTimeout(() => setFieldStatus(prev => (prev[fieldId] === "saved" ? { ...prev, [fieldId]: "idle" } : prev)), 1500);
+    } catch (e) {
+      toast.error("Failed to save field");
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
   async function handleRegenerate(fieldId: string) {
     if (!documentId) return;
     setFieldStatus(prev => ({ ...prev, [fieldId]: "regenerating" }));
@@ -1631,7 +1657,7 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                         <div className="flex items-center gap-1 shrink-0">
                           <span
                             className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}
-                            title={awaitingInternal ? `Set by ${f.owner || "your team"} — edit the field directly` : undefined}
+                            title={entry?.source_detail?.label || (awaitingInternal ? `Set by ${f.owner || "your team"} — edit the field directly` : undefined)}
                           >
                             {chipLabel}
                           </span>
@@ -1656,15 +1682,38 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                           </button>
                         </div>
                       </div>
-                      <textarea
-                        rows={2}
-                        value={entry?.answer || ""}
-                        onChange={e => handleFieldChange(f.id, e.target.value)}
-                        title={flagged ? flagReason(entry?.source_detail) : undefined}
-                        className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
-                          flagged ? "border-danger/40" : "border-border"
-                        }`}
-                      />
+                      {f.helperText && (
+                        <p className="text-[9px] text-text-muted -mt-0.5">{f.helperText}</p>
+                      )}
+                      {f.id === "manufacturer" && entry?.source_detail?.ambiguous ? (
+                        <div className="flex items-center gap-2">
+                          {["StyleCraft", "Gamma+"].map(brand => (
+                            <button
+                              key={brand}
+                              type="button"
+                              onClick={() => saveFieldWithDetail(f.id, brand, { label: `Manually confirmed: ${brand}` })}
+                              className="px-2.5 py-1.5 border border-border rounded-lg text-[11px] font-semibold text-text-secondary hover:border-accent hover:text-accent"
+                            >
+                              {brand}
+                            </button>
+                          ))}
+                        </div>
+                      ) : f.uiControl === "sku_picker" ? (
+                        <ComparisonChartPicker
+                          slots={(entry?.source_detail?.slots as (ComparisonChartSlot | null)[] | undefined) || [null, null]}
+                          onSave={(answer, slots) => saveFieldWithDetail(f.id, answer, { slots })}
+                        />
+                      ) : (
+                        <textarea
+                          rows={2}
+                          value={entry?.answer || ""}
+                          onChange={e => handleFieldChange(f.id, e.target.value)}
+                          title={flagged ? flagReason(entry?.source_detail) : undefined}
+                          className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
+                            flagged ? "border-danger/40" : "border-border"
+                          }`}
+                        />
+                      )}
                       <div className="flex items-center gap-2">
                         <select
                           value={entry?.owner || "Product Marketing"}

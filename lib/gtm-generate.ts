@@ -14,8 +14,8 @@
 // tiers entirely and terminate at "Awaiting internal input" instead.
 import { callAiForFields, coerceAiAnswer } from "./ai-json-call";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
-import { deriveFieldsFromSources, ProjectRecord } from "./gtm-derive";
-import { applyTier6Inference } from "./gtm-tier6-inference";
+import { deriveFieldsFromSources, ProjectRecord, motorLabel } from "./gtm-derive";
+import { applyTier6Inference, CatalogLineupRow, CompetitorSpecSource, BrandNameHintInput, ComparisonChartCatalogRow } from "./gtm-tier6-inference";
 import { getCategoryDefault, CATEGORY_DEFAULT_LABEL_PREFIX } from "./category-defaults";
 import { applyWebSearchFallback } from "./web-search-fallback";
 import { finalizeFieldAnswers } from "./field-finalize";
@@ -26,6 +26,12 @@ import { meetsElaborationBar } from "./gtm-elaboration";
 import { GENERIC_EXEMPLARS } from "./gtm-reference-exemplars";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
 import { listToolTypes } from "./db/tool-types";
+import { listCatalogProducts } from "./db/catalog-products";
+import { listEnabledBrandNameHints } from "./db/brand-name-hints";
+import { matchCatalogProductByName } from "./our-product-position";
+import { extractOurSpecsFromTds } from "./spec-extraction";
+import { parsePriceToNumber } from "./pricing-analysis";
+import { applyFeaturesAndExpertTip } from "./gtm-features-and-tip";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
 // Confirmed live that a 45s/45s split here still produced a hard 504 (the
@@ -55,6 +61,12 @@ export interface GtmSources {
   // document_fields model GTM uses, so this is no longer arbitrary JSON.
   tds: Record<string, string> | null;
   activeReport: { competitive_analysis?: any; pricing_analysis?: any; content_form?: any } | null;
+  // Current document's already-resolved field answers (flattened, real
+  // answers only) — only used by Expert Tip's grounding when regenerating
+  // it in isolation (generateSingleField has no Features answer in scope
+  // otherwise, since it's not part of that single-field call). Populated by
+  // the regenerate route via lib/db/documents.ts's flattenDocumentFields.
+  existingFieldAnswers?: Record<string, string> | null;
 }
 
 export function buildSourceTexts(sources: GtmSources): SourceTexts {
@@ -87,6 +99,43 @@ function buildHairTypeSourceText(sources: GtmSources): string {
     (sources.salesKit?.key_features || []).map((f: any) => f.headline).filter(Boolean).join(" "),
     sources.project.category,
   ].filter(Boolean).join(" ");
+}
+
+// Builds the 3 new GTM Schema v2 Tier-6 inputs (catalog lineup, competitor
+// RPM performance, manufacturer cascade) — one shared helper since both
+// generateAllFields and generateSingleField need identical construction.
+// Fetches catalog products + brand hints once per call (cheap, small
+// admin-managed tables) rather than threading them through every caller.
+async function buildTier6ExtraInputs(sources: GtmSources, toolTypes: { type_key: string; label: string }[]) {
+  const [catalogProducts, brandHints] = await Promise.all([listCatalogProducts(), listEnabledBrandNameHints()]);
+  const catalogLineupRows: CatalogLineupRow[] = catalogProducts.map(p => ({ tool_type: p.tool_type, target_price: p.target_price, active: p.active }));
+
+  const ourToolType = sources.project.toolType || null;
+  const toolTypeLabel = toolTypes.find(t => t.type_key === ourToolType)?.label || ourToolType || "product";
+  const ourPriceRaw = parsePriceToNumber(sources.activeReport?.pricing_analysis?.target_price);
+
+  const ourRpm = extractOurSpecsFromTds(sources.tds).rpm ?? null;
+  const ourMotorLabel = motorLabel(sources.project.motorFamily, sources.project.motorBrandedName) || sources.project.motorTech || "";
+  const ca = sources.activeReport?.competitive_analysis || {};
+  const competitors: CompetitorSpecSource[] = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])];
+
+  const matchedCatalogProduct = matchCatalogProductByName(sources.project.productName, catalogProducts);
+  const hints: BrandNameHintInput[] = brandHints.map(h => ({ brand: h.brand, namePrefixes: h.name_prefixes }));
+  const comparisonChartRows: ComparisonChartCatalogRow[] = catalogProducts.map(p => ({
+    name: p.name, brand: p.brand, sku: p.sku, tool_type: p.tool_type, target_price: p.target_price, motor_family: p.motor_family, active: p.active,
+  }));
+
+  return {
+    catalogLineup: { ourToolType, ourPriceRaw, catalogProducts: catalogLineupRows, toolTypeLabel },
+    performance: { ourRpm, ourMotorLabel, competitors },
+    manufacturer: {
+      productName: sources.project.productName,
+      catalogBrand: matchedCatalogProduct?.brand ?? null,
+      hints,
+      tdsManufacturer: sources.tds?.manufacturer ?? null,
+    },
+    comparisonChart: { ourToolType, ourPriceRaw, ourMotorFamily: sources.project.motorFamily ?? null, catalogProducts: comparisonChartRows },
+  };
 }
 
 function buildSystemInstruction(productName: string, schema: GtmField[]) {
@@ -272,10 +321,17 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // strictly after the web-search tier — these are pure/free to compute
   // but must never preempt a real web search result the way an eager
   // pre-AI derivation would (see lib/gtm-tier6-inference.ts).
+  const tier6Extra = await buildTier6ExtraInputs(sources, toolTypes);
   applyTier6Inference(grounded, schema, {
-    pricingAnalysis: sources.activeReport?.pricing_analysis || null,
     hairTypeSourceText: buildHairTypeSourceText(sources),
+    ...tier6Extra,
   });
+
+  // Tier 6.5 — Features (full list) 3-source merge + Expert Tip generated
+  // from the now-resolved Features. Runs after Tier 6 (manufacturer/lineup/
+  // performance already settled) so Expert Tip's grounding has a real,
+  // resolved feature list to reference — see lib/gtm-features-and-tip.ts.
+  await applyFeaturesAndExpertTip(grounded, schema, sources, productName, pipelineStart);
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
@@ -331,10 +387,12 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // second-chance tiers the full 77-field sweep already gives it above.
   const guarded = { [fieldId]: grounded };
   await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any);
+  const tier6Extra = await buildTier6ExtraInputs(sources, toolTypes);
   applyTier6Inference(guarded, [schemaField], {
-    pricingAnalysis: sources.activeReport?.pricing_analysis || null,
     hairTypeSourceText: buildHairTypeSourceText(sources),
+    ...tier6Extra,
   });
+  await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now());
   applyCategoryDefaults(guarded, [schemaField], sources.project.category);
 
   if (schemaField.kind === "written") {

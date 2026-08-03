@@ -9,6 +9,21 @@ import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import type { DeckTemplateRow } from "@/lib/db/deck-templates";
 import type { DeckTokenMapping } from "@/lib/deck-types";
+import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
+
+// A template's placeholder_map is built once at upload/parse time
+// (lib/deck-field-registry.ts's buildDefaultPlaceholderMap) against
+// whatever GTM_FIELD_SCHEMA looked like then — a later schema change that
+// renames a field's ID (not just its question text) or removes one
+// outright leaves that token's `gtm_field` mapping silently resolving to ""
+// at render time (lib/deck-data-mapper.ts's resolveTokenValue does a plain
+// Map.get with zero validation). This is the only place that re-checks a
+// stored mapping against the CURRENT schema.
+const VALID_GTM_FIELD_IDS = new Set(GTM_FIELD_SCHEMA.map(f => f.id));
+
+function isRemovedFieldMapping(source: DeckTokenMapping["source"]): boolean {
+  return source.type === "gtm_field" && !VALID_GTM_FIELD_IDS.has(source.field_id);
+}
 
 function sourceSummary(source: DeckTokenMapping["source"]): string {
   switch (source.type) {
@@ -121,6 +136,7 @@ export default function DeckTemplateMappingPage() {
   }
 
   const unmappedCount = tokens.filter(t => t.source.type === "unmapped").length;
+  const removedFieldCount = tokens.filter(t => isRemovedFieldMapping(t.source)).length;
 
   return (
     <div className="space-y-6">
@@ -146,6 +162,9 @@ export default function DeckTemplateMappingPage() {
       <p className="text-xs text-text-muted -mt-4">
         {template.slide_count} slide{template.slide_count === 1 ? "" : "s"} · {tokens.length} token{tokens.length === 1 ? "" : "s"} found
         {unmappedCount > 0 ? <span className="text-warning font-semibold"> · {unmappedCount} unmapped — resolve below before activating</span> : " · all tokens mapped"}
+        {removedFieldCount > 0 && (
+          <span className="text-danger font-semibold"> · {removedFieldCount} mapped to a field removed from the current schema — resolve below</span>
+        )}
       </p>
 
       <div className="border border-border rounded-xl overflow-hidden">
@@ -159,13 +178,24 @@ export default function DeckTemplateMappingPage() {
         <div className="divide-y divide-border/60">
           {tokens.map((t, i) => {
             const isUnmapped = t.source.type === "unmapped";
+            const isRemoved = isRemovedFieldMapping(t.source);
             const slideList = Array.from(new Set(t.occurrences.map(o => o.slide_index))).sort((a, b) => a - b).join(", ");
             return (
-              <div key={t.token} className={`grid grid-cols-[160px_70px_80px_1fr_90px] gap-3 px-4 py-3 items-center text-xs ${isUnmapped ? "bg-warning/5" : ""}`}>
+              <div key={t.token} className={`grid grid-cols-[160px_70px_80px_1fr_90px] gap-3 px-4 py-3 items-center text-xs ${isUnmapped ? "bg-warning/5" : isRemoved ? "bg-danger/5" : ""}`}>
                 <code className="font-mono text-[11px] text-text-primary truncate" title={t.token}>{`{{${t.token}}}`}</code>
                 <span className="text-text-secondary">{t.kind}</span>
                 <span className="text-text-muted font-mono text-[11px]">{slideList}</span>
-                {isUnmapped ? (
+                {isRemoved ? (
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-danger shrink-0" />
+                    <input
+                      type="text"
+                      placeholder={`"${(t.source as any).field_id}" no longer exists — set a static fallback…`}
+                      className="flex-1 px-2 py-1 text-[11px] border border-danger/30 rounded bg-surface-1 text-text-primary outline-none focus:border-danger"
+                      onBlur={e => { if (e.target.value.trim()) markStatic(i, e.target.value.trim()); }}
+                    />
+                  </div>
+                ) : isUnmapped ? (
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
                     <input

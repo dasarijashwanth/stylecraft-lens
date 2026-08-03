@@ -69,7 +69,7 @@ const MOTOR_FAMILY_LABELS: Record<string, string> = {
 // alone, so grounding/display always leads with the universal type. Returns
 // "" when motorFamily isn't one of the 7 canonical keys (a legacy project
 // with only free-text motorTech), letting the caller fall back to that.
-function motorLabel(motorFamily?: string | null, motorBrandedName?: string | null): string {
+export function motorLabel(motorFamily?: string | null, motorBrandedName?: string | null): string {
   const label = motorFamily ? MOTOR_FAMILY_LABELS[motorFamily] : undefined;
   if (!label) return "";
   return motorBrandedName?.trim() ? `${label} (${motorBrandedName.trim()})` : label;
@@ -100,16 +100,9 @@ export function deriveFieldsFromSources(
   set("core_consumer", pick((salesKit?.target_customers || []).join("; "), "sales_kit"));
   set("positioning_statement", pick(ca.positioning_recommendation, "active_report"));
   set("approved_pricing", firstOf([project.pricePoint, "project_record"], [t.approved_pricing, "tds"], [pricing.price_positioning, "active_report"]));
-  set("performance", firstOf(
-    [[motorTypeLabel || project.motorTech, t.motor_rpm].filter(Boolean).join(" · "), "project_record"],
-    [[t.motor_type, t.motor_rpm, t.motor_speed].filter(Boolean).join(" · "), "tds"]
-  ));
   set("features_full_list", pick((salesKit?.key_features || []).map((f: any) => f.headline).filter(Boolean).join("; "), "sales_kit"));
   // upsell_cross_sell has no structured source today — left for AI/N/A.
   set("reason_to_buy", firstOf([salesKit?.elevator_pitch, "sales_kit"], [project.keyDiff, "project_record"]));
-  const compNames = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])].map((c: any) => c.name).filter(Boolean);
-  set("comps", pick(compNames.join("; "), "active_report"));
-  set("comps_buying_guide", pick(compNames.join("; "), "active_report"));
   set("warranty", pick(t.warranty, "tds"));
   set("certification_needed", pick(t.certification_needed, "tds"));
   set("trademark_symbol", pick(t.trademark_symbol, "tds"));

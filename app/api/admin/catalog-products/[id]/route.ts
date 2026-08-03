@@ -40,6 +40,8 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       motorBranded: body.motorBranded,
       heatTechFamily: body.heatTechFamily,
       heatTechBranded: body.heatTechBranded,
+      brand: body.brand,
+      sku: body.sku,
       importFlags: body.importFlags,
     });
     if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });

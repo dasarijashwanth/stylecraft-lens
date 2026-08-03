@@ -1,4 +1,4 @@
-// The 77-field "Product Knowledge" spec sheet for the Go-To-Market tab.
+// The 79-field "Product Knowledge" spec sheet for the Go-To-Market tab.
 // Single source of truth for both the generation pipeline (app/api/documents/generate,
 // lib/gtm-derive.ts, lib/gtm-grounding.ts) and the UI grid (ProductKnowledgeSection in
 // app/(app)/dashboard/projects/[id]/page.tsx) — every consumer must iterate this list,
@@ -22,6 +22,15 @@ export interface GtmField {
   // Default team owner for internal-kind fields only — shown next to the
   // "Awaiting internal input" chip so it's clear who to ask.
   owner?: string;
+  // Muted caption rendered under the question label — for instructions that
+  // must appear verbatim (e.g. Comparison Chart WEB ONLY's exact spec text),
+  // rather than folded into the question itself.
+  helperText?: string;
+  // Marks a field whose UI control is NOT the default plain textarea — the
+  // render loop in ProductKnowledgeSection special-cases these ids. Every
+  // other field (the vast majority) is left undefined and renders the
+  // generic textarea.
+  uiControl?: "sku_picker";
 }
 
 // Narrative fields — the rest of the schema defaults to "grounded".
@@ -57,9 +66,9 @@ const INTERNAL_FIELD_OWNERS: Record<string, string> = {
   approved_pricing: "Sales",
 };
 
-function field(id: string, section: string, question: string): GtmField {
+function field(id: string, section: string, question: string, extra?: { helperText?: string; uiControl?: "sku_picker" }): GtmField {
   const kind: GtmFieldKind = WRITTEN_FIELD_IDS.has(id) ? "written" : INTERNAL_FIELD_IDS.has(id) ? "internal" : "grounded";
-  return { id, section, question, kind, ...(kind === "internal" ? { owner: INTERNAL_FIELD_OWNERS[id] } : {}) };
+  return { id, section, question, kind, ...(kind === "internal" ? { owner: INTERNAL_FIELD_OWNERS[id] } : {}), ...extra };
 }
 
 export const GTM_FIELD_SCHEMA: GtmField[] = [
@@ -73,15 +82,17 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("new_line_or_current", "General", "New Line or Current Collection?"),
   field("new_technology", "General", "New Technology?"),
   field("approved_pricing", "General", "Approved Pricing"),
-  field("good_better_best", "General", "Good Better Best $"),
-  field("performance", "General", "Performance"),
+  field("good_better_best", "General", "Good Better Best (Lineup)"),
+  field("good_better_best_performance", "General", "Good Better Best (Performance)"),
   field("hair_type", "General", "Hair Type"),
   field("features_full_list", "General", "Features (full list)"),
   field("upsell_cross_sell", "General", "Up-sell / Cross-sell products"),
   field("reason_to_buy", "General", "Reason to Buy (Unique Selling Points)"),
   field("expert_tip", "General", "Expert Tip"),
-  field("comps", "General", "COMPS"),
-  field("comps_buying_guide", "General", "Comps for Buying Guide"),
+  field("comparison_chart_web_only", "General", "Comparison Chart WEB ONLY", {
+    helperText: "Select two products to feature as comparisons on the DTC site and provide the SKUs. You may include products from either StyleCraft or Gamma+.",
+    uiControl: "sku_picker",
+  }),
   field("trademark_symbol", "General", "Trademark Symbol"),
   field("warranty", "General", "Warranty"),
   field("certification_needed", "General", "Certification Needed"),

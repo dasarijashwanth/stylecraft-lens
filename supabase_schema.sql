@@ -1311,3 +1311,43 @@ INSERT INTO catalog_products (name, industry, target_market, tool_type, target_p
 ('Stay-Temp Professional Ceramic Barrel 3/4" Marcel Curling Iron', 'haircare-styling', 'both', 'curling_iron', 49.95, 'Stay-Temp Professional Ceramic Barrel 3/4" Marcel Curling Iron for classic clamp-free curling technique.', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import'),
 ('Stay-Temp Professional Ceramic Barrel Curling Iron (0.5"–1.5")', 'haircare-styling', 'both', 'curling_iron', 44.95, 'Stay-Temp Professional Ceramic Barrel Curling Iron, available across five barrel sizes from 0.5" to 1.5".', NULL, NULL, 'ceramic', 'Ceramic Barrel', '{}'::text[], 'legacy_catalog_import')
 ON CONFLICT (name) DO NOTHING;
+
+-- 35. CATALOG PRODUCTS: BRAND + SKU — GTM's new "Comparison Chart WEB ONLY"
+-- field needs to search catalog_products across BOTH of our house brands
+-- with a real SKU to render ("1. {name} (StyleCraft) — SKU {sku}"), and the
+-- new Manufacturer auto-detect cascade (lib/gtm-tier6-inference.ts) uses
+-- `brand` as its most-authoritative signal when an analysis was built from
+-- a real catalog pick. No CHECK constraint — same plain-VARCHAR-no-enum
+-- convention this table's own target_market/industry/tool_type columns
+-- already use (validated at the application layer, not the DB layer).
+-- Every existing row genuinely IS StyleCraft-sourced (this session's own
+-- GTM-forms + scraped-site seed data) — safe, honest backfill, not a guess.
+ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS brand VARCHAR(20);
+ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS sku VARCHAR(100);
+UPDATE catalog_products SET brand = 'StyleCraft' WHERE brand IS NULL;
+
+-- 36. BRAND NAME HINTS — a small admin-editable "product-name-prefix ->
+-- brand" map for the Manufacturer auto-detect cascade's 2nd tier (after the
+-- catalog-record check, before falling back to the TDS manufacturer field
+-- or an ambiguous confirm-quick-pick). Deliberately NOT the full 4-category
+-- legacy-brand-registry shape (lib/db/legacy-brands.ts) — that structure
+-- exists for pro/retail category segmentation this 2-value brand hint
+-- doesn't need. Matching reuses the exact same word-boundary token
+-- approach as lib/legacy-brand-discovery.ts's brandMatchesTitle/
+-- normalizeBrandToken, just against name_prefixes instead of brand aliases.
+CREATE TABLE IF NOT EXISTS brand_name_hints (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    brand VARCHAR(20) NOT NULL UNIQUE,
+    name_prefixes TEXT[] NOT NULL DEFAULT '{}',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE brand_name_hints ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for brand_name_hints" ON brand_name_hints FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO brand_name_hints (brand, name_prefixes, sort_order) VALUES
+    ('StyleCraft', ARRAY['Saber', 'Anime', 'Protege', 'Protégé', 'Reign', 'Rebel', 'Rogue', 'Instinct', 'Ergo', 'Solecito', 'Rival', 'Ace', 'Homie', 'Schnozzle', 'Sage', 'Stay-Temp', 'Stay Temp'], 0),
+    ('Gamma+', ARRAY['Absolute', 'X-Evo', 'XEvo'], 1)
+ON CONFLICT (brand) DO NOTHING;

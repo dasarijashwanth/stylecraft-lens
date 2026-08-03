@@ -82,6 +82,8 @@ export interface NormalizedCatalogRow {
   motorBranded: string | null;
   heatTechFamily: string | null;
   heatTechBranded: string | null;
+  brand: string | null;
+  sku: string | null;
   importFlags: string[];
   source: string;
 }
@@ -152,6 +154,9 @@ export function normalizeImportRow(raw: ParsedImportRow, ctx: CatalogTaxonomyCon
     flags.push("incomplete");
   }
 
+  const brand = pick(raw, ["brand", "brand name", "manufacturer"]);
+  const sku = pick(raw, ["sku", "sku #", "sku#", "item number", "item #"]);
+
   return {
     name,
     industry,
@@ -163,6 +168,8 @@ export function normalizeImportRow(raw: ParsedImportRow, ctx: CatalogTaxonomyCon
     motorBranded,
     heatTechFamily,
     heatTechBranded,
+    brand,
+    sku,
     importFlags: Array.from(new Set(flags)),
     source: "spreadsheet_import",
   };
@@ -184,6 +191,7 @@ export interface ImportDiffResult {
 const COMPARABLE_FIELDS: (keyof NormalizedCatalogRow)[] = [
   "industry", "targetMarket", "toolType", "targetPrice", "description",
   "motorFamily", "motorBranded", "heatTechFamily", "heatTechBranded",
+  "brand", "sku",
 ];
 
 // Pure diff — matches by case/whitespace-insensitive name (normalizeProductName),
@@ -216,6 +224,13 @@ export function diffCatalogImport(normalizedRows: NormalizedCatalogRow[], existi
         : f === "heatTechFamily" ? match.heat_tech_family
         : f === "heatTechBranded" ? match.heat_tech_branded
         : (match as any)[f];
+      // brand/sku are newer, optional spreadsheet columns most re-import
+      // files won't have yet — a genuinely absent column (parsed as null,
+      // same as a blank cell, pick() can't tell the two apart) must never
+      // register as "changed to null", or every legacy re-import would
+      // spuriously flag every single row the moment these columns existed.
+      // Only a real, differing incoming value counts as a change.
+      if (f === "brand" || f === "sku") return newVal != null && newVal !== oldVal;
       return (newVal ?? null) !== (oldVal ?? null);
     });
     if (changedFields.length > 0) changedRows.push({ row, existingId: match.id, changedFields });

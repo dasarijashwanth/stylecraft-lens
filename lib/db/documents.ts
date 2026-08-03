@@ -180,6 +180,23 @@ export async function getDocumentFields(documentId: string): Promise<DocumentFie
     }));
 }
 
+// Removes one field row entirely — used by the one-off GTM Schema v2
+// migration (scripts/migrate-gtm-schema-v2.ts) to clean up rows for fields
+// removed from the live schema (old `performance`/`comps`/
+// `comps_buying_guide`) after their real answers have been stashed
+// elsewhere. Never used by normal per-field editing (that's
+// revertDocumentField, which restores a PRIOR value — this deletes the row
+// outright, since a removed schema field has no "prior value" to revert to).
+export async function deleteDocumentField(documentId: string, fieldId: string): Promise<void> {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("document_fields").delete().eq("document_id", documentId).eq("field_id", fieldId);
+    if (error) throw error;
+    return;
+  }
+  const idx = memoryDb.documentFields.findIndex(f => f.documentId === documentId && f.fieldId === fieldId);
+  if (idx >= 0) memoryDb.documentFields.splice(idx, 1);
+}
+
 async function writeHistory(documentFieldId: string, previousAnswer: string | null, changedBy: string | null) {
   if (isSupabaseConfigured) {
     await supabaseAdmin.from("document_field_history").insert({ document_field_id: documentFieldId, answer: previousAnswer, changed_by: changedBy });

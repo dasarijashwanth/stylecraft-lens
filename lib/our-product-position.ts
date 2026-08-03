@@ -24,7 +24,12 @@ function normalizeName(s: string): string {
   return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function matchCatalogProductByName(productName: string, catalogProducts: CatalogProductRow[]): CatalogProductRow | null {
+// Exported for reuse by GTM's Manufacturer auto-detect cascade
+// (lib/gtm-generate.ts) — projects don't persist catalogProductId
+// themselves (only the analysis context that created them does), so
+// resolving "did this project come from a real catalog record" falls back
+// to the same fuzzy name match resolveOurLineupTier already uses.
+export function matchCatalogProductByName(productName: string, catalogProducts: CatalogProductRow[]): CatalogProductRow | null {
   if (!productName) return null;
   const target = normalizeName(productName);
   return (

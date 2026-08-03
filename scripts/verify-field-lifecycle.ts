@@ -27,7 +27,7 @@ function assert(condition: boolean, message: string) {
 async function main() {
   const { isRealAnswer, isNotDeterminable, isAwaitingInternalInput, buildFillReport, TDS_NOT_LISTED } = await import("../lib/field-answer-state");
   const { finalizeFieldAnswers } = await import("../lib/field-finalize");
-  const { applyTier6Inference, deriveGoodBetterBest, inferHairType } = await import("../lib/gtm-tier6-inference");
+  const { applyTier6Inference, deriveGoodBetterBestLineup, inferHairType } = await import("../lib/gtm-tier6-inference");
   const { getCategoryDefault } = await import("../lib/category-defaults");
   const { reconcileTdsFromGtm } = await import("../lib/tds-gtm-reconcile");
   const { getOrCreateDocument, saveDocumentFields, getDocumentFields, updateDocumentField } = await import("../lib/db/documents");
@@ -85,13 +85,24 @@ async function main() {
   assert(finalized.stuck_grounded.source === "none" && finalized.stuck_internal.source === "none", "finalized terminal states are tagged source: none");
 
   // ---- Section 3: tier-6 derivation — pure correctness + never preempts a real answer ----
-  console.log("\n[3] deriveGoodBetterBest / inferHairType / applyTier6Inference ordering");
-  const cheapResult = deriveGoodBetterBest({
-    target_price: "$10",
-    competitor_prices: [{ price_raw: 100 }, { price_raw: 200 }, { price_raw: 300 }, { price_raw: 400 }, { price_raw: 500 }, { price_raw: 600 }],
-  });
-  assert(cheapResult?.answer === "Good", "deriveGoodBetterBest correctly buckets the cheapest of 7 compared prices into Good");
-  assert(deriveGoodBetterBest(null) === null, "deriveGoodBetterBest returns null with no pricing analysis");
+  console.log("\n[3] deriveGoodBetterBestLineup / inferHairType / applyTier6Inference ordering");
+  const cheapResult = deriveGoodBetterBestLineup(
+    "clipper",
+    10,
+    [
+      { tool_type: "clipper", target_price: 100, active: true },
+      { tool_type: "clipper", target_price: 200, active: true },
+      { tool_type: "clipper", target_price: 300, active: true },
+      { tool_type: "clipper", target_price: 400, active: true },
+      { tool_type: "clipper", target_price: 500, active: true },
+      { tool_type: "clipper", target_price: 600, active: true },
+    ],
+    "clipper"
+  );
+  assert(cheapResult?.answer === "Good", "deriveGoodBetterBestLineup correctly buckets the cheapest of 7 compared catalog prices into Good");
+  assert(cheapResult?.sourceDetail?.label === "Derived from catalog lineup (6 clippers)", "deriveGoodBetterBestLineup labels its basis with the sibling count");
+  assert(deriveGoodBetterBestLineup(null, 10, [], "clipper") === null, "deriveGoodBetterBestLineup returns null with no tool type");
+  assert(deriveGoodBetterBestLineup("clipper", 10, [], "clipper") === null, "deriveGoodBetterBestLineup returns null with no catalog siblings");
 
   assert(!!inferHairType("designed for curly and coily hair types")?.answer.includes("Curly/Coily"), "inferHairType matches a real keyword");
   assert(inferHairType("") === null, "inferHairType returns null with no source text");
@@ -102,8 +113,16 @@ async function main() {
     hair_type: { answer: "N/A", source: "none" },
   };
   applyTier6Inference(alreadyWebAnswered, tier6Schema, {
-    pricingAnalysis: { target_price: "$50", competitor_prices: [{ price_raw: 100 }, { price_raw: 20 }] },
     hairTypeSourceText: "designed for curly and coily hair types",
+    catalogLineup: {
+      ourToolType: "clipper",
+      ourPriceRaw: 50,
+      catalogProducts: [
+        { tool_type: "clipper", target_price: 100, active: true },
+        { tool_type: "clipper", target_price: 20, active: true },
+      ],
+      toolTypeLabel: "clipper",
+    },
   });
   assert(
     alreadyWebAnswered.good_better_best.answer === "Best" && alreadyWebAnswered.good_better_best.source === "web",

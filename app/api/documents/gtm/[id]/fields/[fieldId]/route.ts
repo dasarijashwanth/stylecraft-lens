@@ -17,10 +17,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   try {
     const session = await getAuthSession();
     await assertOwnsDocument(params.id, session.orgId);
-    const body = await req.json() as { answer?: string; owner?: string; notes?: string };
+    const body = await req.json() as { answer?: string; owner?: string; notes?: string; sourceDetail?: any };
 
+    // sourceDetail is only sent by the Comparison Chart picker (its
+    // structured {slots:[...]}) and the Manufacturer quick-pick (clearing
+    // the ambiguous flag on confirm) — every other field's plain-textarea
+    // edit omits it, so updateDocumentField still applies its normal
+    // manual_edit tagging + "leave source_detail as prior" default.
     const field = body.answer !== undefined
-      ? await updateDocumentField(params.id, params.fieldId, body.answer, session.userId)
+      ? await updateDocumentField(
+          params.id,
+          params.fieldId,
+          body.answer,
+          session.userId,
+          body.sourceDetail !== undefined ? { source: "manual_edit", sourceDetail: body.sourceDetail, flagged: false } : undefined
+        )
       : await updateDocumentFieldMeta(params.id, params.fieldId, { owner: body.owner, notes: body.notes }, session.userId);
 
     return NextResponse.json({ field });

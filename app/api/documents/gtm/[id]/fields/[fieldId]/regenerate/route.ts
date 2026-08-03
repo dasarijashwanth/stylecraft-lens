@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { getProjectReports } from "@/lib/db/reports";
-import { getDocumentById, updateDocumentField, getTdsFieldsForProject } from "@/lib/db/documents";
+import { getDocumentById, updateDocumentField, getTdsFieldsForProject, getDocumentFields, flattenDocumentFields } from "@/lib/db/documents";
 import { getLatestOutput } from "@/lib/project-outputs";
 import { generateSingleField, GtmSources } from "@/lib/gtm-generate";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
@@ -27,10 +27,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const project = await getProject(document.project_id, session.orgId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const [salesKit, tds, reports] = await Promise.all([
+    const [salesKit, tds, reports, existingFields] = await Promise.all([
       getLatestOutput(document.project_id, "sales_kit"),
       getTdsFieldsForProject(document.project_id),
       getProjectReports(document.project_id, session.userId),
+      getDocumentFields(document.id),
     ]);
     const latestReport = reports?.[0];
 
@@ -52,6 +53,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       activeReport: latestReport
         ? { competitive_analysis: latestReport.competitive_analysis, pricing_analysis: latestReport.pricing_analysis, content_form: latestReport.content_form }
         : null,
+      // Expert Tip's grounding basis when regenerated in isolation (see
+      // lib/gtm-features-and-tip.ts's applyFeaturesAndExpertTip).
+      existingFieldAnswers: flattenDocumentFields(existingFields),
     };
 
     const result = await generateSingleField(params.fieldId, sources, document.project_id);

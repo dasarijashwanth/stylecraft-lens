@@ -23,6 +23,15 @@ export interface CatalogProductRow {
   active: boolean;
   import_flags: string[];
   source: string;
+  // GTM's "Comparison Chart WEB ONLY" picker needs to search across BOTH
+  // house brands with a real SKU; the Manufacturer auto-detect cascade
+  // (lib/gtm-tier6-inference.ts) reads `brand` as its most-authoritative
+  // signal when an analysis was built from a real catalog pick. Every
+  // pre-existing row is backfilled to "StyleCraft" (Section 35's own
+  // migration) — null only ever appears for a manually-added row an admin
+  // hasn't set yet.
+  brand: string | null;
+  sku: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +52,8 @@ function mockToRow(p: MockCatalogProduct): CatalogProductRow {
     active: p.active,
     import_flags: p.importFlags,
     source: p.source,
+    brand: p.brand ?? null,
+    sku: p.sku ?? null,
     created_at: p.createdAt.toISOString(),
     updated_at: p.updatedAt.toISOString(),
   };
@@ -97,6 +108,8 @@ export interface CatalogProductInput {
   heatTechBranded?: string | null;
   importFlags?: string[];
   source?: string;
+  brand?: string | null;
+  sku?: string | null;
 }
 
 export async function addCatalogProduct(input: CatalogProductInput): Promise<CatalogProductRow> {
@@ -116,6 +129,8 @@ export async function addCatalogProduct(input: CatalogProductInput): Promise<Cat
         heat_tech_branded: input.heatTechBranded ?? null,
         import_flags: input.importFlags || [],
         source: input.source || "manual",
+        brand: input.brand ?? null,
+        sku: input.sku ?? null,
       })
       .select()
       .single();
@@ -139,6 +154,8 @@ export async function addCatalogProduct(input: CatalogProductInput): Promise<Cat
     active: true,
     importFlags: input.importFlags || [],
     source: input.source || "manual",
+    brand: input.brand ?? null,
+    sku: input.sku ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -164,6 +181,8 @@ export async function updateCatalogProduct(
     if (patch.heatTechBranded !== undefined) dbPatch.heat_tech_branded = patch.heatTechBranded;
     if (patch.importFlags !== undefined) dbPatch.import_flags = patch.importFlags;
     if (patch.active !== undefined) dbPatch.active = patch.active;
+    if (patch.brand !== undefined) dbPatch.brand = patch.brand;
+    if (patch.sku !== undefined) dbPatch.sku = patch.sku;
     const { data, error } = await supabaseAdmin.from("catalog_products").update(dbPatch).eq("id", id).select().single();
     if (error) throw error;
     return normalizeRow(data);
@@ -183,6 +202,8 @@ export async function updateCatalogProduct(
   if (patch.heatTechBranded !== undefined) row.heatTechBranded = patch.heatTechBranded;
   if (patch.importFlags !== undefined) row.importFlags = patch.importFlags;
   if (patch.active !== undefined) row.active = patch.active;
+  if (patch.brand !== undefined) row.brand = patch.brand;
+  if (patch.sku !== undefined) row.sku = patch.sku;
   row.updatedAt = new Date();
   return mockToRow(row);
 }

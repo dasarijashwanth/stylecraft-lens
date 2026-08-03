@@ -260,6 +260,19 @@ export interface MockLegacyBrand {
   updatedAt: Date;
 }
 
+// GTM's Manufacturer auto-detect cascade (lib/gtm-tier6-inference.ts) falls
+// back to this admin-editable name-prefix map when a project has no catalog
+// record to read `brand` from directly. See lib/db/brand-name-hints.ts.
+export interface MockBrandNameHint {
+  id: string;
+  brand: string;
+  namePrefixes: string[];
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockMotorFamily {
   id: string;
   familyKey: string;
@@ -385,6 +398,14 @@ export interface MockCatalogProduct {
   active: boolean;
   importFlags: string[];
   source: string;
+  // Section 35/36 (supabase_schema.sql) — GTM's Comparison Chart picker and
+  // Manufacturer auto-detect cascade need these. Optional/nullable so the
+  // 62 existing seed literals below don't all need editing individually —
+  // seedCatalogProductDefaults() backfills brand: "StyleCraft" on push
+  // (every current seed row genuinely IS StyleCraft-sourced), sku stays
+  // null until an admin fills it in (no SKU data exists in the seed source).
+  brand?: string | null;
+  sku?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -552,6 +573,10 @@ class MemoryDatabase {
   // default product-catalog data (21 GTM-forms products + deduped survivors
   // of the old lib/stylecraft-products.ts array), not an empty admin table.
   catalogProducts: MockCatalogProduct[] = [];
+  // Same always-seeded precedent as legacyBrands/motorFamilies above — real
+  // default StyleCraft/Gamma+ name-prefix hints for GTM's Manufacturer
+  // auto-detect cascade, not an empty admin table.
+  brandNameHints: MockBrandNameHint[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
   // Replaces competitorMatchingConfig above — per-tool-type weight profiles.
   // Same always-seeded precedent as motorFamilies/toolTypes.
@@ -593,6 +618,7 @@ class MemoryDatabase {
     this.seedHeatTechFamilyDefaults();
     this.seedBrandedMotorNameDefaults();
     this.seedCatalogProductDefaults();
+    this.seedBrandNameHintDefaults();
     this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
@@ -1068,6 +1094,32 @@ class MemoryDatabase {
         active: true,
         importFlags: d.importFlags,
         source: d.source,
+        brand: "StyleCraft",
+        sku: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 36 brand_name_hints seed INSERT
+  // exactly — real default StyleCraft/Gamma+ name-prefix hints for GTM's
+  // Manufacturer auto-detect cascade (lib/gtm-tier6-inference.ts), used only
+  // when a project has no catalog record to read `brand` from directly.
+  seedBrandNameHintDefaults() {
+    if (this.brandNameHints.length > 0) return;
+    const now = new Date();
+    const defs: { brand: string; namePrefixes: string[] }[] = [
+      { brand: "StyleCraft", namePrefixes: ["Saber", "Anime", "Protege", "Protégé", "Reign", "Rebel", "Rogue", "Instinct", "Ergo", "Solecito", "Rival", "Ace", "Homie", "Schnozzle", "Sage", "Stay-Temp", "Stay Temp"] },
+      { brand: "Gamma+", namePrefixes: ["Absolute", "X-Evo", "XEvo"] },
+    ];
+    defs.forEach((d, i) => {
+      this.brandNameHints.push({
+        id: `bhint_${i}`,
+        brand: d.brand,
+        namePrefixes: d.namePrefixes,
+        enabled: true,
+        sortOrder: i,
         createdAt: now,
         updatedAt: now,
       });

@@ -70,22 +70,26 @@ export function parsePriceToNumber(price: string | null | undefined): number | n
   return isNaN(n) ? null : n;
 }
 
-// Buckets priced rows into 3 groups by ascending price rank. Rows with no
-// resolvable price get `null` (excluded from bucketing, not guessed into a
-// tier); if fewer than 2 rows have a price, tiering isn't meaningful at all
-// and every row gets `null`.
-export function computeTiers(rows: { price_raw: number | null }[]): (PricingTier | null)[] {
+// Buckets plain numeric values into 3 groups by ascending rank — Good/
+// Better/Best tertiles by rank (not a percentile-of-range split). Values of
+// `null` get `null` back (excluded from bucketing, not guessed into a
+// tier); if fewer than 2 values are non-null, tiering isn't meaningful at
+// all and every value gets `null`. Generalized from a price-specific
+// version so lib/gtm-tier6-inference.ts's non-price tertile comparisons
+// (catalog lineup price, competitor RPM) can reuse the same math instead of
+// each duplicating it.
+export function computeTiers(values: (number | null)[]): (PricingTier | null)[] {
   const labels: PricingTier[] = ["Good", "Better", "Best"];
-  const pricedIndexes = rows
-    .map((r, i) => ({ i, price: r.price_raw }))
-    .filter((r): r is { i: number; price: number } => r.price != null)
-    .sort((a, b) => a.price - b.price);
+  const indexed = values
+    .map((v, i) => ({ i, v }))
+    .filter((r): r is { i: number; v: number } => r.v != null)
+    .sort((a, b) => a.v - b.v);
 
-  const result: (PricingTier | null)[] = rows.map(() => null);
-  if (pricedIndexes.length < 2) return result;
+  const result: (PricingTier | null)[] = values.map(() => null);
+  if (indexed.length < 2) return result;
 
-  const n = pricedIndexes.length;
-  pricedIndexes.forEach((row, rank) => {
+  const n = indexed.length;
+  indexed.forEach((row, rank) => {
     const bucket = Math.min(2, Math.floor((rank * 3) / n));
     result[row.i] = labels[bucket];
   });
@@ -196,7 +200,7 @@ export function buildPricingAnalysis(input: BuildPricingAnalysisInput): PricingA
       price_source: resolvePriceSource({ price_raw: c.price_raw ?? parsePriceToNumber(c.price), sources: c.sources ?? undefined }),
     }));
 
-  const tiers = computeTiers(rows);
+  const tiers = computeTiers(rows.map(r => r.price_raw));
   rows.forEach((r, i) => { r.tier = tiers[i]; });
 
   const target = resolveTargetPrice(input.targetPriceCandidates);
