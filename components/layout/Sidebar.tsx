@@ -17,10 +17,7 @@ import {
   Tags,
   Gauge,
   ToggleLeft,
-  Undo2,
   Package,
-  Tag,
-  Layers,
   FileSpreadsheet,
   Mic
 } from "lucide-react";
@@ -57,10 +54,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           { label: "GTM Workbook Templates", href: "/dashboard/admin/gtm-workbook-templates", icon: FileSpreadsheet },
           { label: "Brand Voice Guides", href: "/dashboard/admin/brand-voice", icon: Mic },
           { label: "Legacy Brands", href: "/dashboard/admin/legacy-brands", icon: Tags },
-          { label: "Brand Name Hints", href: "/dashboard/admin/brand-hints", icon: Tag },
-          { label: "Collections", href: "/dashboard/admin/collections", icon: Layers },
           { label: "Competitor Matching", href: "/dashboard/admin/competitor-matching", icon: Gauge },
-          { label: "Competitor Corrections", href: "/dashboard/admin/competitor-corrections", icon: Undo2 },
           { label: "Features", href: "/dashboard/admin/features", icon: ToggleLeft },
         ]
       : []),
