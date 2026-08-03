@@ -84,6 +84,7 @@ export interface NormalizedCatalogRow {
   heatTechBranded: string | null;
   brand: string | null;
   sku: string | null;
+  upc: string | null;
   importFlags: string[];
   source: string;
 }
@@ -156,6 +157,7 @@ export function normalizeImportRow(raw: ParsedImportRow, ctx: CatalogTaxonomyCon
 
   const brand = pick(raw, ["brand", "brand name", "manufacturer"]);
   const sku = pick(raw, ["sku", "sku #", "sku#", "item number", "item #"]);
+  const upc = pick(raw, ["upc", "upc #", "upc#", "gtin"]);
 
   return {
     name,
@@ -170,6 +172,7 @@ export function normalizeImportRow(raw: ParsedImportRow, ctx: CatalogTaxonomyCon
     heatTechBranded,
     brand,
     sku,
+    upc,
     importFlags: Array.from(new Set(flags)),
     source: "spreadsheet_import",
   };
@@ -191,7 +194,7 @@ export interface ImportDiffResult {
 const COMPARABLE_FIELDS: (keyof NormalizedCatalogRow)[] = [
   "industry", "targetMarket", "toolType", "targetPrice", "description",
   "motorFamily", "motorBranded", "heatTechFamily", "heatTechBranded",
-  "brand", "sku",
+  "brand", "sku", "upc",
 ];
 
 // Pure diff — matches by case/whitespace-insensitive name (normalizeProductName),
@@ -224,13 +227,13 @@ export function diffCatalogImport(normalizedRows: NormalizedCatalogRow[], existi
         : f === "heatTechFamily" ? match.heat_tech_family
         : f === "heatTechBranded" ? match.heat_tech_branded
         : (match as any)[f];
-      // brand/sku are newer, optional spreadsheet columns most re-import
+      // brand/sku/upc are newer, optional spreadsheet columns most re-import
       // files won't have yet — a genuinely absent column (parsed as null,
       // same as a blank cell, pick() can't tell the two apart) must never
       // register as "changed to null", or every legacy re-import would
       // spuriously flag every single row the moment these columns existed.
       // Only a real, differing incoming value counts as a change.
-      if (f === "brand" || f === "sku") return newVal != null && newVal !== oldVal;
+      if (f === "brand" || f === "sku" || f === "upc") return newVal != null && newVal !== oldVal;
       return (newVal ?? null) !== (oldVal ?? null);
     });
     if (changedFields.length > 0) changedRows.push({ row, existingId: match.id, changedFields });

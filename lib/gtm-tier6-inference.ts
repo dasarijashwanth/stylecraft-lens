@@ -230,6 +230,38 @@ function isUnresolved(fields: Record<string, GtmFieldAnswer>, id: string): boole
   return !current || current.source === "none" || current.answer.toUpperCase() === "N/A";
 }
 
+function hasRealAnswer(fields: Record<string, GtmFieldAnswer>, id: string): boolean {
+  const answer = fields[id]?.answer;
+  return !!answer && answer.trim() !== "" && answer.toUpperCase() !== "N/A";
+}
+
+// GTM workbook export work — a one-line, comma-separated summary of
+// whichever Included-in-Box fields have real values, matching the official
+// GTM workbook template's own "Included:" row (Product Knowledge row 102)
+// and BOX ONLY's "Includes" row. Prefers whats_in_box_list verbatim when
+// it's already a real, comprehensive answer; otherwise composes a short
+// mention per component field that actually has data — never invents a
+// component the sources didn't confirm.
+export function deriveIncludedSummary(fields: Record<string, GtmFieldAnswer>): DerivedAnswer | null {
+  if (hasRealAnswer(fields, "whats_in_box_list")) {
+    return { answer: fields["whats_in_box_list"].answer, source: "derived" };
+  }
+
+  const parts: string[] = [];
+  if (hasRealAnswer(fields, "charging_cord_color") || hasRealAnswer(fields, "charging_port")) parts.push("charging cord");
+  if (hasRealAnswer(fields, "guards_qty")) parts.push(`${fields["guards_qty"].answer} guards`);
+  else if (hasRealAnswer(fields, "guards_type")) parts.push("guards");
+  if (hasRealAnswer(fields, "lids_qty")) parts.push(`${fields["lids_qty"].answer} lids`);
+  if (hasRealAnswer(fields, "screw_driver_brand") || hasRealAnswer(fields, "screw_driver_color")) parts.push("screwdriver");
+  if (hasRealAnswer(fields, "cleaning_brush_qty")) parts.push("cleaning brush");
+  if (hasRealAnswer(fields, "oil_bottle_qty")) parts.push("oil");
+  if (hasRealAnswer(fields, "extra_screws_qty")) parts.push("extra screws");
+  if (hasRealAnswer(fields, "stretch_bracket_color")) parts.push("stretch bracket");
+
+  if (parts.length === 0) return null;
+  return { answer: parts.join(", "), source: "derived" };
+}
+
 export function applyTier6Inference(
   fields: Record<string, GtmFieldAnswer>,
   schema: { id: string }[],
@@ -295,5 +327,9 @@ export function applyTier6Inference(
       input.comparisonChart.catalogProducts
     );
     if (derived) fields["comparison_chart_web_only"] = derived;
+  }
+  if (schema.some(f => f.id === "included_summary") && isUnresolved(fields, "included_summary")) {
+    const derived = deriveIncludedSummary(fields);
+    if (derived) fields["included_summary"] = derived;
   }
 }

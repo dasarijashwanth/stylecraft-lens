@@ -25,6 +25,7 @@ import { matchesDifferentiator } from "./differentiator-match";
 import type { CompetitorSpecSource } from "./gtm-tier6-inference";
 import type { GtmSources } from "./gtm-generate";
 import { findCollectionByName } from "./db/collections";
+import { getToneDirective } from "./brand-voice";
 
 export type FeatureBulletSource = "input" | "our_listing" | "competitor_informed" | "unconfirmed";
 export interface FeatureBullet {
@@ -129,7 +130,8 @@ async function topUpFeaturesWithCompetitors(
   productName: string,
   existingBullets: FeatureBullet[],
   ourSpecs: FeatureComparable,
-  competitors: CompetitorSpecSource[]
+  competitors: CompetitorSpecSource[],
+  voiceBlock: string
 ): Promise<FeatureBullet[]> {
   if (existingBullets.length >= FEATURE_TARGET_COUNT || competitors.length === 0) return [];
 
@@ -150,7 +152,7 @@ Rules:
 - If NOT confirmed by our specs, phrase it plainly as the feature itself (do not add any prefix yourself) and set confirmed: false.
 - Never invent a spec value we don't have. Never state an unconfirmed feature as settled fact.
 
-Return ONLY valid JSON: { "bullets": [{ "text": "...", "confirmed": true|false }] }`;
+Return ONLY valid JSON: { "bullets": [{ "text": "...", "confirmed": true|false }] }${voiceBlock}\n${getToneDirective("launch")}`;
 
   const userContent = `OUR CONFIRMED SPECS: ${JSON.stringify(ourSpecs)}
 ALREADY LISTED (do not repeat): ${existingBullets.map(b => b.text).join("; ") || "(none)"}
@@ -173,13 +175,13 @@ ${competitorFeatureText}`;
 // Returns the merged bullet list (deterministic floor + AI competitor
 // top-up when still short), capped at the group's row count — the caller
 // (applyFeaturesAndExpertTip) writes one bullet per row.
-export async function deriveFeaturesFullList(sources: GtmSources): Promise<FeatureBullet[]> {
+export async function deriveFeaturesFullList(sources: GtmSources, voiceBlock: string = ""): Promise<FeatureBullet[]> {
   const floor = deriveFeaturesFullListDeterministic(sources.project.description, sources.tds);
   const ca = sources.activeReport?.competitive_analysis || {};
   const competitors: CompetitorSpecSource[] = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])];
   const ourSpecs = extractOurSpecsFromTds(sources.tds);
 
-  const topUp = await topUpFeaturesWithCompetitors(sources.project.productName, floor, ourSpecs, competitors);
+  const topUp = await topUpFeaturesWithCompetitors(sources.project.productName, floor, ourSpecs, competitors, voiceBlock);
   return [...floor, ...topUp].slice(0, FEATURES_FULL_LIST_GROUP_SIZE);
 }
 
@@ -190,7 +192,7 @@ export async function deriveFeaturesFullList(sources: GtmSources): Promise<Featu
 // reuses lib/differentiator-match.ts's matchesDifferentiator token-overlap
 // check rather than a new implementation, treating the referenced feature
 // text as the "differentiator" the tip must genuinely be about.
-async function generateExpertTip(productName: string, confirmedFeatureLines: string[]): Promise<string | null> {
+async function generateExpertTip(productName: string, confirmedFeatureLines: string[], voiceBlock: string): Promise<string | null> {
   if (confirmedFeatureLines.length === 0) return null;
   const topFeatures = confirmedFeatureLines.slice(0, 3);
 
@@ -198,7 +200,7 @@ async function generateExpertTip(productName: string, confirmedFeatureLines: str
 
 The tip MUST reference a real feature from that list and give actionable technique advice a professional would use. No invented capabilities — only use what's in the confirmed features above.
 
-Return ONLY valid JSON: { "tip": "..." }`;
+Return ONLY valid JSON: { "tip": "..." }${voiceBlock}\n${getToneDirective("education")}`;
 
   const raw = await callAiForJson<{ tip?: string }>(systemInstruction, `Confirmed features: ${topFeatures.join("; ")}`, "GTM-ExpertTip", { timeoutMs: 20_000 });
   const tip = raw?.tip?.trim();
@@ -240,7 +242,8 @@ async function adaptCollectionKernelField(
   fieldId: string,
   productName: string,
   collectionName: string,
-  kernel: { narrative_kernel: string; logo_meaning: string; voice_notes: string }
+  kernel: { narrative_kernel: string; logo_meaning: string; voice_notes: string },
+  voiceBlock: string
 ): Promise<string | null> {
   const askedFor =
     fieldId === "product_name_origin"
@@ -256,7 +259,7 @@ Voice: ${kernel.voice_notes}
 
 Write 2-4 sentences answering: ${askedFor}. ADAPT the kernel above to THIS specific product (name-check ${productName} and, if the kernel mentions sibling products, place this one naturally among them) — do not invent a different, unrelated story, and do not copy the kernel's sentences verbatim. Match the collection's voice.
 
-Return ONLY valid JSON: { "text": "..." }`;
+Return ONLY valid JSON: { "text": "..." }${voiceBlock}\n${getToneDirective("product_detail")}\n(The collection's own voice notes above are a narrower flavor within this brand voice — follow both; the collection notes never override the brand's hard rules.)`;
 
   const raw = await callAiForJson<{ text?: string }>(systemInstruction, `Product: ${productName}\nCollection: ${collectionName}`, "GTM-CollectionKernel", { timeoutMs: 20_000 });
   const text = raw?.text?.trim();
@@ -267,7 +270,8 @@ export async function applyCollectionKernelAdaptation(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
   productName: string,
-  collection: string | null | undefined
+  collection: string | null | undefined,
+  voiceBlock: string = ""
 ): Promise<void> {
   if (!collection) return;
   const kernelRow = await findCollectionByName(collection);
@@ -275,7 +279,7 @@ export async function applyCollectionKernelAdaptation(
 
   for (const fieldId of COLLECTION_KERNEL_FIELD_IDS) {
     if (!schema.some(f => f.id === fieldId) || !isUnresolved(fields, fieldId)) continue;
-    const text = await adaptCollectionKernelField(fieldId, productName, kernelRow.name, kernelRow);
+    const text = await adaptCollectionKernelField(fieldId, productName, kernelRow.name, kernelRow, voiceBlock);
     if (text) {
       fields[fieldId] = {
         answer: text,
@@ -296,10 +300,10 @@ export async function applyCollectionKernelAdaptation(
 // touches `answer` — the select stays exactly "Both". Uses the same
 // FieldAnswerLike.notes -> saveDocumentFields plumbing as everything else
 // in Part D/E, so an existing human Notes value is never overwritten.
-async function generateCoreConsumerBothNote(productName: string): Promise<string | null> {
+async function generateCoreConsumerBothNote(productName: string, voiceBlock: string): Promise<string | null> {
   const systemInstruction = `"${productName}"'s Core Consumer is "Both" — it's sold to Pro and Retail buyers alike. Write ONE sentence giving the reason/direction for targeting both audiences with this specific product (e.g. its price point, use case, or positioning that makes it work for both).
 
-Return ONLY valid JSON: { "note": "..." }`;
+Return ONLY valid JSON: { "note": "..." }${voiceBlock}\n${getToneDirective("product_detail")}`;
   const raw = await callAiForJson<{ note?: string }>(systemInstruction, `Product: ${productName}`, "GTM-CoreConsumerBothNote", { timeoutMs: 15_000 });
   const note = raw?.note?.trim();
   return note && note.toUpperCase() !== "N/A" ? note : null;
@@ -308,12 +312,13 @@ Return ONLY valid JSON: { "note": "..." }`;
 export async function applyCoreConsumerBothNote(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
-  productName: string
+  productName: string,
+  voiceBlock: string = ""
 ): Promise<void> {
   if (!schema.some(f => f.id === "core_consumer")) return;
   const current = fields["core_consumer"];
   if (!current || current.answer !== "Both" || current.notes) return;
-  const note = await generateCoreConsumerBothNote(productName);
+  const note = await generateCoreConsumerBothNote(productName, voiceBlock);
   if (note) fields["core_consumer"] = { ...current, notes: note };
 }
 
@@ -322,13 +327,14 @@ export async function applyFeaturesAndExpertTip(
   schema: GtmField[],
   sources: GtmSources,
   productName: string,
-  pipelineStart: number
+  pipelineStart: number,
+  voiceBlock: string = ""
 ): Promise<void> {
   // Features (full list) is a 10-row group — gate on row 1 as the
   // representative "still needs deriving" check, same as any other field.
   const wantsFeatures = schema.some(f => f.id === "features_full_list_1") && isUnresolved(fields, "features_full_list_1");
   if (wantsFeatures) {
-    const bullets = await deriveFeaturesFullList(sources);
+    const bullets = await deriveFeaturesFullList(sources, voiceBlock);
     bullets.forEach((bullet, i) => {
       fields[`features_full_list_${i + 1}`] = {
         answer: renderFeatureRowAnswer(bullet),
@@ -357,7 +363,7 @@ export async function applyFeaturesAndExpertTip(
   }
   if (confirmedFeatureLines.length === 0) return;
 
-  const tip = await generateExpertTip(productName, confirmedFeatureLines);
+  const tip = await generateExpertTip(productName, confirmedFeatureLines, voiceBlock);
   if (!tip) return;
 
   if (isGroundedInFeatures(tip, confirmedFeatureLines)) {
@@ -368,7 +374,7 @@ export async function applyFeaturesAndExpertTip(
   // One retry with a stricter, more explicit prompt before giving up —
   // same single-retry discipline as guardWrittenFieldsQuality's written-
   // field quality guard in lib/gtm-generate.ts.
-  const retryTip = await generateExpertTip(productName, confirmedFeatureLines.slice(0, 1));
+  const retryTip = await generateExpertTip(productName, confirmedFeatureLines.slice(0, 1), voiceBlock);
   if (retryTip && isGroundedInFeatures(retryTip, confirmedFeatureLines)) {
     fields["expert_tip"] = { answer: retryTip, source: "derived", sourceDetail: { label: "Generated from key features" } };
   }

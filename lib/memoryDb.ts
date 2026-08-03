@@ -144,6 +144,10 @@ export interface MockDocument {
   driveUrl?: string | null;
   driveFileId?: string | null;
   snapshotId?: string | null;
+  // Brand Voice Guide work — which guide version was active at generation
+  // time, see lib/db/documents.ts's setDocumentVoiceGuide.
+  voiceGuideId?: string | null;
+  voiceGuideVersion?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -217,6 +221,37 @@ export interface MockDeckTemplate {
   isActive: boolean;
   uploadedBy: string | null;
   uploadedAt: Date;
+  updatedAt: Date;
+}
+
+// Direct clone of MockDeckTemplate for the official GTM workbook export
+// feature (lib/db/gtm-workbook-templates.ts) — same base64-fallback
+// precedent.
+export interface MockGtmWorkbookTemplate {
+  id: string;
+  name: string;
+  fileBase64: string;
+  fileName: string | null;
+  fileSizeBytes: number | null;
+  sheetSummary: any; // GtmWorkbookSheetSummary, see lib/db/gtm-workbook-templates.ts
+  isActive: boolean;
+  uploadedBy: string | null;
+  uploadedAt: Date;
+  updatedAt: Date;
+}
+
+// Brand Voice Guide work — versioned, brand-scoped voice/tone/terminology
+// guide (lib/db/brand-voice-guides.ts). A new edit is a new row (version =
+// previous max for that brand + 1); isActive is scoped per-brand, not
+// globally.
+export interface MockBrandVoiceGuide {
+  id: string;
+  brand: string;
+  content: string;
+  version: number;
+  isActive: boolean;
+  createdBy: string | null;
+  createdAt: Date;
   updatedAt: Date;
 }
 
@@ -428,6 +463,9 @@ export interface MockCatalogProduct {
   productKind?: string;
   parentSku?: string | null;
   collection?: string | null;
+  // GTM workbook export work — BOX ONLY's UPC row; stays null until an
+  // admin/import sets it.
+  upc?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -562,6 +600,10 @@ class MemoryDatabase {
   // Same non-persisted-across-restart precedent as productSnapshots above —
   // fine at dev scale, Supabase is the real store in production.
   deckTemplates: MockDeckTemplate[] = [];
+  gtmWorkbookTemplates: MockGtmWorkbookTemplate[] = [];
+  // Same always-seeded precedent as collections/brandNameHints — real
+  // default StyleCraft voice guide content, not an empty admin table.
+  brandVoiceGuides: MockBrandVoiceGuide[] = [];
   projectDecks: MockProjectDeck[] = [];
   // Unlike deckTemplates/projectDecks (an empty admin-fills-it-in feature),
   // this registry must be non-empty in local dev without Supabase too —
@@ -645,6 +687,7 @@ class MemoryDatabase {
     this.seedCatalogProductDefaults();
     this.seedBrandNameHintDefaults();
     this.seedCollectionDefaults();
+    this.seedBrandVoiceGuideDefaults();
     this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
@@ -1186,6 +1229,131 @@ class MemoryDatabase {
         createdAt: now,
         updatedAt: now,
       });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 42 brand_voice_guides seed INSERT
+  // exactly — the real StyleCraftUS Brand Voice Guide, verbatim. No Gamma+
+  // row is seeded — its absence is the "no brand voice guide on file"
+  // signal lib/brand-voice.ts falls back on.
+  seedBrandVoiceGuideDefaults() {
+    if (this.brandVoiceGuides.length > 0) return;
+    const now = new Date();
+    const content = `# StyleCraftUS Brand Voice Guide
+
+*Derived from analysis of stylecraftus.com (homepage, About Us / Our Story, collection and product copy) — July 2026*
+
+---
+
+## 1. Brand Personality
+
+If StyleCraft were a person, they'd be a master barber who came up through the industry, knows every motor spec by heart, and treats their clients like family. Confident bordering on cocky about the tools, but genuinely warm with people. They talk like a peer in the shop, not a corporation — they'd say "the Fam" without irony, hype a "new drop" like a sneaker release, and then patiently walk you through a warranty claim.
+
+**In one line:** A pro-grade challenger brand with streetwear energy and family-business heart.
+
+## 2. Voice Attributes
+
+### Bold & Competitive
+- **We are:** Confident, declarative, unafraid of big statements. We name products after winners and fighters (Saber, Rebel, Rogue, Reign, Ace, Instinct) and write taglines like commands: "Conquer Every Style." "Do Whatever It Takes."
+- **We are not:** Arrogant toward the customer, or dismissive of competitors by name. The swagger is about the tools, never at anyone's expense.
+- **Sounds like:** "Unmatched. Unstoppable. Intuitive."
+- **Does NOT sound like:** "We think you might enjoy our clipper, which compares favorably to leading brands."
+
+### Tech-Credible
+- **We are:** Specific about engineering. We lead with named technology — EON Digital Brushless Motor, IN2 Vector Motor, Super C4RBN, Stay-Temp — and concrete benefits (high torque, low vibration, full metal body). Specs are part of the swagger.
+- **We are not:** Jargon for jargon's sake. Every spec ties to what it does in the pro's hand: faster cuts, cooler blades, longer sessions.
+- **Sounds like:** "High energy, low vibration."
+- **Does NOT sound like:** Vague fluff like "cutting-edge quality you can trust."
+
+### Community-First ("The Fam")
+- **We are:** Warm, loyal, reciprocal. We talk about barbers and stylists as family and collaborators, not customers. We celebrate their work and their following, not just our products. "It's a 2-way street."
+- **We are not:** Corporate-friendly-by-committee, or transactional. We never fake intimacy with generic "valued customer" language.
+- **Sounds like:** "If you are not happy, we are not happy."
+- **Does NOT sound like:** "We appreciate your business and strive for customer satisfaction."
+
+### Street-Culture Fluent
+- **We are:** Plugged into barber culture — drops, collabs (S|C x 360 Jeezy), edgy colorways, metallic finishes. Product launches read like sneaker releases: "NEW DROPS."
+- **We are not:** Trend-chasing or trying too hard. The culture references come from being *in* the community, not marketing to it.
+- **Sounds like:** "Embrace the unconventional: Go Rogue!"
+- **Does NOT sound like:** Forced slang or memes disconnected from barbering.
+
+### Craft-Proud & Family-Built
+- **We are:** A family-owned, US-based company with 50+ years of combined industry experience. We invoke the founder story (Ken & Austin Russo), craftsmanship, and "the art & science of styling."
+- **We are not:** Nostalgic or old-fashioned. Heritage backs up innovation; it doesn't replace it.
+- **Sounds like:** "The Art & Science of Styling."
+- **Does NOT sound like:** "Old-world tradition since days gone by."
+
+## 3. Audience
+
+**Primary:** Professional barbers and stylists — people who cut hair for a living, care about torque, blade quality, and battery life, and see their tools as an extension of their craft and personal brand. They expect to be addressed as peers and pros.
+
+**Secondary:** Prosumers and home users who aspire to pro-grade results and buy into the culture (the Ace and Homie lines, brushes, dryers).
+
+They care about: performance under daily use, standing out (finishes, colorways), education and skill growth, and being part of a community that respects the craft.
+
+## 4. Core Messaging Pillars
+
+1. **Pro-grade innovation** — Named motor technology and engineering that rivals the biggest players. Every product claim anchors to a spec or design feature.
+2. **Built by and for the craft** — Family-owned, 50+ years of industry expertise, tools designed with working barbers and stylists.
+3. **The Fam** — A loyal, two-way community. We elevate our pros' craft and their following, and they carry the brand.
+4. **Edgy design that stands out** — Bold colorways, metallic finishes, collabs. The tool on your station says something about you.
+5. **Service that has your back** — Trained, genuinely helpful support; happiness guaranteed in spirit: "If you are not happy, we are not happy."
+
+## 5. Tone Spectrum (voice stays fixed, tone flexes)
+
+| Context | Dial up | Dial down | Example register |
+|---|---|---|---|
+| Product launches / drops | Boldness, hype, culture | Warmth | "NEW DROP. Conquer every style." |
+| Product detail pages | Tech credibility | Slang | Specs first, benefit-driven, still punchy |
+| Education / tutorials | Craft pride, clarity | Hype | Peer-to-peer teaching, step-by-step |
+| Customer service / support | Warmth, patience | Swagger | Plain, friendly, human — no attitude |
+| Corporate / press / About | Heritage, credibility | Street slang | Confident but polished; founder story |
+| Social media | Community, playfulness | Formality | Fam language, collabs, celebrating pros' work |
+
+## 6. Style Rules (observed & recommended)
+
+- **Taglines:** Short imperative or fragment constructions, often stacked one-word sentences ("Unmatched. Unstoppable. Intuitive."). ALL CAPS acceptable in headlines/banners only, never body copy.
+- **Contractions:** Use them ("we've got the answers") — the voice is conversational.
+- **Exclamation marks:** Sparingly; reserve for launch/hype moments ("Go Rogue!"), max one per piece.
+- **Body copy:** Warm, first-person plural ("we," "our"), direct address ("you," "your craft").
+- **Product naming convention:** [Collection Name] + [Product Type] + "with" + [Named Technology] (e.g., "Reign Professional Hair Clipper with EON Digital Brushless Motor"). Keep this structure consistent.
+
+## 7. Terminology
+
+**Preferred terms**
+| Use | Notes |
+|---|---|
+| StyleCraft / StyleCraftUS / S\\|C | S\\|C shorthand for logos, collabs, sub-brands (S\\|C Educators, S\\|C x 360 Jeezy) |
+| the Fam | Community/social contexts only, not corporate copy |
+| pros, barbers, stylists | Never "users" or "consumers" in community-facing copy |
+| drop / new drop | For product launches on social and homepage |
+| tools | Preferred over "devices" or "appliances" (except corporate/press: "hair appliances" is acceptable) |
+| Named tech in full on first use | "EON Digital Brushless Motor," "IN2 Vector Motor," "Super C4RBN," "Stay-Temp Technology" |
+
+**Avoid**
+- Generic praise without a spec behind it ("high quality," "great performance" standing alone)
+- Corporate distance ("valued customers," "our organization")
+- Talking down to home users — they're aspiring pros, not amateurs
+
+## 8. Watch-outs (flagged during audit)
+
+- **Unsubstantiated superlatives:** Lines like "one of the fastest growing beauty and grooming tool companies since the industrial revolution" and "rivaling billion-dollar companies" are on-voice in their boldness but legally soft. Recommend qualifying with a source (e.g., Inc. 500 recognition, which the site already displays) or softening in formal/press contexts.
+- **Voice drift between sections:** Corporate copy occasionally slips into run-on, less polished sentences ("Join the revolution and experience."). Keep the bold-but-polished standard everywhere.
+- **Consistency of S|C vs. SC vs. SIC:** Product listings show variants ("SIC Pro" mat). Standardize on S|C.
+
+---
+
+*Use this guide with content reviews: check any new copy against the five voice attributes, the tone spectrum for its channel, and the terminology table.*
+`;
+    this.brandVoiceGuides.push({
+      id: "bvg_0",
+      brand: "StyleCraft",
+      content,
+      version: 1,
+      isActive: true,
+      createdBy: null,
+      createdAt: now,
+      updatedAt: now,
     });
   }
 

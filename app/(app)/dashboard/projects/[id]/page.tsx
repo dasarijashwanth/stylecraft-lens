@@ -36,7 +36,7 @@ import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
-import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS, visibleGtmSchema } from "@/lib/gtm-field-schema";
 import { ComparisonChartPicker, type ComparisonChartSlot } from "@/components/analyze/ComparisonChartPicker";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
 import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillReport } from "@/lib/field-answer-state";
@@ -1267,6 +1267,9 @@ const GTM_GROUP_LABELS: Record<string, string> = {
   cross_sell: "Cross Sell Products",
   top_6_features: "Top 6 Features in Priority Order",
   feature_icons: "6 Icons for the Features",
+  faq_question: "FAQ Questions",
+  faq_answer: "FAQ Answers",
+  box_feature: "Box Features (6 Max)",
 };
 
 const isFieldComplete = isRealAnswer;
@@ -1320,6 +1323,8 @@ function formatFillReport(report: FillReport | null): string | null {
   const parts = Object.entries(grouped).map(([label, count]) => `${count} ${label}`);
   if (report.awaitingInternalInput > 0) parts.push(`${report.awaitingInternalInput} awaiting internal input`);
   if (report.notDeterminable > 0) parts.push(`${report.notDeterminable} not determinable`);
+  if (report.voiceAdjusted > 0) parts.push(`${report.voiceAdjusted} auto-adjusted for voice`);
+  if (report.voiceFlagged > 0) parts.push(`${report.voiceFlagged} flagged for voice review`);
   return parts.length ? parts.join(" · ") : null;
 }
 
@@ -1395,7 +1400,11 @@ function ProductKnowledgeSection({
     // to depend only on projectId.
   }, [projectId, pipelineStatus]);
 
-  const completedCount = GTM_FIELD_SCHEMA.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
+  // Excludes empty legacyOptional fields (e.g. Axis Shield when a product
+  // has none) from both the completion count and its denominator, so a
+  // product without those parts never shows as permanently incomplete.
+  const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, fields);
+  const completedCount = visibleSchema.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
 
   function handleFieldChange(fieldId: string, value: string) {
     setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], answer: value } }));
@@ -1612,7 +1621,7 @@ function ProductKnowledgeSection({
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Product Knowledge</span>
           {hasDocument && (
             <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
-              {completedCount}/{GTM_FIELD_SCHEMA.length} fields completed
+              {completedCount}/{visibleSchema.length} fields completed
             </span>
           )}
           {hasDocument && formatFillReport(fillReport) && (
@@ -1636,7 +1645,7 @@ function ProductKnowledgeSection({
         </div>
         {hasDocument && (
           <div className="flex items-center gap-2">
-            {completedCount < GTM_FIELD_SCHEMA.length && (
+            {completedCount < visibleSchema.length && (
               <button
                 type="button"
                 onClick={handleFillRemaining}
@@ -1654,6 +1663,14 @@ function ProductKnowledgeSection({
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download CSV</span>
+            </a>
+            <a
+              href={`/api/documents/gtm/${documentId}/export-xlsx`}
+              title="Official 12-tab GTM workbook — Product Knowledge, BOX ONLY, and Product FAQ filled; every other tab untouched"
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download XLSX</span>
             </a>
           </div>
         )}
@@ -1677,7 +1694,7 @@ function ProductKnowledgeSection({
             <div key={section} className="p-4 space-y-3">
               <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{section}</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
-                {GTM_FIELD_SCHEMA.filter(f => f.section === section).map(f => {
+                {visibleSchema.filter(f => f.section === section).map(f => {
                   const entry = fields[f.id];
                   const complete = isFieldComplete(entry?.answer);
                   const status = fieldStatus[f.id] || "idle";

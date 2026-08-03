@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { getProjectReports } from "@/lib/db/reports";
-import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsFieldsForProject } from "@/lib/db/documents";
+import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsFieldsForProject, setDocumentVoiceGuide } from "@/lib/db/documents";
 import { getLatestOutput } from "@/lib/project-outputs";
-import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, visibleGtmSchema } from "@/lib/gtm-field-schema";
 import { generateAllFields, GtmSources } from "@/lib/gtm-generate";
 import { isRealAnswer } from "@/lib/field-answer-state";
+import { resolveBrandForProduct, getActiveVoiceGuide } from "@/lib/brand-voice";
 
 export const maxDuration = 60;
 
@@ -62,11 +63,21 @@ export async function POST(req: NextRequest) {
     const document = await getOrCreateDocument(projectId, "gtm");
     await saveDocumentFields(document.id, GTM_FIELD_SCHEMA, fields, session.userId);
 
+    // Records which brand voice guide version this generation actually
+    // used (lib/brand-voice.ts) — cached, so this doesn't repeat the DB
+    // fetch generateAllFields already made internally.
+    const brand = await resolveBrandForProduct(project.productName);
+    const voiceGuide = await getActiveVoiceGuide(brand);
+    await setDocumentVoiceGuide(document.id, voiceGuide.id, voiceGuide.version);
+
     const savedFields = await getDocumentFields(document.id);
+    const byId: Record<string, { answer?: string | null }> = {};
+    for (const f of savedFields) byId[f.field_id] = { answer: f.answer };
+    const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, byId);
     const completedCount = savedFields.filter(f => isRealAnswer(f.answer)).length;
 
     return NextResponse.json({
-      document: { ...document, completedCount, totalFields: GTM_FIELD_SCHEMA.length },
+      document: { ...document, completedCount, totalFields: visibleSchema.length },
       fields: savedFields,
     });
   } catch (err: any) {

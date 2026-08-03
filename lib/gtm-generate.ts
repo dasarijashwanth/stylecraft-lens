@@ -26,6 +26,8 @@ import { meetsElaborationBar } from "./gtm-elaboration";
 import { GENERIC_EXEMPLARS } from "./gtm-reference-exemplars";
 import { hasCapsLead } from "./gtm-format-checks";
 import { renderStyleExemplarBlock, GTM_STYLE_EXEMPLARS } from "./gtm-style-exemplars";
+import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock, buildToneDirectivesForFields, getToneForGtmField } from "./brand-voice";
+import { applyDeterministicFixes, findDeterministicViolations } from "./brand-voice-lint";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
 import { listToolTypes } from "./db/tool-types";
 import { listCatalogProducts } from "./db/catalog-products";
@@ -35,6 +37,7 @@ import { extractOurSpecsFromTds } from "./spec-extraction";
 import { parsePriceToNumber } from "./pricing-analysis";
 import { applyFeaturesAndExpertTip, applyCollectionKernelAdaptation, applyCoreConsumerBothNote } from "./gtm-features-and-tip";
 import { applyDeterministicNotesConventions } from "./gtm-notes-conventions";
+import { applyBoxOnlyDerivation } from "./gtm-box-only";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
 // Confirmed live that a 45s/45s split here still produced a hard 504 (the
@@ -115,7 +118,7 @@ const HEAT_TECH_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "
 // contents (a real judgment call, not a blanket rule — confirmed by
 // research finding no accessory-specific precedent that would justify
 // excluding these two).
-const LIDS_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Lids").map(f => f.id);
+const LIDS_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Lids / Customizable Parts").map(f => f.id);
 const LEVER_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Lever").map(f => f.id);
 const GUARDS_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Guards").map(f => f.id);
 const CHARGING_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Charging").map(f => f.id);
@@ -152,10 +155,13 @@ export function structurallyInapplicableFieldIds(primaryCriterion: string | null
 // (lib/our-product-position.ts's matchCatalogProductByName). A project with
 // no catalog link (ad-hoc/manual entry) resolves both to null, which is
 // exactly today's behavior everywhere that reads them.
-async function resolveCatalogProductKind(sources: GtmSources): Promise<{ productKind: string | null; collection: string | null }> {
+async function resolveCatalogProductKind(sources: GtmSources): Promise<{ productKind: string | null; collection: string | null; brand: string }> {
   const catalogProducts = await listCatalogProducts();
   const matched = matchCatalogProductByName(sources.project.productName, catalogProducts);
-  return { productKind: matched?.product_kind ?? null, collection: matched?.collection ?? null };
+  // Brand Voice Guide work — reuses this SAME catalog match (no extra
+  // fetch) rather than calling resolveBrandForProduct separately, which
+  // would re-fetch listCatalogProducts() a second time.
+  return { productKind: matched?.product_kind ?? null, collection: matched?.collection ?? null, brand: matched?.brand || "StyleCraft" };
 }
 
 // Text blob for lib/gtm-tier6-inference.ts's keyword-based hair_type
@@ -206,7 +212,7 @@ async function buildTier6ExtraInputs(sources: GtmSources, toolTypes: { type_key:
   };
 }
 
-function buildSystemInstruction(productName: string, schema: GtmField[]) {
+function buildSystemInstruction(productName: string, schema: GtmField[], voiceBlock: string = "") {
   const fieldList = schema
     .map(f => `- ${f.id} [${f.section}] (${f.kind === "grounded" ? "HARD-GROUNDED" : "WRITTEN"}): ${f.question}`)
     .join("\n");
@@ -216,6 +222,15 @@ function buildSystemInstruction(productName: string, schema: GtmField[]) {
   // grounded/spec chunks (dimensions, packaging, etc.) don't pay the token
   // cost of a corpus they have no use for.
   const styleExemplarBlock = renderStyleExemplarBlock(schema.map(f => f.group?.id || f.id));
+
+  // Brand Voice Guide (lib/brand-voice.ts) — same cost-gating discipline as
+  // the style exemplar block above: only attached when the chunk has at
+  // least one WRITTEN field (a pure spec/dimensions chunk has no voice of
+  // its own to match). `voiceBlock` is pre-built by the caller (an async
+  // DB fetch + regex condense, done once per generation run, not per
+  // chunk) — this function stays synchronous.
+  const hasWrittenField = schema.some(f => f.kind === "written");
+  const voiceSection = hasWrittenField && voiceBlock ? voiceBlock + buildToneDirectivesForFields(schema) : "";
 
   return `You are generating a Go-To-Market Product Knowledge sheet for ONE specific product: ${productName}. Write it like a real product marketing team would — detailed and structured, never one-word or generic.
 
@@ -246,7 +261,7 @@ ${fieldList}
 Return ONLY valid JSON — no markdown, no explanation — keyed by field id:
 { "<field_id>": { "answer": "...", "source": "project_record" | "competitive_analysis" | "tds" | "sales_kit" | "web" | "multiple" | "none" } }
 
-If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.${styleExemplarBlock}`;
+If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.${styleExemplarBlock}${voiceSection}`;
 }
 
 function buildUserContent(sourceTexts: SourceTexts) {
@@ -294,12 +309,12 @@ function callAi(systemInstruction: string, userContent: string, opts?: { timeout
 // any one of them needs more time than it's given.
 const FIELDS_PER_CHUNK = 4;
 
-async function callAiPerSection(productName: string, schema: GtmField[], userContent: string, projectId: string): Promise<Record<string, { answer: string; source: string }> | null> {
+async function callAiPerSection(productName: string, schema: GtmField[], userContent: string, projectId: string, voiceBlock: string = ""): Promise<Record<string, { answer: string; source: string }> | null> {
   const chunks: GtmField[][] = [];
   for (let i = 0; i < schema.length; i += FIELDS_PER_CHUNK) chunks.push(schema.slice(i, i + FIELDS_PER_CHUNK));
 
   const results = await Promise.all(
-    chunks.map(fields => callAi(buildSystemInstruction(productName, fields), userContent, { maxToolCalls: 3, projectId }))
+    chunks.map(fields => callAi(buildSystemInstruction(productName, fields, voiceBlock), userContent, { maxToolCalls: 3, projectId }))
   );
 
   const merged: Record<string, { answer: string; source: string }> = {};
@@ -366,9 +381,18 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // category defaults) ever revisits these fields; see
   // structurallyInapplicableFieldIds above.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
-  const { productKind, collection } = await resolveCatalogProductKind(sources);
+  const { productKind, collection, brand } = await resolveCatalogProductKind(sources);
   const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion, productKind);
   const pipelineSchema = schema.filter(f => !structuralNaIds.has(f.id));
+
+  // Brand Voice Guide — resolved once per generation run (not once per
+  // chunk), so every chunk's system instruction reuses the same
+  // already-fetched, already-condensed block. voiceGuide's id/version is
+  // returned to the caller so the document row can record which guide
+  // version it was actually written against (documents.voice_guide_id/
+  // voice_guide_version — see lib/db/documents.ts).
+  const voiceGuide = await getActiveVoiceGuide(brand);
+  const voiceBlock = buildVoiceBlock(voiceGuide);
 
   // "internal"-kind fields (dieline, approved pricing, etc.) are never
   // asked of the AI — nothing about a packaging/pricing DECISION is
@@ -376,7 +400,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // mergeField below via the FULL schema, so the deterministic `derived`
   // floor (tiers 1-4) can still populate them from real TDS/project data.
   const aiEligibleSchema = pipelineSchema.filter(f => f.kind !== "internal");
-  const aiRaw = await callAiPerSection(productName, aiEligibleSchema, userContent, projectId);
+  const aiRaw = await callAiPerSection(productName, aiEligibleSchema, userContent, projectId, voiceBlock);
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   const merged: Record<string, GtmFieldAnswer> = {};
@@ -431,9 +455,10 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // from the now-resolved Features. Runs after Tier 6 (manufacturer/lineup/
   // performance already settled) so Expert Tip's grounding has a real,
   // resolved feature list to reference — see lib/gtm-features-and-tip.ts.
-  await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart);
-  await applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection);
-  await applyCoreConsumerBothNote(grounded, pipelineSchema, productName);
+  await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock);
+  await applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock);
+  await applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock);
+  await applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock);
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
@@ -442,7 +467,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // typical guess layered on top of its already-final "N/A".
   applyCategoryDefaults(grounded, pipelineSchema, sources.project.category);
 
-  await guardWrittenFieldsQuality(grounded, pipelineSchema, sources, productName, projectId, pipelineStart);
+  await guardWrittenFieldsQuality(grounded, pipelineSchema, sources, productName, projectId, pipelineStart, voiceBlock);
 
   // Part E — deterministic Notes conventions (No lever./No guards.,
   // assembled-on-unit qty phrasing). Runs last, after every AI/web/derived
@@ -471,10 +496,11 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // real answer, so a regenerate of one of these skips AI/web entirely,
   // same as the full-document pipeline. See structurallyInapplicableFieldIds.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
-  const { productKind, collection } = await resolveCatalogProductKind(sources);
+  const { productKind, collection, brand } = await resolveCatalogProductKind(sources);
   if (structurallyInapplicableFieldIds(primaryCriterion, productKind).has(fieldId)) {
     return { answer: "N/A", source: "none" };
   }
+  const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
 
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
@@ -493,7 +519,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   }
 
   const sourceTexts = buildSourceTexts(sources);
-  const systemInstruction = buildSystemInstruction(productName, [schemaField]);
+  const systemInstruction = buildSystemInstruction(productName, [schemaField], voiceBlock);
   const userContent = buildUserContent(sourceTexts);
 
   // A single field needs far less search than the full 77-field sweep —
@@ -516,13 +542,14 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     hairTypeSourceText: buildHairTypeSourceText(sources),
     ...tier6Extra,
   });
-  await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now());
-  await applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection);
-  await applyCoreConsumerBothNote(guarded, [schemaField], productName);
+  await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock);
+  await applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection, voiceBlock);
+  await applyCoreConsumerBothNote(guarded, [schemaField], productName, voiceBlock);
+  await applyBoxOnlyDerivation(guarded, [schemaField], productName, voiceBlock);
   applyCategoryDefaults(guarded, [schemaField], sources.project.category);
 
   if (schemaField.kind === "written") {
-    await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now());
+    await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now(), voiceBlock);
   }
 
   applyDeterministicNotesConventions(guarded, [schemaField], sources, productKind);
@@ -586,7 +613,8 @@ async function guardWrittenFieldsQuality(
   sources: GtmSources,
   productName: string,
   projectId: string,
-  pipelineStart: number
+  pipelineStart: number,
+  voiceBlock: string = ""
 ) {
   const writtenFields = schema.filter(f => f.kind === "written");
   if (writtenFields.length === 0) return;
@@ -598,7 +626,7 @@ async function guardWrittenFieldsQuality(
     .filter(Boolean)
     .map(v => String(v));
 
-  type Reason = { kind: "boilerplate" | "shallow" | "generic" | "unformatted" | "exemplar_copy"; detail?: string };
+  type Reason = { kind: "boilerplate" | "shallow" | "generic" | "unformatted" | "exemplar_copy" | "voice_violation"; detail?: string };
   const retryReasons = new Map<string, Reason>();
 
   for (const f of writtenFields) {
@@ -608,6 +636,14 @@ async function guardWrittenFieldsQuality(
     // one sanctioned reuse of another product's text — never run the
     // exemplar-copy check (or any boilerplate-style check) against them.
     if (current.sourceDetail?.collectionKernelAdapted) continue;
+
+    // Always-safe voice auto-fix (S|C standardization etc) applied in place
+    // before any similarity/depth checks below — never gated on a retry.
+    const fixed = applyDeterministicFixes(current.answer);
+    if (fixed.fixes.length > 0) {
+      current.answer = fixed.text;
+      fields[f.id] = { ...current, sourceDetail: { ...(current.sourceDetail || {}), voiceAutoFixed: true } };
+    }
 
     const other = otherByFieldId.get(f.id);
     if (other?.answer && other.answer.toUpperCase() !== "N/A" && textSimilarity(current.answer, other.answer) > BOILERPLATE_SIMILARITY_THRESHOLD) {
@@ -630,6 +666,14 @@ async function guardWrittenFieldsQuality(
     }
     if (!meetsFormatConvention(f.id, current.answer)) {
       retryReasons.set(f.id, { kind: "unformatted" });
+      continue;
+    }
+    const voiceContentType = getToneForGtmField(f.id, f.group?.id);
+    if (voiceContentType) {
+      const violations = findDeterministicViolations(current.answer, voiceContentType);
+      if (violations.length > 0) {
+        retryReasons.set(f.id, { kind: "voice_violation", detail: violations.map(v => v.rule).join(", ") });
+      }
     }
   }
 
@@ -638,7 +682,16 @@ async function guardWrittenFieldsQuality(
 
   const flagAsIs = (f: GtmField, extraReason: string) => {
     const reason = retryReasons.get(f.id)!;
-    fields[f.id] = { ...fields[f.id], flagged: true, sourceDetail: { ...(fields[f.id].sourceDetail || {}), reason: extraReason, similarTo: reason.detail } };
+    fields[f.id] = {
+      ...fields[f.id],
+      flagged: true,
+      sourceDetail: {
+        ...(fields[f.id].sourceDetail || {}),
+        reason: extraReason,
+        similarTo: reason.detail,
+        ...(reason.kind === "voice_violation" ? { voiceReview: true, voiceViolations: reason.detail?.split(", ") } : {}),
+      },
+    };
   };
 
   if (Date.now() - pipelineStart > PIPELINE_TIME_BUDGET_MS) {
@@ -660,13 +713,20 @@ async function guardWrittenFieldsQuality(
         generic: `The previous draft read like generic, could-apply-to-any-product marketing filler.`,
         unformatted: `The previous draft didn't follow the required format — each claim must start with a short ALL-CAPS claim phrase (e.g. "ZERO-GAP PRECISION — cuts closer without snagging"), followed by the supporting spec and a plain-language benefit.`,
         exemplar_copy: `The previous draft copied or too closely paraphrased one of the STYLE EXEMPLAR documents' own text. Those describe a DIFFERENT product — write fresh copy grounded ONLY in ${productName}'s own real facts, matching the exemplars' depth/format/voice but never their actual wording.`,
+        voice_violation: `The previous draft violated brand voice rules (${reason.detail}). Rewrite it to fix these specific issues — keep every fact/spec/number exactly as given, change only the voice/tone problem.`,
       }[reason.kind];
-      const retryInstruction = `${buildSystemInstruction(productName, [f])}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
+      const retryInstruction = `${buildSystemInstruction(productName, [f], voiceBlock)}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
       // These retries run concurrently for up to 9 written fields — a
       // shorter timeout each keeps the whole Promise.all safely inside the
       // pipeline's remaining time budget (checked just above this block).
       const retryRaw = await callAi(retryInstruction, userContent, { timeoutMs: 20_000 });
-      const retryAnswer = coerceAiAnswer(retryRaw?.[f.id]?.answer);
+      let retryAnswer = coerceAiAnswer(retryRaw?.[f.id]?.answer);
+      let retryAutoFixed = false;
+      if (retryAnswer) {
+        const retryFixed = applyDeterministicFixes(retryAnswer);
+        retryAnswer = retryFixed.text;
+        retryAutoFixed = retryFixed.fixes.length > 0;
+      }
 
       const exemplar = GENERIC_EXEMPLARS[f.id];
       const stillBoilerplate = other?.answer && retryAnswer ? textSimilarity(retryAnswer, other.answer) > BOILERPLATE_SIMILARITY_THRESHOLD : false;
@@ -674,9 +734,15 @@ async function guardWrittenFieldsQuality(
       const stillGeneric = exemplar && retryAnswer ? textSimilarity(retryAnswer, exemplar) > BOILERPLATE_SIMILARITY_THRESHOLD : false;
       const stillUnformatted = retryAnswer ? !meetsFormatConvention(f.id, retryAnswer) : true;
       const stillExemplarCopy = retryAnswer ? !!findExemplarCopyMatch(f.group?.id || f.id, retryAnswer) : true;
+      const voiceContentType = getToneForGtmField(f.id, f.group?.id);
+      const stillVoiceViolation = retryAnswer && voiceContentType ? findDeterministicViolations(retryAnswer, voiceContentType).length > 0 : false;
 
-      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && !stillBoilerplate && !stillShallow && !stillGeneric && !stillUnformatted && !stillExemplarCopy) {
-        fields[f.id] = { answer: retryAnswer, source: (retryRaw?.[f.id]?.source as GtmFieldSource) || current.source };
+      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && !stillBoilerplate && !stillShallow && !stillGeneric && !stillUnformatted && !stillExemplarCopy && !stillVoiceViolation) {
+        fields[f.id] = {
+          answer: retryAnswer,
+          source: (retryRaw?.[f.id]?.source as GtmFieldSource) || current.source,
+          sourceDetail: retryAutoFixed ? { voiceAutoFixed: true } : undefined,
+        };
       } else {
         flagAsIs(f, reason.kind);
       }

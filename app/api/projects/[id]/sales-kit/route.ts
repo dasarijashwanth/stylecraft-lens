@@ -6,6 +6,8 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 import { callAiForJson } from "@/lib/ai-json-call";
 import { escapeHtml as esc } from "@/lib/html-escape";
+import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock, getToneDirective } from "@/lib/brand-voice";
+import { checkVoiceCompliance } from "@/lib/ai-generation-guard";
 
 export const maxDuration = 60;
 
@@ -50,6 +52,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const ctx = await buildFullProjectContext(params.id);
     if (!ctx) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
+    // Brand Voice Guide — the single most unambiguous brand-voice call site
+    // in the app (see lib/brand-voice.ts): one whole-document call, no
+    // chunking, so one overall tone directive (peer-to-peer selling — this
+    // whole document IS a sales pitch) rather than GTM's per-field routing.
+    const salesKitBrand = await resolveBrandForProduct(ctx.productName);
+    const salesKitVoiceGuide = await getActiveVoiceGuide(salesKitBrand);
+    const salesKitVoiceBlock = buildVoiceBlock(salesKitVoiceGuide);
+
     let kit = await callAiForJson<any>(
       `You are a professional sales copywriter creating a Sales Kit for a product.
 Write EVERY field specifically about this exact product, its actual category, and its actual named competitors — never generic boilerplate that could apply to any product. Do not mention "battery" or "motor" unless the product description actually says so.
@@ -69,7 +79,7 @@ Return ONLY valid JSON — no markdown, no explanation.
   ],
   "key_messages": ["Message 1", "Message 2", "Message 3"],
   "call_to_action": "Where to buy / next step"
-}`,
+}${salesKitVoiceBlock}\n${getToneDirective("peer_selling")}`,
       `Create a Sales Kit for:
 Product: ${ctx.productName}
 Description: ${ctx.description}
@@ -119,6 +129,29 @@ ${(ctx.keyMessages || []).join(", ")}`,
         call_to_action: `Order ${ctx.productName} today or contact sales for volume commercial pricing.`
       };
     }
+
+    // Voice lint — Sales Kit has no per-field document_fields tracking (its
+    // output lives in one project_outputs JSONB blob), so unlike GTM/FAQ
+    // there's no natural per-field retry target; apply the always-safe
+    // auto-fixes in place and flag whatever still violates via a
+    // self-describing _voiceReview list on the blob itself, rather than
+    // building a full-document regenerate loop for this call site.
+    const voiceReview: string[] = [];
+    const lintText = (text: any, label: string): any => {
+      if (typeof text !== "string" || !text.trim()) return text;
+      const check = checkVoiceCompliance(text, "peer_selling");
+      if (check.violations.length > 0) voiceReview.push(`${label}: ${check.violations.map(v => v.rule).join(", ")}`);
+      return check.text;
+    };
+    kit.tagline = lintText(kit.tagline, "tagline");
+    kit.elevator_pitch = lintText(kit.elevator_pitch, "elevator_pitch");
+    (kit.key_features || []).forEach((f: any, i: number) => { if (f) f.benefit = lintText(f.benefit, `key_features[${i}].benefit`); });
+    (kit.competitive_advantages || []).forEach((c: any, i: number) => { if (c) c.advantage = lintText(c.advantage, `competitive_advantages[${i}].advantage`); });
+    (kit.objection_handlers || []).forEach((o: any, i: number) => { if (o) o.response = lintText(o.response, `objection_handlers[${i}].response`); });
+    kit.key_messages = (kit.key_messages || []).map((m: string, i: number) => lintText(m, `key_messages[${i}]`));
+    kit.call_to_action = lintText(kit.call_to_action, "call_to_action");
+    if (voiceReview.length > 0) kit._voiceReview = voiceReview;
+    kit._voiceGuideVersion = salesKitVoiceGuide.version;
 
     const html = buildSalesKitHTML(ctx.productName, kit);
 

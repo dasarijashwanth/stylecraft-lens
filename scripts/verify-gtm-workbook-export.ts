@@ -1,0 +1,274 @@
+// scripts/verify-gtm-workbook-export.ts
+// Offline regression check for the official GTM Workbook export feature
+// (Part 5 of "GTM Workbook Export + 10 Auto-Generated Product FAQs") —
+// no live Supabase/OpenAI/Gemini call, no .env.local loaded. Exercises the
+// real uploaded template (checked into the repo as scripts/fixtures/
+// gtm-official-template.xlsx) directly with PizZip, exactly like the
+// production writer does — this is the strongest possible form of
+// "the other 9 tabs are untouched": a raw byte comparison of the actual
+// zip entries, not a parsed-value diff.
+//
+// Run with: npx tsx scripts/verify-gtm-workbook-export.ts
+
+export {};
+
+import * as fs from "fs";
+import * as path from "path";
+import PizZip from "pizzip";
+
+let passes = 0;
+let failures = 0;
+
+function assert(condition: boolean, message: string) {
+  if (condition) {
+    passes++;
+    console.log(`  PASS: ${message}`);
+  } else {
+    failures++;
+    console.error(`  FAIL: ${message}`);
+  }
+}
+
+const FIXTURE_PATH = path.join(__dirname, "fixtures", "gtm-official-template.xlsx");
+
+function a(text: string) {
+  return { answer: text };
+}
+
+function buildSyntheticFields(): Record<string, { answer: string; notes?: string | null }> {
+  const fields: Record<string, { answer: string; notes?: string | null }> = {
+    core_consumer: a("Both"),
+    why_creating_item: a("1. Fills the accessible lineup gap.\n2. Matches a real competitive gap."),
+    positioning_statement: a("The Anime Trimmer is a lightweight, ultra-quiet cordless trimmer for barbers and home users."),
+    product_name_origin: a("Named for its precise, clean lining."),
+    name_story_tie: a("The Anime name signals precision anime-sharp lines."),
+    new_line_or_current: a("New Line"),
+    new_technology: a("Yes — IN2 brushless motor"),
+    approved_pricing: a("Salon: $99.95 Retail: $109.95"),
+    good_better_best: a("Better"),
+    good_better_best_performance: a("Better"),
+    hair_type: a("All Hair Types"),
+    up_sell: a("Pair with the matching clipper for a full kit upsell."),
+    reason_to_buy: a("1. ZERO-GAP PRECISION — cuts closer.\n2. QUIET OPERATION — barely audible."),
+    expert_tip: a("Oil the blade before and after every use."),
+    comparison_chart_web_only: a("Comp Item #1: SC601M\nComp Item #2: SC602M"),
+    comps_buying_guide: a("https://example.com/buying-guide"),
+    trademark_symbol: a("(TM) after first mention"),
+    warranty: a("1 Year Limited Warranty"),
+    certification_needed: a("CE, RoHS"),
+    rating_label: a("4.5 stars"),
+    dieline: a("Awaiting internal input"),
+    box_type: a("Awaiting internal input"),
+    product_lwh: a("8 x 2 x 2 in"),
+    product_weight: a("0.5 lbs"),
+    box_lwh: a("10 x 4 x 3 in"),
+    measurement_by: a("Ops Team"),
+    box_weight: a("0.8 lbs"),
+    pallet_tier_total: a("48"),
+    pallets_high: a("6"),
+    product_title: a("Anime Trimmer"),
+    material: a("Aluminum"),
+    care_directions: a("Wipe clean after each use, oil weekly."),
+    motor_type: a("Brushless Motor (IN2 Digital Brushless Motor)"),
+    motor_rpm: a("7500 RPM"),
+    motor_run_time: a("3 hours"),
+    motor_recharge_time: a("90 minutes"),
+    motor_speed: a("Single speed"),
+    motor_noise_level: a("Ultra Quiet"),
+    blade_name: a("DLC X-Pro Wide Blade"),
+    fixed_blade: a("Fixed"),
+    cutting_blade: a("DLC Deep Tooth"),
+    lids_qty: a("2"),
+    lids_colors: a("Black, Gold"),
+    lever_type: a("Click lever"),
+    lever_qty: a("1"),
+    lever_color: a("Gold"),
+    guards_type: a("8 comb guards"),
+    guards_qty: a("8"),
+    guards_color: a("Black"),
+    charging_light_color: a("Red/Green"),
+    charging_base_color: a("Black"),
+    charging_cord_color: a("Black"),
+    charging_cord_length: a("6 ft"),
+    charging_port: a("USB-C"),
+    charging_voltage: a("100-240V"),
+    charging_logo_color: a("Gold"),
+    charging_led_function: a("Blinks red while charging, solid green when full"),
+    screw_driver_color: a("Gold"),
+    screw_driver_brand: a("S|C Pro"),
+    stretch_bracket_color: a("Black"),
+    cam_follower_qty: a("1 (assembled on unit)"),
+    cam_follower_color: a("Black"),
+    cleaning_brush_qty: a("1"),
+    cleaning_brush_color: a("Black"),
+    oil_bottle_qty: a("1"),
+    extra_screws_qty: a("4"),
+    extra_screws_color: a("Gold"),
+    included_summary: a("Trimmer, USB-C cord, 8 guards, cleaning brush, oil"),
+    box_main_statement: a("Ultra-quiet precision trimming, redefined."),
+    our_differentiators: a("• Quieter than category average\n• Longer runtime\n• Lighter body"),
+    selling_position: a("Target price $99.95 sits at the category median of $99.00 across 8 compared competitors (range $59.99-$149.95)."),
+    rep_talking_point_1: a("Quietest in class."),
+    rep_talking_point_2: a("Best-in-class runtime."),
+    rep_talking_point_3: a("Lightest body in the lineup."),
+    dealer_gross_margin_pct: a("Awaiting internal input"),
+    retail_gross_margin_pct: a("Awaiting internal input"),
+    initial_quantities_ordered: a("Awaiting internal input"),
+  };
+  for (let i = 1; i <= 10; i++) fields[`features_full_list_${i}`] = a(i <= 4 ? `ZERO-GAP PRECISION FEATURE ${i}` : "");
+  for (let i = 1; i <= 5; i++) fields[`cross_sell_${i}`] = a(i <= 2 ? `Cross sell product ${i}` : "");
+  for (let i = 1; i <= 6; i++) fields[`top_6_features_${i}`] = a(`Top feature ${i}`);
+  for (let i = 1; i <= 6; i++) fields[`feature_icons_${i}`] = a(`ICON ${i}`);
+  for (let i = 1; i <= 6; i++) fields[`box_feature_${i}`] = a(`Box feature ${i}`);
+  for (let i = 1; i <= 10; i++) fields[`faq_question_${i}`] = a(`Question ${i}: how do I use it?`);
+  for (let i = 1; i <= 10; i++) fields[`faq_answer_${i}`] = a(`Answer ${i}: use it like this.`);
+  return fields;
+}
+
+async function main() {
+  if (!fs.existsSync(FIXTURE_PATH)) {
+    console.error(`Missing fixture: ${FIXTURE_PATH} — copy the real official workbook there first.`);
+    process.exit(1);
+  }
+
+  const {
+    openGtmWorkbook,
+    generateGtmWorkbookBuffer,
+    readCellText,
+    findRowByLabel,
+    findAllRowsByLabel,
+    writeCell,
+  } = await import("../lib/gtm-workbook-render");
+  const { renderGtmWorkbook } = await import("../lib/gtm-workbook-data-mapper");
+  const { parseGtmWorkbookTemplate, mapSheetNamesToParts, REQUIRED_GTM_WORKBOOK_SHEETS } = await import("../lib/gtm-workbook-template-parser");
+
+  const templateBuffer = fs.readFileSync(FIXTURE_PATH);
+
+  // ---- Section 1: Export fixture ----
+  console.log("\n[1] Export fixture — mapped values land correctly, other tabs untouched, no #REF!, 10 Q/A pairs, multi-line wraps");
+
+  const summary = parseGtmWorkbookTemplate(templateBuffer);
+  assert(summary.missingRequiredSheets.length === 0, "the real template has all 3 required sheets (Product Knowledge/BOX ONLY/Product FAQ)");
+  assert(REQUIRED_GTM_WORKBOOK_SHEETS.every(s => summary.sheetNames.includes(s)), "sheet name resolution finds every required sheet");
+
+  const fields = buildSyntheticFields();
+  const result = renderGtmWorkbook(templateBuffer, { fields, headerSku: "SC999X", collection: "Homie", upc: "012345678905" });
+  assert(result.unmapped.length === 0, `every mapped field found its template row (0 unmapped, got ${result.unmapped.length}: ${JSON.stringify(result.unmapped)})`);
+  assert(result.repairs.length === 3, `exactly 3 formula cells were repaired (BOX ONLY Warranty/Includes/Certifications), got ${result.repairs.length}`);
+
+  const outWorkbook = openGtmWorkbook(result.buffer);
+  const pk = outWorkbook.getSheetXml("Product Knowledge");
+  const box = outWorkbook.getSheetXml("BOX ONLY");
+  const faq = outWorkbook.getSheetXml("Product FAQ");
+
+  assert(readCellText(pk, outWorkbook.sharedStrings, "C2") === "Both", "Core Consumer answer lands in Product Knowledge C2");
+  assert(readCellText(pk, outWorkbook.sharedStrings, "C44") === "Anime Trimmer — SC999X", "Product Title renders with the catalog-resolved SKU suffix");
+  assert(readCellText(pk, outWorkbook.sharedStrings, "C13") === "ZERO-GAP PRECISION FEATURE 1", "Features (full list) row 1 lands on the anchor row itself");
+  assert(readCellText(pk, outWorkbook.sharedStrings, "C17") === "", "an unfilled trailing feature row stays empty (never force-filled)");
+  assert(readCellText(pk, outWorkbook.sharedStrings, "C24").includes("Cross sell product 1") && readCellText(pk, outWorkbook.sharedStrings, "C24").includes("Cross sell product 2"), "Cross Sell Products combines multiple answers into its one real template row");
+  assert(readCellText(pk, outWorkbook.sharedStrings, "C95") === "1 (assembled on unit)", "Cam Follower Qty lands correctly despite the template's own 'Qtr' label typo");
+  assert(readCellText(pk, outWorkbook.sharedStrings, "D27").startsWith("Example:"), "Comparison Chart WEB ONLY's helper example Notes text is left untouched, never overwritten");
+
+  const multilineCell = pk.match(/<c r="C13"[^>]*(?:\/>|>[\s\S]*?<\/c>)/);
+  assert(!!multilineCell && /\ss="\d+"/.test(multilineCell[0]), "a written cell keeps its original style attribute (wrap/font/border untouched)");
+
+  assert(readCellText(box, outWorkbook.sharedStrings, "C21") === "1 Year Limited Warranty", "BOX ONLY Warranty's #REF! is replaced with the real literal value");
+  assert(readCellText(box, outWorkbook.sharedStrings, "C23") === "CE, RoHS", "BOX ONLY Certifications' #REF! is replaced with the real literal value");
+  assert(readCellText(box, outWorkbook.sharedStrings, "C22") === "Trimmer, USB-C cord, 8 guards, cleaning brush, oil", "BOX ONLY Includes' mis-pointed cross-sheet formula is replaced with the real Included: summary");
+  assert(!box.includes("#REF!"), "zero literal #REF! remains anywhere in BOX ONLY's XML");
+  assert(readCellText(box, outWorkbook.sharedStrings, "C4") === "Homie", "BOX ONLY Collection Name resolves from the catalog match");
+  assert(readCellText(box, outWorkbook.sharedStrings, "C20") === "012345678905", "BOX ONLY UPC resolves from the catalog match");
+  assert(readCellText(box, outWorkbook.sharedStrings, "C14") === "ICON 1", "BOX ONLY Icons reuse the same feature_icons_N answers as Product Knowledge");
+
+  const qRows = findAllRowsByLabel(faq, outWorkbook.sharedStrings, "A", "Q:");
+  const aRows = findAllRowsByLabel(faq, outWorkbook.sharedStrings, "A", "A:");
+  assert(qRows.length === 10 && aRows.length === 10, `exactly 10 Q:/A: pairs exist after row insertion (got ${qRows.length} Q, ${aRows.length} A)`);
+  assert(readCellText(faq, outWorkbook.sharedStrings, `B${qRows[9]}`) === "Question 10: how do I use it?", "the 10th (inserted) FAQ question lands correctly");
+  assert(readCellText(faq, outWorkbook.sharedStrings, `B${aRows[9]}`) === "Answer 10: use it like this.", "the 10th (inserted) FAQ answer lands correctly");
+  const differentiatorsRow = findRowByLabel(faq, outWorkbook.sharedStrings, "A", "Our Differrentiators");
+  assert(!!differentiatorsRow && readCellText(faq, outWorkbook.sharedStrings, `B${differentiatorsRow + 1}`).includes("Quieter than category average"), "Our Differentiators lands on the row below its own header label");
+
+  // The other 9 tabs + shared parts must be byte-for-byte identical to the
+  // original template — the strongest possible form of "untouched".
+  const origZip = new PizZip(templateBuffer);
+  const outZip = new PizZip(result.buffer);
+  const untouchedParts = [
+    "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet6.xml",
+    "xl/worksheets/sheet7.xml", "xl/worksheets/sheet8.xml", "xl/worksheets/sheet9.xml",
+    "xl/worksheets/sheet10.xml", "xl/worksheets/sheet11.xml", "xl/worksheets/sheet12.xml",
+    "xl/styles.xml", "xl/sharedStrings.xml", "xl/theme/theme1.xml",
+  ];
+  const allUntouchedIdentical = untouchedParts.every(p => {
+    const origBytes = origZip.file(p)?.asUint8Array();
+    const outBytes = outZip.file(p)?.asUint8Array();
+    return origBytes && outBytes && Buffer.compare(Buffer.from(origBytes), Buffer.from(outBytes)) === 0;
+  });
+  assert(allUntouchedIdentical, "all 9 non-target sheets + styles/sharedStrings/theme are byte-for-byte identical to the original template");
+
+  // ---- Section 2: FAQ grounding (the AI call itself needs a live key —
+  // not exercised offline; this verifies the deterministic guard around it) ----
+  console.log("\n[2] FAQ competitor-brand-name guard — the deterministic mechanism the AI call is wrapped in");
+  const faqsModule = await import("../lib/gtm-product-faqs");
+  // findBrandNameIn isn't exported (internal to the module) — verified
+  // indirectly via generateProductFaqs's graceful no-op path below, since
+  // exercising the actual brand-detection logic requires a live OpenAI call.
+  assert(typeof faqsModule.generateProductFaqs === "function", "generateProductFaqs is exported and callable");
+  const emptyFaqs = await faqsModule.generateProductFaqs(
+    { project: { productName: "Test Trimmer" }, salesKit: null, tds: null, activeReport: null } as any,
+    {}
+  );
+  assert(Object.keys(emptyFaqs).length === 0, "with zero grounded facts and no OpenAI key configured, FAQ generation gracefully returns nothing rather than inventing content");
+
+  // ---- Section 3: Label-based mapping resilience ----
+  console.log("\n[3] Label resilience — shifting rows in a copy of the template still lands values on the correct labels");
+  const pkOriginal = openGtmWorkbook(templateBuffer).getSheetXml("Product Knowledge");
+  const motorRowBefore = findRowByLabel(pkOriginal, openGtmWorkbook(templateBuffer).sharedStrings, "A", "Motor Type");
+  assert(motorRowBefore === 60, `sanity check — Motor Type starts at row 60 in the real template (got ${motorRowBefore})`);
+
+  function shiftRowsFrom(sheetXml: string, fromRow: number, shiftBy: number): string {
+    const rowNums = Array.from(sheetXml.matchAll(/<row r="(\d+)"/g)).map(m => parseInt(m[1], 10)).filter(n => n >= fromRow).sort((a, b) => b - a);
+    let xml = sheetXml;
+    for (const n of rowNums) {
+      const newNum = n + shiftBy;
+      xml = xml.replace(new RegExp(`<row r="${n}"`), `<row r="${newNum}"`);
+      xml = xml.replace(new RegExp(`r="([A-Z]+)${n}"`, "g"), (_m, col) => `r="${col}${newNum}"`);
+    }
+    return xml;
+  }
+
+  const shiftedWorkbook = openGtmWorkbook(templateBuffer);
+  const shiftedPk = shiftRowsFrom(shiftedWorkbook.getSheetXml("Product Knowledge"), 55, 1);
+  shiftedWorkbook.setSheetXml("Product Knowledge", shiftedPk);
+  const motorRowAfter = findRowByLabel(shiftedWorkbook.getSheetXml("Product Knowledge"), shiftedWorkbook.sharedStrings, "A", "Motor Type");
+  assert(motorRowAfter === 61, `after shifting rows 55+ down by one, Motor Type's label search finds it at its NEW row 61 (got ${motorRowAfter}), never the stale hardcoded 60`);
+
+  const shiftedBuffer = generateGtmWorkbookBuffer(shiftedWorkbook);
+  const shiftedResult = renderGtmWorkbook(shiftedBuffer, { fields, headerSku: null, collection: null, upc: null });
+  const shiftedOutWorkbook = openGtmWorkbook(shiftedResult.buffer);
+  assert(
+    readCellText(shiftedOutWorkbook.getSheetXml("Product Knowledge"), shiftedOutWorkbook.sharedStrings, "C61") === "Brushless Motor (IN2 Digital Brushless Motor)",
+    "a full export against the row-shifted copy still writes Motor Type's answer at its correct (shifted) row, not the original row 60"
+  );
+
+  // ---- Section 4: Round-trip — an edit is reflected in a re-export ----
+  console.log("\n[4] Round-trip — editing a field's answer and re-exporting reflects the edit");
+  const editedFields = { ...fields, warranty: a("2 Year Limited Warranty") };
+  const reExported = renderGtmWorkbook(templateBuffer, { fields: editedFields, headerSku: "SC999X", collection: "Homie", upc: "012345678905" });
+  const reExportedWorkbook = openGtmWorkbook(reExported.buffer);
+  assert(
+    readCellText(reExportedWorkbook.getSheetXml("BOX ONLY"), reExportedWorkbook.sharedStrings, "C21") === "2 Year Limited Warranty",
+    "editing warranty's answer and re-exporting reflects the new value in the workbook"
+  );
+  assert(
+    readCellText(reExportedWorkbook.getSheetXml("Product Knowledge"), reExportedWorkbook.sharedStrings, "C31") === "2 Year Limited Warranty",
+    "the same edit is reflected in Product Knowledge's own Warranty row too"
+  );
+
+  console.log(`\n${passes} passed, ${failures} failed`);
+  if (failures > 0) process.exit(1);
+}
+
+main().catch(err => {
+  console.error("Script error:", err);
+  process.exit(1);
+});

@@ -48,6 +48,7 @@ export async function POST(request: Request) {
           heatTechBranded: row.heatTechBranded,
           brand: row.brand,
           sku: row.sku,
+          upc: row.upc,
           importFlags: row.importFlags,
         });
         updated++;
@@ -65,6 +66,7 @@ export async function POST(request: Request) {
           heatTechBranded: row.heatTechBranded,
           brand: row.brand,
           sku: row.sku,
+          upc: row.upc,
           importFlags: row.importFlags,
           source: row.source,
         });

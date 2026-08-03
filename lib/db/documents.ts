@@ -30,6 +30,12 @@ export interface DocumentRow {
   drive_url?: string | null;
   drive_file_id?: string | null;
   snapshot_id?: string | null;
+  // Brand Voice Guide work — which guide version was active when this
+  // document was generated, mirroring project_decks.template_id pinning
+  // its original template. Null for documents generated before this
+  // existed, or for doc_types that never inject a voice block (TDS).
+  voice_guide_id?: string | null;
+  voice_guide_version?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -135,6 +141,22 @@ export async function setDocumentSnapshot(documentId: string, snapshotId: string
   } else {
     const doc = memoryDb.documents.find(d => d.id === documentId);
     if (doc) { doc.snapshotId = snapshotId; doc.updatedAt = new Date(); }
+  }
+}
+
+// Brand Voice Guide work — records which guide version a generation call
+// actually used, same "stamp provenance after the fact" pattern as
+// setDocumentSnapshot above. `voiceGuideId` is null when the brand had no
+// active guide (the neutral fallback was used) — still worth recording
+// `voiceGuideVersion: null` so a later real guide doesn't get silently
+// misattributed to an older document.
+export async function setDocumentVoiceGuide(documentId: string, voiceGuideId: string | null, voiceGuideVersion: number | null) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("documents").update({ voice_guide_id: voiceGuideId, voice_guide_version: voiceGuideVersion, updated_at: new Date().toISOString() }).eq("id", documentId);
+    if (error) throw error;
+  } else {
+    const doc = memoryDb.documents.find(d => d.id === documentId);
+    if (doc) { doc.voiceGuideId = voiceGuideId; doc.voiceGuideVersion = voiceGuideVersion; doc.updatedAt = new Date(); }
   }
 }
 

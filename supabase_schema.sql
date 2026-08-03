@@ -1415,3 +1415,183 @@ INSERT INTO collections (name, narrative_kernel, logo_meaning, voice_notes, sort
         1
     )
 ON CONFLICT (name) DO NOTHING;
+
+-- 40. GTM WORKBOOK TEMPLATES — versioned master .xlsx templates for the
+-- official 12-tab Go-To-Market workbook export (Product Knowledge/BOX ONLY/
+-- Product FAQ get filled; the other 9 tabs are exported byte-for-byte
+-- untouched — see lib/gtm-workbook-render.ts). Direct clone of Section 11's
+-- deck_templates pattern: the binary file lives in Supabase Storage bucket
+-- "gtm-workbook-templates" (create it manually in the Supabase dashboard,
+-- same as "deck-templates"/"artwork" — Storage buckets aren't SQL objects);
+-- this row is metadata + a pointer + a validation summary (which sheet
+-- names were found, confirming Product Knowledge/BOX ONLY/Product FAQ
+-- exist). Only one row may have is_active = true at a time.
+CREATE TABLE IF NOT EXISTS gtm_workbook_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    file_name VARCHAR(255),
+    file_size_bytes INTEGER,
+    -- Shape: { sheetNames: string[], missingRequiredSheets: string[] } — see
+    -- lib/gtm-workbook-template-parser.ts.
+    sheet_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT false,
+    uploaded_by VARCHAR(255),
+    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS gtm_workbook_templates_one_active_idx ON gtm_workbook_templates(is_active) WHERE is_active = true;
+ALTER TABLE gtm_workbook_templates ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for gtm_workbook_templates" ON gtm_workbook_templates FOR ALL USING (true) WITH CHECK (true);
+
+-- 41. CATALOG PRODUCTS: UPC — GTM workbook export's BOX ONLY tab needs a
+-- real UPC per product; sourced from the catalog record (same "catalog
+-- wins, else Awaiting internal input" pattern as sku/brand), populated via
+-- spreadsheet re-import (lib/catalog-import.ts), not a manual admin form
+-- field — same precedent as brand/sku/product_kind/parent_sku/collection.
+ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS upc VARCHAR(20);
+
+-- 42. BRAND VOICE GUIDES — versioned, brand-scoped voice/tone/terminology
+-- guide injected into every AI call that produces user-facing prose (GTM
+-- narrative fields, Product FAQs, Sales Kit, deck-copy condensation,
+-- analysis synthesis — see lib/brand-voice.ts). "Versioned" here follows
+-- the SAME precedent as gtm_workbook_templates/deck_templates: a new edit
+-- is a new ROW (version = previous max for that brand + 1), activating one
+-- deactivates the rest for THAT brand only — the partial unique index is
+-- scoped to (brand, is_active), not globally, since StyleCraft and Gamma+
+-- each need their own concurrently-active guide. Seeded with the real
+-- StyleCraft guide verbatim; no Gamma+ row is seeded — its absence IS the
+-- "no brand voice guide on file" signal lib/brand-voice.ts falls back on.
+CREATE TABLE IF NOT EXISTS brand_voice_guides (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    brand VARCHAR(50) NOT NULL,
+    content TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT false,
+    created_by VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS brand_voice_guides_one_active_per_brand_idx ON brand_voice_guides(brand, is_active) WHERE is_active = true;
+ALTER TABLE brand_voice_guides ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for brand_voice_guides" ON brand_voice_guides FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO brand_voice_guides (brand, content, version, is_active) VALUES (
+    'StyleCraft',
+    $$# StyleCraftUS Brand Voice Guide
+
+*Derived from analysis of stylecraftus.com (homepage, About Us / Our Story, collection and product copy) — July 2026*
+
+---
+
+## 1. Brand Personality
+
+If StyleCraft were a person, they'd be a master barber who came up through the industry, knows every motor spec by heart, and treats their clients like family. Confident bordering on cocky about the tools, but genuinely warm with people. They talk like a peer in the shop, not a corporation — they'd say "the Fam" without irony, hype a "new drop" like a sneaker release, and then patiently walk you through a warranty claim.
+
+**In one line:** A pro-grade challenger brand with streetwear energy and family-business heart.
+
+## 2. Voice Attributes
+
+### Bold & Competitive
+- **We are:** Confident, declarative, unafraid of big statements. We name products after winners and fighters (Saber, Rebel, Rogue, Reign, Ace, Instinct) and write taglines like commands: "Conquer Every Style." "Do Whatever It Takes."
+- **We are not:** Arrogant toward the customer, or dismissive of competitors by name. The swagger is about the tools, never at anyone's expense.
+- **Sounds like:** "Unmatched. Unstoppable. Intuitive."
+- **Does NOT sound like:** "We think you might enjoy our clipper, which compares favorably to leading brands."
+
+### Tech-Credible
+- **We are:** Specific about engineering. We lead with named technology — EON Digital Brushless Motor, IN2 Vector Motor, Super C4RBN, Stay-Temp — and concrete benefits (high torque, low vibration, full metal body). Specs are part of the swagger.
+- **We are not:** Jargon for jargon's sake. Every spec ties to what it does in the pro's hand: faster cuts, cooler blades, longer sessions.
+- **Sounds like:** "High energy, low vibration."
+- **Does NOT sound like:** Vague fluff like "cutting-edge quality you can trust."
+
+### Community-First ("The Fam")
+- **We are:** Warm, loyal, reciprocal. We talk about barbers and stylists as family and collaborators, not customers. We celebrate their work and their following, not just our products. "It's a 2-way street."
+- **We are not:** Corporate-friendly-by-committee, or transactional. We never fake intimacy with generic "valued customer" language.
+- **Sounds like:** "If you are not happy, we are not happy."
+- **Does NOT sound like:** "We appreciate your business and strive for customer satisfaction."
+
+### Street-Culture Fluent
+- **We are:** Plugged into barber culture — drops, collabs (S|C x 360 Jeezy), edgy colorways, metallic finishes. Product launches read like sneaker releases: "NEW DROPS."
+- **We are not:** Trend-chasing or trying too hard. The culture references come from being *in* the community, not marketing to it.
+- **Sounds like:** "Embrace the unconventional: Go Rogue!"
+- **Does NOT sound like:** Forced slang or memes disconnected from barbering.
+
+### Craft-Proud & Family-Built
+- **We are:** A family-owned, US-based company with 50+ years of combined industry experience. We invoke the founder story (Ken & Austin Russo), craftsmanship, and "the art & science of styling."
+- **We are not:** Nostalgic or old-fashioned. Heritage backs up innovation; it doesn't replace it.
+- **Sounds like:** "The Art & Science of Styling."
+- **Does NOT sound like:** "Old-world tradition since days gone by."
+
+## 3. Audience
+
+**Primary:** Professional barbers and stylists — people who cut hair for a living, care about torque, blade quality, and battery life, and see their tools as an extension of their craft and personal brand. They expect to be addressed as peers and pros.
+
+**Secondary:** Prosumers and home users who aspire to pro-grade results and buy into the culture (the Ace and Homie lines, brushes, dryers).
+
+They care about: performance under daily use, standing out (finishes, colorways), education and skill growth, and being part of a community that respects the craft.
+
+## 4. Core Messaging Pillars
+
+1. **Pro-grade innovation** — Named motor technology and engineering that rivals the biggest players. Every product claim anchors to a spec or design feature.
+2. **Built by and for the craft** — Family-owned, 50+ years of industry expertise, tools designed with working barbers and stylists.
+3. **The Fam** — A loyal, two-way community. We elevate our pros' craft and their following, and they carry the brand.
+4. **Edgy design that stands out** — Bold colorways, metallic finishes, collabs. The tool on your station says something about you.
+5. **Service that has your back** — Trained, genuinely helpful support; happiness guaranteed in spirit: "If you are not happy, we are not happy."
+
+## 5. Tone Spectrum (voice stays fixed, tone flexes)
+
+| Context | Dial up | Dial down | Example register |
+|---|---|---|---|
+| Product launches / drops | Boldness, hype, culture | Warmth | "NEW DROP. Conquer every style." |
+| Product detail pages | Tech credibility | Slang | Specs first, benefit-driven, still punchy |
+| Education / tutorials | Craft pride, clarity | Hype | Peer-to-peer teaching, step-by-step |
+| Customer service / support | Warmth, patience | Swagger | Plain, friendly, human — no attitude |
+| Corporate / press / About | Heritage, credibility | Street slang | Confident but polished; founder story |
+| Social media | Community, playfulness | Formality | Fam language, collabs, celebrating pros' work |
+
+## 6. Style Rules (observed & recommended)
+
+- **Taglines:** Short imperative or fragment constructions, often stacked one-word sentences ("Unmatched. Unstoppable. Intuitive."). ALL CAPS acceptable in headlines/banners only, never body copy.
+- **Contractions:** Use them ("we've got the answers") — the voice is conversational.
+- **Exclamation marks:** Sparingly; reserve for launch/hype moments ("Go Rogue!"), max one per piece.
+- **Body copy:** Warm, first-person plural ("we," "our"), direct address ("you," "your craft").
+- **Product naming convention:** [Collection Name] + [Product Type] + "with" + [Named Technology] (e.g., "Reign Professional Hair Clipper with EON Digital Brushless Motor"). Keep this structure consistent.
+
+## 7. Terminology
+
+**Preferred terms**
+| Use | Notes |
+|---|---|
+| StyleCraft / StyleCraftUS / S\|C | S\|C shorthand for logos, collabs, sub-brands (S\|C Educators, S\|C x 360 Jeezy) |
+| the Fam | Community/social contexts only, not corporate copy |
+| pros, barbers, stylists | Never "users" or "consumers" in community-facing copy |
+| drop / new drop | For product launches on social and homepage |
+| tools | Preferred over "devices" or "appliances" (except corporate/press: "hair appliances" is acceptable) |
+| Named tech in full on first use | "EON Digital Brushless Motor," "IN2 Vector Motor," "Super C4RBN," "Stay-Temp Technology" |
+
+**Avoid**
+- Generic praise without a spec behind it ("high quality," "great performance" standing alone)
+- Corporate distance ("valued customers," "our organization")
+- Talking down to home users — they're aspiring pros, not amateurs
+
+## 8. Watch-outs (flagged during audit)
+
+- **Unsubstantiated superlatives:** Lines like "one of the fastest growing beauty and grooming tool companies since the industrial revolution" and "rivaling billion-dollar companies" are on-voice in their boldness but legally soft. Recommend qualifying with a source (e.g., Inc. 500 recognition, which the site already displays) or softening in formal/press contexts.
+- **Voice drift between sections:** Corporate copy occasionally slips into run-on, less polished sentences ("Join the revolution and experience."). Keep the bold-but-polished standard everywhere.
+- **Consistency of S|C vs. SC vs. SIC:** Product listings show variants ("SIC Pro" mat). Standardize on S|C.
+
+---
+
+*Use this guide with content reviews: check any new copy against the five voice attributes, the tone spectrum for its channel, and the terminology table.*
+$$,
+    1,
+    true
+) ON CONFLICT DO NOTHING;
+
+-- 43. DOCUMENTS: VOICE GUIDE PROVENANCE — records which brand voice guide
+-- version was active when a document (GTM/TDS) was generated, mirroring
+-- project_decks.template_id pinning its original template — so a later
+-- guide edit never silently reclassifies what an already-generated
+-- document was actually written against.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS voice_guide_id UUID REFERENCES brand_voice_guides(id) ON DELETE SET NULL;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS voice_guide_version INTEGER;

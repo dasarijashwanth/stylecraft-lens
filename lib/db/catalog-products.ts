@@ -42,6 +42,11 @@ export interface CatalogProductRow {
   product_kind: string;
   parent_sku: string | null;
   collection: string | null;
+  // GTM workbook export work — BOX ONLY's UPC row, sourced from the
+  // catalog record (same "catalog wins, else Awaiting internal input"
+  // pattern as sku), populated via spreadsheet re-import
+  // (lib/catalog-import.ts), not a manual admin form field.
+  upc: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +72,7 @@ function mockToRow(p: MockCatalogProduct): CatalogProductRow {
     product_kind: p.productKind ?? "tool",
     parent_sku: p.parentSku ?? null,
     collection: p.collection ?? null,
+    upc: p.upc ?? null,
     created_at: p.createdAt.toISOString(),
     updated_at: p.updatedAt.toISOString(),
   };
@@ -130,6 +136,7 @@ export interface CatalogProductInput {
   productKind?: string;
   parentSku?: string | null;
   collection?: string | null;
+  upc?: string | null;
 }
 
 export async function addCatalogProduct(input: CatalogProductInput): Promise<CatalogProductRow> {
@@ -154,6 +161,7 @@ export async function addCatalogProduct(input: CatalogProductInput): Promise<Cat
         product_kind: input.productKind || "tool",
         parent_sku: input.parentSku ?? null,
         collection: input.collection ?? null,
+        upc: input.upc ?? null,
       })
       .select()
       .single();
@@ -182,6 +190,7 @@ export async function addCatalogProduct(input: CatalogProductInput): Promise<Cat
     productKind: input.productKind || "tool",
     parentSku: input.parentSku ?? null,
     collection: input.collection ?? null,
+    upc: input.upc ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -212,6 +221,7 @@ export async function updateCatalogProduct(
     if (patch.productKind !== undefined) dbPatch.product_kind = patch.productKind;
     if (patch.parentSku !== undefined) dbPatch.parent_sku = patch.parentSku;
     if (patch.collection !== undefined) dbPatch.collection = patch.collection;
+    if (patch.upc !== undefined) dbPatch.upc = patch.upc;
     const { data, error } = await supabaseAdmin.from("catalog_products").update(dbPatch).eq("id", id).select().single();
     if (error) throw error;
     return normalizeRow(data);
@@ -236,6 +246,7 @@ export async function updateCatalogProduct(
   if (patch.productKind !== undefined) row.productKind = patch.productKind;
   if (patch.parentSku !== undefined) row.parentSku = patch.parentSku;
   if (patch.collection !== undefined) row.collection = patch.collection;
+  if (patch.upc !== undefined) row.upc = patch.upc;
   row.updatedAt = new Date();
   return mockToRow(row);
 }

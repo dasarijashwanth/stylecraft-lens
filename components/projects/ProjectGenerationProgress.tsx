@@ -17,6 +17,7 @@ const PHASE_LABELS_WITH_TDS = [
   "Capturing live product data",
   "Generating Technical Data Sheet",
   "Generating Go-To-Market sheet",
+  "Generating Product FAQs",
   "Generating Project Deck",
 ];
 
@@ -24,10 +25,11 @@ const PHASE_LABELS_WITH_TDS = [
 // server-side (lib/project-generation-engine.ts skips its work but still
 // writes phase:"tds", see that file's own comment), so PHASE_INDEX below
 // still needs a "tds" entry — it's just collapsed out of what's SHOWN,
-// remapped onto the same 3 visible steps.
+// remapped onto the same visible steps.
 const PHASE_LABELS_NO_TDS = [
   "Capturing live product data",
   "Generating Go-To-Market sheet",
+  "Generating Product FAQs",
   "Generating Project Deck",
 ];
 
@@ -77,8 +79,8 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-const PHASE_INDEX_WITH_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3, deck: 4 };
-const PHASE_INDEX_NO_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 1, gtm: 2, deck: 3 };
+const PHASE_INDEX_WITH_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3, faqs: 4, deck: 5 };
+const PHASE_INDEX_NO_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 1, gtm: 2, faqs: 3, deck: 4 };
 
 export function ProjectGenerationProgress({ projectId, tdsEnabled, onDone }: Props) {
   const PHASE_LABELS = tdsEnabled ? PHASE_LABELS_WITH_TDS : PHASE_LABELS_NO_TDS;

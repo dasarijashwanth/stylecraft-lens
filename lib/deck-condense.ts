@@ -43,6 +43,7 @@ async function condenseOne(task: CondenseTask): Promise<string> {
   const system =
     "You condense marketing copy for a slide so it fits a strict character budget. " +
     "Preserve every fact and number exactly as given — never invent, add, or change any claim, number, or spec. " +
+    "Preserve the original text's tone and register too — don't flatten confident/warm brand voice into generic corporate phrasing just to save characters. " +
     'Only shorten wording. Return strict JSON: {"condensed": string}.';
   const user = `Shorten the following text to ${task.maxLength} characters or fewer, preserving every fact and number exactly:\n\n"""${task.text}"""`;
 

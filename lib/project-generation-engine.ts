@@ -12,7 +12,8 @@ import { captureProductSnapshot } from "./snapshot-capture";
 import { getLatestSnapshot } from "./db/snapshots";
 import { generateTdsFields } from "./tds-generate";
 import { generateAllFields, GtmSources } from "./gtm-generate";
-import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, getTdsFieldsForProject } from "./db/documents";
+import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, setDocumentVoiceGuide, getTdsFieldsForProject, getDocumentFields, flattenDocumentFields } from "./db/documents";
+import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock } from "./brand-voice";
 import { TDS_FIELD_SCHEMA } from "./tds-field-schema";
 import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
 import { reconcileTdsFromGtm } from "./tds-gtm-reconcile";
@@ -23,10 +24,12 @@ import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
 import { isTdsEnabled } from "./feature-flags";
 import { listToolTypes } from "./db/tool-types";
+import { generateProductFaqs } from "./gtm-product-faqs";
+import { finalizeFieldAnswers } from "./field-finalize";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
-  phaseCompleted: "snapshot" | "tds" | "gtm" | "deck" | null;
+  phaseCompleted: "snapshot" | "tds" | "gtm" | "faqs" | "deck" | null;
 }
 
 export async function runProjectGenerationStep(projectId: string, orgId: string, userId: string): Promise<GenerationStepResult> {
@@ -153,9 +156,17 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       const document = await getOrCreateDocument(projectId, "gtm");
       await saveDocumentFields(document.id, GTM_FIELD_SCHEMA, fields, userId);
 
-      // gtm is no longer a terminal phase — the pipeline continues straight
-      // into deck generation below, so this is "running" not "complete".
-      await updateGenerationState(projectId, { phase: "gtm", status: "running" });
+      // Records which brand voice guide version this generation actually
+      // used (lib/brand-voice.ts) — cached, so this doesn't repeat the DB
+      // fetch generateAllFields already made internally.
+      const brand = await resolveBrandForProduct(project.productName);
+      const voiceGuide = await getActiveVoiceGuide(brand);
+      await setDocumentVoiceGuide(document.id, voiceGuide.id, voiceGuide.version);
+
+      // gtm is no longer a terminal phase — the pipeline continues into FAQ
+      // generation (needs GTM's fully-resolved fields as grounding) and then
+      // deck generation, so this is "running" not "complete".
+      await updateGenerationState(projectId, { phase: "faqs", status: "running" });
       logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "tds->gtm", outcome: "ok", elapsedMs: Date.now() - stepStart });
 
       // Cross-fill any TDS field GTM just answered for real while TDS was
@@ -167,10 +178,64 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         logCall("generation-pipeline", { op: "reconcile", projectId, phase: "tds-gtm-reconcile", outcome: "error", errorMessage: err.message || "reconcile failed", elapsedMs: Date.now() - stepStart });
       }
 
-      return { state: { ...state, phase: "gtm", status: "running" }, phaseCompleted: "gtm" };
+      return { state: { ...state, phase: "faqs", status: "running" }, phaseCompleted: "gtm" };
     }
 
-    if (state.phase === "gtm") {
+    if (state.phase === "faqs") {
+      // 10 auto-generated Product FAQs + Differentiators/Selling Position/
+      // Rep Talking Points — grounded in GTM's already-resolved fields, so
+      // this runs strictly after "gtm". Best-effort, same precedent as deck
+      // generation below: a real facts/analysis document already exists,
+      // FAQs are additive, and each one has its own in-app regenerate button
+      // for manual retry — a generation hiccup here must never fail the
+      // rest of project setup.
+      try {
+        const document = await getOrCreateDocument(projectId, "gtm");
+        const gtmDocFields = await getDocumentFields(document.id);
+        const gtmFieldsFlat = flattenDocumentFields(gtmDocFields);
+
+        const [salesKit, tds, reports] = await Promise.all([
+          getLatestOutput(projectId, "sales_kit"),
+          getTdsFieldsForProject(projectId),
+          getProjectReports(projectId, userId),
+        ]);
+        const latestReport = reports?.[0];
+        const sources: GtmSources = {
+          project: {
+            productName: project.productName,
+            description: project.description,
+            category: project.category,
+            toolType: project.toolType,
+            motorFamily: (project as any).motorFamily,
+            motorBrandedName: (project as any).motorBrandedName,
+            motorTech: project.motorTech,
+            keyDiff: project.keyDiff,
+            pricePoint: project.pricePoint,
+            companyContext: project.companyContext,
+            targetMarket: project.targetMarket,
+          },
+          salesKit,
+          tds,
+          activeReport: latestReport
+            ? { competitive_analysis: latestReport.competitive_analysis, pricing_analysis: latestReport.pricing_analysis, content_form: latestReport.content_form }
+            : null,
+        };
+
+        const faqSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Product FAQ");
+        const faqBrand = await resolveBrandForProduct(project.productName);
+        const faqVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(faqBrand));
+        const faqFields = await generateProductFaqs(sources, gtmFieldsFlat, faqVoiceBlock);
+        // Anything generateProductFaqs didn't resolve (a failed AI call for
+        // one FAQ, or the margin/quantity internal-kind fields, which are
+        // never AI-answerable) becomes an honest terminal state instead of
+        // a missing row — same finalize step generateAllFields itself ends on.
+        const finalized = finalizeFieldAnswers(faqFields, faqSchema, 1);
+        await saveDocumentFields(document.id, faqSchema, finalized, userId);
+        logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "faqs", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      } catch (err: any) {
+        logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "faqs", outcome: "error", errorMessage: err.message || "FAQ generation failed", elapsedMs: Date.now() - stepStart });
+      }
+
       // Deck generation deliberately never fails the overall pipeline — TDS
       // and GTM are the required artifacts and already succeeded; the deck
       // is a bonus layer on top. A missing active template, or any real
@@ -191,7 +256,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       }
 
       await updateGenerationState(projectId, { phase: "deck", status: "complete" });
-      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "gtm->deck", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "faqs->deck", outcome: "ok", elapsedMs: Date.now() - stepStart });
       return { state: { ...state, phase: "deck", status: "complete" }, phaseCompleted: "deck" };
     }
 

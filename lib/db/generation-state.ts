@@ -5,7 +5,11 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
-export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "deck";
+// "faqs" (10 auto-generated Product FAQs, lib/gtm-product-faqs.ts) runs
+// after "gtm" so it can ground itself in GTM's fully-resolved fields
+// (features/motor/blades/guards/charging/care/warranty), and before "deck"
+// since decks may reference FAQ content in the future.
+export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "faqs" | "deck";
 export type GenerationStatus = "pending" | "running" | "complete" | "failed";
 
 export interface GenerationStateRow {

@@ -56,6 +56,7 @@ export function isAwaitingInternalInput(answer: string | null | undefined): bool
 export interface FillReportEntry {
   answer?: string | null;
   source?: string | null;
+  sourceDetail?: { voiceAutoFixed?: boolean; voiceReview?: boolean; [key: string]: any } | null;
 }
 
 export interface FillReportSchemaField {
@@ -73,6 +74,12 @@ export interface FillReport {
   bySource: Record<string, number>;
   awaitingInternalInput: number;
   notDeterminable: number;
+  // Brand Voice Guide lint outcomes (lib/brand-voice-lint.ts,
+  // lib/ai-generation-guard.ts) — auto-adjusted (a deterministic fix like
+  // S|C standardization was applied silently) vs. flagged for human review
+  // (a violation survived the single retry attempt and shipped as-is).
+  voiceAdjusted: number;
+  voiceFlagged: number;
 }
 
 // Computed fresh on every read (never frozen at generation time), so a
@@ -86,9 +93,15 @@ export function buildFillReport(
   let filled = 0;
   let awaitingInternalInput = 0;
   let notDeterminable = 0;
+  let voiceAdjusted = 0;
+  let voiceFlagged = 0;
 
   for (const f of schema) {
-    const answer = fields[f.id]?.answer ?? "";
+    const entry = fields[f.id];
+    const answer = entry?.answer ?? "";
+    if (entry?.sourceDetail?.voiceReview) voiceFlagged++;
+    else if (entry?.sourceDetail?.voiceAutoFixed) voiceAdjusted++;
+
     if (isAwaitingInternalInput(answer)) {
       awaitingInternalInput++;
       continue;
@@ -99,10 +112,10 @@ export function buildFillReport(
     }
     if (isRealAnswer(answer)) {
       filled++;
-      const source = fields[f.id]?.source || "none";
+      const source = entry?.source || "none";
       bySource[source] = (bySource[source] || 0) + 1;
     }
   }
 
-  return { total: schema.length, filled, bySource, awaitingInternalInput, notDeterminable };
+  return { total: schema.length, filled, bySource, awaitingInternalInput, notDeterminable, voiceAdjusted, voiceFlagged };
 }

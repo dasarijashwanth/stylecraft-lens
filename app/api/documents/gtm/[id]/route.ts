@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { getDocumentById, getDocumentFields } from "@/lib/db/documents";
-import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, visibleGtmSchema } from "@/lib/gtm-field-schema";
 import { isRealAnswer, buildFillReport } from "@/lib/field-answer-state";
 
 // Reads only `params.id` — same latent Next.js route-handler-cache risk
@@ -22,14 +22,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (!project) return NextResponse.json({ error: "Document not found" }, { status: 404 });
 
     const fields = await getDocumentFields(document.id);
-    const completedCount = fields.filter(f => isRealAnswer(f.answer)).length;
 
-    const byId: Record<string, { answer?: string | null; source?: string | null }> = {};
-    for (const f of fields) byId[f.field_id] = { answer: f.answer, source: f.source };
-    const fillReport = buildFillReport(byId, GTM_FIELD_SCHEMA);
+    const byId: Record<string, { answer?: string | null; source?: string | null; sourceDetail?: any }> = {};
+    for (const f of fields) byId[f.field_id] = { answer: f.answer, source: f.source, sourceDetail: f.source_detail };
+    const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, byId);
+    const completedCount = fields.filter(f => isRealAnswer(f.answer)).length;
+    const fillReport = buildFillReport(byId, visibleSchema);
 
     return NextResponse.json({
-      document: { ...document, completedCount, totalFields: GTM_FIELD_SCHEMA.length, fillReport },
+      document: { ...document, completedCount, totalFields: visibleSchema.length, fillReport },
       fields,
     });
   } catch (err: any) {

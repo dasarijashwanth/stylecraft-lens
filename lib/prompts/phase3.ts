@@ -2,6 +2,7 @@ import { getMarketData } from "@/lib/market-data";
 import { buildOverviewParagraph, CompetitorSummary } from "@/lib/build-overview-paragraph";
 import type { AnalysisContext } from "@/lib/analysisEngine";
 import type { IdentityCard } from "@/lib/product-identification";
+import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock, getToneDirective } from "@/lib/brand-voice";
 
 export async function buildPhase3Prompt(
   ctx: AnalysisContext,
@@ -86,6 +87,13 @@ You have live Google Search available — use it to verify current market size, 
     ? `Pre-verified market data for this category is provided below in the template — use those exact figures, do not search for or invent different ones.`
     : `No pre-verified market data exists for this category. You MUST search the web for a real, current, citable market size figure. If you find one from a credible source, add it to "citations" with type "market_stat" and the exact URL + a short verbatim quote from the page. If you cannot find a reliable figure, leave "citations" without a market_stat entry — do NOT invent a number. Set every market_snapshot numeric field to null in that case; the app will render an honest "no verifiable public figure found" message instead of guessing.`;
 
+  // Brand Voice Guide — Corporate register only (confident but polished,
+  // no street slang, heritage OK per the tone spectrum) and strictly
+  // subordinate to every ABSOLUTE RULE below: voice never loosens the
+  // citation/no-invention discipline this prompt already enforces.
+  const brand = await resolveBrandForProduct(ctx.productName);
+  const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
+
   const systemText = `You are a market analyst. You MUST write analysis that is SPECIFIC to this exact product and its category (${identity.category} / ${identity.subcategory}) — never any other product category.
 
 Do not narrate your search process or explain what you're doing between searches — search silently, then respond with ONLY the final JSON object. No preamble, no commentary.
@@ -100,7 +108,8 @@ ABSOLUTE RULES:
 7. Do not include analysis of any other product category. Do not reuse boilerplate from previous analyses — every claim must trace to the competitor data or category above.
 8. Any competitor marked NEAREST-MATCH above was included only because no exact-fit competitor could be found — treat it as an adjacent-market reference point, never as a direct rival. Do not build a threat, positioning claim, or price-gap argument primarily around a nearest-match entry; prefer the non-nearest-match competitors for those. It's fine to mention one briefly for context (e.g. "the broader market includes X at $Y"), but never present it as if it directly competes on motor/plate-heat technology or market segment.
 ${extraInstruction ? `\n${extraInstruction}\n` : ""}
-Return ONLY valid JSON. No markdown.`;
+Return ONLY valid JSON. No markdown.${voiceBlock}\n${getToneDirective("corporate")}
+This voice/tone guidance NEVER overrides ABSOLUTE RULES 1-8 above — a claim still needs a real citation or it gets omitted, full stop.`;
 
   const userText = `${productSpecificBlock}
 

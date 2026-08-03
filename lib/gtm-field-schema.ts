@@ -44,6 +44,13 @@ export interface GtmField {
   // Owner/Notes/history), just tagged so the UI can render row groups and
   // CSV/PDF can trim trailing empty rows. See lib/gtm-group-fields.ts.
   group?: { id: string; index: number; total: number };
+  // GTM workbook export work — the official template has NO Axis Shield
+  // rows at all (confirmed against the real file), so these 4 fields are
+  // "legacy": still generated normally if a product genuinely has real
+  // data for them, but hidden from the UI (and excluded from completion %)
+  // when empty, rather than always showing an empty row. See
+  // visibleGtmSchema() below.
+  legacyOptional?: boolean;
 }
 
 // Narrative fields — the rest of the schema defaults to "grounded".
@@ -57,7 +64,25 @@ const WRITTEN_FIELD_IDS = new Set([
   "up_sell",
   "reason_to_buy",
   "expert_tip",
+  // Product FAQ section (GTM workbook export work)
+  "our_differentiators",
+  "selling_position",
+  "rep_talking_point_1",
+  "rep_talking_point_2",
+  "rep_talking_point_3",
+  // faq_question_N/faq_answer_N are written too — added via WRITTEN_FIELD_IDS
+  // below once the group ids are known (see the groupFields loop further
+  // down), rather than listing all 20 ids by hand here.
+  // Box Only section
+  "box_main_statement",
 ]);
+for (let i = 1; i <= 10; i++) {
+  WRITTEN_FIELD_IDS.add(`faq_question_${i}`);
+  WRITTEN_FIELD_IDS.add(`faq_answer_${i}`);
+}
+for (let i = 1; i <= 6; i++) {
+  WRITTEN_FIELD_IDS.add(`box_feature_${i}`);
+}
 
 // Genuine internal-decision fields — never answerable by AI, web search, or
 // derivation, only by a real team decision. See GtmFieldKind above.
@@ -70,6 +95,11 @@ export const INTERNAL_FIELD_IDS = new Set([
   "approved_pricing",
   "trademark_symbol",
   "rating_label",
+  // Product FAQ section's margin/quantity rows — genuine business decisions
+  // made after FAQ generation, not derivable from any source or web search.
+  "dealer_gross_margin_pct",
+  "retail_gross_margin_pct",
+  "initial_quantities_ordered",
 ]);
 
 const INTERNAL_FIELD_OWNERS: Record<string, string> = {
@@ -81,6 +111,9 @@ const INTERNAL_FIELD_OWNERS: Record<string, string> = {
   approved_pricing: "Sales",
   trademark_symbol: "Legal",
   rating_label: "Product Marketing",
+  dealer_gross_margin_pct: "Sales",
+  retail_gross_margin_pct: "Sales",
+  initial_quantities_ordered: "Sales",
 };
 
 interface FieldExtra {
@@ -88,6 +121,7 @@ interface FieldExtra {
   uiControl?: "sku_picker" | "select";
   options?: string[];
   group?: { id: string; index: number; total: number };
+  legacyOptional?: boolean;
 }
 
 function field(id: string, section: string, question: string, extra?: FieldExtra): GtmField {
@@ -189,9 +223,11 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("fixed_blade", "Blades", "Fixed Blade"),
   field("cutting_blade", "Blades", "Cutting Blade", { helperText: "Select the closest match, or choose Other and describe it in Notes." }),
 
-  // Lids
-  field("lids_qty", "Lids", "Qty"),
-  field("lids_colors", "Lids", "Colors"),
+  // Lids / Customizable Parts — renamed to match the official GTM workbook
+  // template's own section header (cosmetic label only, GTM_SECTIONS
+  // derives from this automatically).
+  field("lids_qty", "Lids / Customizable Parts", "Qty"),
+  field("lids_colors", "Lids / Customizable Parts", "Colors"),
 
   // Lever
   field("lever_type", "Lever", "Type"),
@@ -218,10 +254,14 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("screw_driver_brand", "Included in Box", "Screw Driver Brand"),
   field("screw_driver_other", "Included in Box", "Screw Driver Other"),
   field("stretch_bracket_color", "Included in Box", "Stretch Bracket Color"),
-  field("axis_shield_qty", "Included in Box", "Axis Shield Qty"),
-  field("axis_shield_color", "Included in Box", "Axis Shield Color"),
-  field("axis_shield_material", "Included in Box", "Axis Shield Material"),
-  field("axis_shield_description", "Included in Box", "Axis Shield Description"),
+  // legacyOptional — the official GTM workbook template has zero Axis
+  // Shield rows (confirmed against the real file); still generated
+  // normally when a product genuinely has real data, but hidden from the
+  // UI/completion-% when empty rather than always showing an empty row.
+  field("axis_shield_qty", "Included in Box", "Axis Shield Qty", { legacyOptional: true }),
+  field("axis_shield_color", "Included in Box", "Axis Shield Color", { legacyOptional: true }),
+  field("axis_shield_material", "Included in Box", "Axis Shield Material", { legacyOptional: true }),
+  field("axis_shield_description", "Included in Box", "Axis Shield Description", { legacyOptional: true }),
   field("cam_follower_qty", "Included in Box", "Cam Follower Qty"),
   field("cam_follower_color", "Included in Box", "Cam Follower Color"),
   field("cleaning_brush_qty", "Included in Box", "Cleaning Brush Qty"),
@@ -236,9 +276,54 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   // without guessing. Serves non-clipper products and anything the
   // tailored fields miss.
   field("whats_in_box_list", "Included in Box", "What's in the Box (full list)"),
+  // A one-line, comma-separated summary of whichever Included-in-Box fields
+  // above have real values (e.g. "Clipper, USB-C cord, 2 guards, cleaning
+  // brush, oil") — matches the official GTM workbook template's own
+  // "Included:" row (102) and BOX ONLY's "Includes" row. Derived, not
+  // written by AI — see lib/gtm-derive.ts's deriveIncludedSummary.
+  field("included_summary", "Included in Box", "Included:"),
+
+  // Product FAQ — generated automatically after GTM's own fields resolve
+  // (new "faqs" pipeline phase, lib/gtm-product-faqs.ts), matching the
+  // official GTM workbook template's "Product FAQ" tab.
+  ...groupFields("faq_question", "Product FAQ", "Q", 10),
+  ...groupFields("faq_answer", "Product FAQ", "A", 10),
+  field("our_differentiators", "Product FAQ", "Our Differentiators"),
+  field("selling_position", "Product FAQ", "Selling Position"),
+  field("rep_talking_point_1", "Product FAQ", "Rep Talking Point 1"),
+  field("rep_talking_point_2", "Product FAQ", "Rep Talking Point 2"),
+  field("rep_talking_point_3", "Product FAQ", "Rep Talking Point 3"),
+  field("dealer_gross_margin_pct", "Product FAQ", "Dealer Gross Margins: %"),
+  field("retail_gross_margin_pct", "Product FAQ", "Retail Gross Margin: %"),
+  field("initial_quantities_ordered", "Product FAQ", "Initial Quantities Ordered: #"),
+
+  // Box Only — matches the official GTM workbook template's "BOX ONLY" tab.
+  // Product Name/Collection Name/Icons/Warranty/Certifications/Includes/
+  // Charger Voltage all re-export existing fields directly (product_title,
+  // collection, feature_icons_1..6, warranty, certification_needed,
+  // included_summary, charging_voltage) — only the box-length condensations
+  // below need their own storage (lib/gtm-box-only.ts).
+  field("box_main_statement", "Box Only", "Main Statement", { helperText: "One punchy box-front statement, ≤15 words, distilled from the Positioning Statement." }),
+  ...groupFields("box_feature", "Box Only", "Box Feature", 6),
 ];
 
 export const GTM_SECTIONS = Array.from(new Set(GTM_FIELD_SCHEMA.map(f => f.section)));
+
+// Filters out a `legacyOptional` field (the 4 Axis Shield fields) when it
+// has no real answer — used by the UI render loop (so an empty Axis Shield
+// row simply never renders) and by every completion-percentage call site
+// (so an empty legacy field never drags down the denominator). A product
+// that genuinely has real Axis Shield data still shows/counts it normally.
+export function visibleGtmSchema<T extends { id: string; legacyOptional?: boolean }>(
+  schema: T[],
+  fields: Record<string, { answer?: string | null } | undefined>
+): T[] {
+  return schema.filter(f => {
+    if (!f.legacyOptional) return true;
+    const answer = (fields[f.id]?.answer ?? "").toString().trim();
+    return answer !== "" && answer.toUpperCase() !== "N/A";
+  });
+}
 
 export type GtmFieldSource = "project_record" | "sales_kit" | "tds" | "active_report" | "web" | "multiple" | "none" | "derived" | "category_default" | "manual_edit";
 
