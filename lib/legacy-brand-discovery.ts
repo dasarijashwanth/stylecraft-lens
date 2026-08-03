@@ -115,6 +115,23 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
+// Bounds a single async operation to a hard wall-clock deadline — mirrors
+// lib/analysisEngine.ts's own withDeadline exactly (same duplicated-locally
+// precedent as mapWithConcurrency above). Each brand below can run up to 2
+// SEQUENTIAL searchAmazonCategory calls (motor-first query, then a plain
+// fallback) — RAINFOREST_REQUEST_TIMEOUT_MS only bounds one fetch at a
+// time, so without this, one unlucky brand's two-call chain could still run
+// long enough to blow past CURATED_BRAND_SEARCH_TIME_BUDGET_MS, which is
+// only checked BETWEEN widen steps, never against a lookup already in flight.
+async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  const timeout = new Promise<T>(resolve => setTimeout(() => resolve(fallback), Math.max(0, ms)));
+  return Promise.race([promise, timeout]);
+}
+
+// Per-brand ceiling for the widen loop below — comfortably fits 2 widen
+// steps' worth of per-brand work inside CURATED_BRAND_SEARCH_TIME_BUDGET_MS.
+const CURATED_BRAND_QUERY_DEADLINE_MS = 8_000;
+
 // Accent/typography/casing-normalized, word-boundary token match —
 // stricter than lib/category-synonyms.ts's plain substring check (fine for
 // low-stakes category words), since brand identity is higher-stakes: a
@@ -309,23 +326,31 @@ export async function searchCuratedLegacyBrands(
           ? [`${alias} ${ourMotorLabel} ${toolTypeWord} ${subcategory}`.trim(), `${alias} ${toolTypeWord} ${subcategory}`.trim()]
           : [`${alias} ${toolTypeWord} ${subcategory}`.trim()];
 
-        let inBand: CategorySearchResult[] = [];
-        let matchedViaMotorQuery = false;
-        for (let qi = 0; qi < queries.length; qi++) {
-          const results = await searchAmazonCategory(queries[qi], 8);
-          inBand = results.filter(r => {
-            if (r.price_raw == null || !isWithinBand(r.price_raw, band)) return false;
-            if (!brandMatchesTitle(r.title, brand.brand_name, brand.aliases)) return false;
-            // No identity.toolType (legacy analysis pre-dating this field)
-            // — nothing strict to validate against, don't block.
-            if (identity.toolType && !assertToolType(r.title, identity.toolType, toolTypes).ok) return false;
-            return true;
-          });
-          if (inBand.length > 0) {
-            matchedViaMotorQuery = !!ourMotorLabel && qi === 0;
-            break;
+        // Wrapped with a hard per-brand deadline — up to 2 SEQUENTIAL
+        // Rainforest searches per brand (motor-first, then plain fallback)
+        // could otherwise chain past CURATED_BRAND_SEARCH_TIME_BUDGET_MS,
+        // which is only checked BETWEEN widen steps, never against a
+        // lookup already in flight (see withDeadline's own comment above).
+        const { inBand, matchedViaMotorQuery } = await withDeadline((async () => {
+          let inBandResult: CategorySearchResult[] = [];
+          let matchedViaMotorQueryResult = false;
+          for (let qi = 0; qi < queries.length; qi++) {
+            const results = await searchAmazonCategory(queries[qi], 8);
+            inBandResult = results.filter(r => {
+              if (r.price_raw == null || !isWithinBand(r.price_raw, band)) return false;
+              if (!brandMatchesTitle(r.title, brand.brand_name, brand.aliases)) return false;
+              // No identity.toolType (legacy analysis pre-dating this field)
+              // — nothing strict to validate against, don't block.
+              if (identity.toolType && !assertToolType(r.title, identity.toolType, toolTypes).ok) return false;
+              return true;
+            });
+            if (inBandResult.length > 0) {
+              matchedViaMotorQueryResult = !!ourMotorLabel && qi === 0;
+              break;
+            }
           }
-        }
+          return { inBand: inBandResult, matchedViaMotorQuery: matchedViaMotorQueryResult };
+        })(), CURATED_BRAND_QUERY_DEADLINE_MS, { inBand: [] as CategorySearchResult[], matchedViaMotorQuery: false });
 
         const entry = progressByBrand.get(brand.brand_name)!;
         if (inBand.length > 0) {

@@ -1322,6 +1322,41 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
+// Bounds a single async operation to a hard wall-clock deadline, resolving
+// to `fallback` if it hasn't settled in time. RAINFOREST_REQUEST_TIMEOUT_MS
+// (lib/rainforest.ts) only bounds ONE fetch — resolveAmazonProductForCandidate
+// below can chain up to 3 sequential Rainforest calls (direct ASIN lookup,
+// title/brand search, re-lookup of that match), so a per-fetch timeout alone
+// still lets one unlucky candidate's resolution run up to ~3x that long.
+// Confirmed live: this is what let a single Phase 1/2 competitor still blow
+// past Vercel's 60s cap ("Connection dropped") even after every individual
+// Rainforest call was capped. Mirrors the same Promise.race-against-a-timeout
+// pattern lib/brand-site-discovery.ts already uses for its own per-brand
+// attempts — the loser keeps running in the background (harmless; its
+// result is simply discarded) rather than being forcibly cancelled.
+async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  const timeout = new Promise<T>(resolve => setTimeout(() => resolve(fallback), Math.max(0, ms)));
+  return Promise.race([promise, timeout]);
+}
+
+// Every Rainforest-enrichment step below (Phase 1's curated-brand pass,
+// Phase 1's brand-site cross-check pass, Phase 2b's enrichment pass) shares
+// this ONE ceiling, measured from the phase step's own start — not a fresh
+// independent window per step — so they can never compound past Vercel's
+// 60s cap even in the worst case. 52s leaves 8s of headroom for everything
+// else in the same request (DB writes, JSON serialization, cold-start
+// overhead), the same slack convention ROUTE_TIME_BUDGET_MS already uses
+// for the AI-call fallback path below.
+const RAINFOREST_STEP_DEADLINE_MS = 52_000;
+// Per-candidate ceiling within that shared budget — never more than 8s
+// spent resolving any single competitor's real Amazon data, and never more
+// than whatever's actually left of the shared step deadline.
+const RAINFOREST_CANDIDATE_DEADLINE_MS = 8_000;
+
+function remainingRainforestBudget(routeStartTime: number): number {
+  return Math.max(0, RAINFOREST_STEP_DEADLINE_MS - (Date.now() - routeStartTime));
+}
+
 // Overwrite AI-discovered competitor price/rating/review data with real,
 // verified live Amazon data from Rainforest. Tries the AI-provided ASIN
 // first; if that doesn't resolve to a real listing (common — hardcoded
@@ -1373,7 +1408,7 @@ async function resolveAmazonProductForCandidate(asin: string | undefined | null,
   return product;
 }
 
-async function enrichCompetitorsWithRainforest(competitors: any[], toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null): Promise<any[]> {
+async function enrichCompetitorsWithRainforest(competitors: any[], toolTypes: ToolTypeRow[], requiredToolType: ToolType | null | undefined, routeStartTime: number): Promise<any[]> {
   if (!hasRainforestKey) return competitors;
 
   // Concurrency 5 (was 3) — safe to raise now that every Rainforest call is
@@ -1396,7 +1431,19 @@ async function enrichCompetitorsWithRainforest(competitors: any[], toolTypes: To
       const hasGroundingData = (c.specifications?.length > 0) || (c.attributes?.length > 0) || (c.feature_bullets?.length > 0) || !!c.description;
       if (c.verified_by_rainforest === true && hasGroundingData) return c;
 
-      const product = await resolveAmazonProductForCandidate(c.asin, c.name, c.brand, toolTypes, requiredToolType);
+      // Shared-clock budget check — once this phase step has already used
+      // up its Rainforest allotment (curated search + this pass + the
+      // brand-site cross-check pass all draw from the SAME
+      // RAINFOREST_STEP_DEADLINE_MS clock), stop attempting NEW candidates
+      // entirely rather than risking one more that can't finish in time.
+      const budgetLeft = remainingRainforestBudget(routeStartTime);
+      if (budgetLeft <= 0) return c;
+
+      const product = await withDeadline(
+        resolveAmazonProductForCandidate(c.asin, c.name, c.brand, toolTypes, requiredToolType),
+        Math.min(RAINFOREST_CANDIDATE_DEADLINE_MS, budgetLeft),
+        null
+      );
 
       if (!product) {
         // This candidate was already trusted (a real type=search
@@ -2107,7 +2154,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           // short-circuit) so this only re-fetches the ones that actually
           // still need it (pure Amazon-leg hits with no brand-site data).
           if (hasRainforestKey) {
-            competitors = await enrichCompetitorsWithRainforest(competitors, toolTypes, identityCard.toolType);
+            competitors = await enrichCompetitorsWithRainforest(competitors, toolTypes, identityCard.toolType, startTime);
           }
 
           // Brand-site-only candidates (no Amazon match from the concurrent
@@ -2122,7 +2169,18 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             // Concurrency 5 — same reasoning as enrichCompetitorsWithRainforest above.
             competitors = await mapWithConcurrency(competitors, 5, async (c: any) => {
               if (!c.sources?.brand_site || c.sources?.amazon) return c;
-              const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, toolTypes, identityCard.toolType);
+              // Same shared-clock budget + hard per-candidate deadline as
+              // enrichCompetitorsWithRainforest — this pass runs AFTER that
+              // one in the same request, drawing from whatever's left of
+              // the SAME RAINFOREST_STEP_DEADLINE_MS budget, so it can never
+              // add unbounded time on top.
+              const budgetLeft = remainingRainforestBudget(startTime);
+              if (budgetLeft <= 0) return c;
+              const product = await withDeadline(
+                resolveAmazonProductForCandidate(null, c.name, c.brand, toolTypes, identityCard.toolType),
+                Math.min(RAINFOREST_CANDIDATE_DEADLINE_MS, budgetLeft),
+                null
+              );
               if (!product) return c;
 
               const sitePriceRaw = c.sources.brand_site.price_raw;
@@ -2169,7 +2227,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes)
             .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()));
           if (hasRainforestKey) {
-            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType);
+            aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType, startTime);
           }
           pool = mergeNewCandidatesIntoPool(pool, aiCompetitors);
         }
@@ -2197,7 +2255,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()))
           .map((c: any) => (registry ? { ...c, curated_brand: false, brand_list_status: "not_curated" } : c));
         if (hasRainforestKey) {
-          aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType);
+          aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType, startTime);
         }
         pool = mergeNewCandidatesIntoPool(pool, aiCompetitors);
       }
@@ -2370,7 +2428,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       delete result.__phase2SearchesSoFar;
 
       if (hasRainforestKey) {
-        result.competitors = await enrichCompetitorsWithRainforest(result.competitors, toolTypes, identityCard.toolType);
+        result.competitors = await enrichCompetitorsWithRainforest(result.competitors, toolTypes, identityCard.toolType, startTime);
       }
 
       // Best-effort brand-site pass for emerging candidates — the curated

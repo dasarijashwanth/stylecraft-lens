@@ -42,6 +42,18 @@ async function buildIndieBrandLineup(brandName: string, subcategory: string): Pr
     .map(r => ({ asin: r.asin, title: r.title, price_raw: r.price_raw as number }));
 }
 
+// Bounds a single async operation to a hard wall-clock deadline — mirrors
+// lib/analysisEngine.ts's own withDeadline exactly (same duplicated-locally
+// precedent as mapWithConcurrency below). The budget check in
+// buildIndieBrandLineups only stops NEW brands from starting once exceeded
+// — it can't bound a lookup already in flight, so a single stalled
+// searchAmazonCategory call could otherwise still run long past the shared
+// budget and stall this whole batch.
+async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  const timeout = new Promise<T>(resolve => setTimeout(() => resolve(fallback), Math.max(0, ms)));
+  return Promise.race([promise, timeout]);
+}
+
 // Batch entry point — one lookup per distinct brand among the surviving
 // Phase 2 candidates, concurrency-limited to 3 (matches
 // lib/legacy-brand-discovery.ts's own concurrency choice). Once the shared
@@ -57,11 +69,12 @@ export async function buildIndieBrandLineups(brands: { brand: string; subcategor
   // lib/rainforest.ts), so a stalled lookup can no longer stall this whole
   // batch's wall-clock time.
   await mapWithConcurrency(brands, 5, async ({ brand, subcategory }) => {
-    if (Date.now() - startTime > INDIE_LINEUP_TIME_BUDGET_MS) {
+    const budgetLeft = INDIE_LINEUP_TIME_BUDGET_MS - (Date.now() - startTime);
+    if (budgetLeft <= 0) {
       result.set(brand, []);
       return;
     }
-    const lineup = await buildIndieBrandLineup(brand, subcategory);
+    const lineup = await withDeadline(buildIndieBrandLineup(brand, subcategory), budgetLeft, []);
     result.set(brand, lineup);
   });
 
