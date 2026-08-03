@@ -11,6 +11,8 @@ import { GtmPdf } from "./GtmPdf";
 import { ActiveReportPdf } from "./ActiveReportPdf";
 import { listToolTypes } from "@/lib/db/tool-types";
 import { isRealAnswer } from "@/lib/field-answer-state";
+import { listCatalogProducts } from "@/lib/db/catalog-products";
+import { resolveHeaderSku } from "@/lib/our-product-position";
 
 export type DocType = "sales-kit" | "tds" | "gtm" | "active-report";
 
@@ -93,11 +95,14 @@ export async function renderDocumentPdf(
     }
     const fields: Record<string, { answer: string; source: string; owner?: string | null; notes?: string | null }> = {};
     for (const r of rows) fields[r.field_id] = { answer: r.answer || "N/A", source: r.source || "none", owner: r.owner, notes: r.notes };
-    // Product Title renders "{Product Title} — {SKU}" once a SKU is set
-    // (GTM Schema v3) — SKU lives on the project record, not as its own
-    // GTM field.
-    if ((project as any).sku && fields.product_title && isRealAnswer(fields.product_title.answer)) {
-      fields.product_title = { ...fields.product_title, answer: `${fields.product_title.answer} — ${(project as any).sku}` };
+    // Product Title renders "{Product Title} — {SKU}" once a SKU is known
+    // (GTM Schema v3) — prefers the linked catalog record's own sku over
+    // the project's own sku field (see lib/our-product-position.ts's
+    // resolveHeaderSku).
+    const catalogProducts = await listCatalogProducts();
+    const headerSku = resolveHeaderSku(project.productName, catalogProducts, (project as any).sku);
+    if (headerSku && fields.product_title && isRealAnswer(fields.product_title.answer)) {
+      fields.product_title = { ...fields.product_title, answer: `${fields.product_title.answer} — ${headerSku}` };
     }
     element = <GtmPdf productName={productName} projectName={projectName} productKnowledge={{ fields }} />;
   } else if (docType === "active-report") {

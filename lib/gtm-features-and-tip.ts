@@ -24,6 +24,7 @@ import type { FeatureComparable } from "./competitor-scoring";
 import { matchesDifferentiator } from "./differentiator-match";
 import type { CompetitorSpecSource } from "./gtm-tier6-inference";
 import type { GtmSources } from "./gtm-generate";
+import { findCollectionByName } from "./db/collections";
 
 export type FeatureBulletSource = "input" | "our_listing" | "competitor_informed" | "unconfirmed";
 export interface FeatureBullet {
@@ -215,6 +216,105 @@ export function isGroundedInFeatures(tip: string, confirmedFeatureLines: string[
 function isUnresolved(fields: Record<string, GtmFieldAnswer>, id: string): boolean {
   const current = fields[id];
   return !current || current.source === "none" || current.answer.toUpperCase() === "N/A";
+}
+
+// GTM style-corpus work, Part C — collection narrative kernel adaptation.
+// The real Homie Clipper/Shaver/Foil GTM sheets all repeat-and-adapt the
+// SAME origin paragraph rather than each inventing an unrelated story —
+// this mirrors that: when a product's catalog `collection` matches a
+// stored kernel (lib/db/collections.ts), Product Name Origin /
+// name-ties-to-story get the kernel fed in as REQUIRED source material
+// with an explicit adapt-don't-invent-don't-copy instruction. Runs after
+// the main AI call (same isUnresolved gating as the rest of Tier 6.5) so
+// it only fills in when the general-purpose AI declined to answer (the
+// expected outcome per buildSystemInstruction's own rule: "skip gracefully
+// to N/A if the sources give no real basis — never invent a naming
+// story" — a collection-less/AI-only attempt has no real basis, but the
+// kernel gives it one). Marks its answer's sourceDetail.collectionKernelAdapted
+// so guardWrittenFieldsQuality's anti-copy check (which would otherwise
+// treat "reusing" the kernel's own wording as exemplar copying) exempts it
+// — this is the one sanctioned content reuse in the whole corpus system.
+const COLLECTION_KERNEL_FIELD_IDS = ["product_name_origin", "name_story_tie"] as const;
+
+async function adaptCollectionKernelField(
+  fieldId: string,
+  productName: string,
+  collectionName: string,
+  kernel: { narrative_kernel: string; logo_meaning: string; voice_notes: string }
+): Promise<string | null> {
+  const askedFor =
+    fieldId === "product_name_origin"
+      ? "where the product's name comes from / what it's rooted in"
+      : "how the product's name ties back to the collection's story (why the name earns its place, not just what it is)";
+
+  const systemInstruction = `You are writing the "${fieldId}" field for "${productName}", part of the "${collectionName}" collection.
+
+COLLECTION NARRATIVE KERNEL (the shared origin story for every product in this collection):
+${kernel.narrative_kernel}
+Logo meaning: ${kernel.logo_meaning}
+Voice: ${kernel.voice_notes}
+
+Write 2-4 sentences answering: ${askedFor}. ADAPT the kernel above to THIS specific product (name-check ${productName} and, if the kernel mentions sibling products, place this one naturally among them) — do not invent a different, unrelated story, and do not copy the kernel's sentences verbatim. Match the collection's voice.
+
+Return ONLY valid JSON: { "text": "..." }`;
+
+  const raw = await callAiForJson<{ text?: string }>(systemInstruction, `Product: ${productName}\nCollection: ${collectionName}`, "GTM-CollectionKernel", { timeoutMs: 20_000 });
+  const text = raw?.text?.trim();
+  return text && text.toUpperCase() !== "N/A" ? text : null;
+}
+
+export async function applyCollectionKernelAdaptation(
+  fields: Record<string, GtmFieldAnswer>,
+  schema: GtmField[],
+  productName: string,
+  collection: string | null | undefined
+): Promise<void> {
+  if (!collection) return;
+  const kernelRow = await findCollectionByName(collection);
+  if (!kernelRow || !kernelRow.narrative_kernel) return;
+
+  for (const fieldId of COLLECTION_KERNEL_FIELD_IDS) {
+    if (!schema.some(f => f.id === fieldId) || !isUnresolved(fields, fieldId)) continue;
+    const text = await adaptCollectionKernelField(fieldId, productName, kernelRow.name, kernelRow);
+    if (text) {
+      fields[fieldId] = {
+        answer: text,
+        source: "derived",
+        sourceDetail: { label: `Adapted from ${kernelRow.name} collection kernel`, collectionKernelAdapted: true },
+      };
+    }
+  }
+}
+
+// GTM style-corpus work, Part D — Core Consumer "Both" reason/direction.
+// core_consumer is already deterministic (the project's own targetMarket,
+// see lib/gtm-derive.ts) — confirmed against the real Homie Clipper/Shaver
+// GTM sheets that "Both (Include reason & directon in Notes)" is the exact
+// stored convention, with the Notes column itself left blank in both real
+// docs (a human convention that was never actually followed — this fills
+// it for real). Writes ONLY `notes` via GtmFieldAnswer.notes, never
+// touches `answer` — the select stays exactly "Both". Uses the same
+// FieldAnswerLike.notes -> saveDocumentFields plumbing as everything else
+// in Part D/E, so an existing human Notes value is never overwritten.
+async function generateCoreConsumerBothNote(productName: string): Promise<string | null> {
+  const systemInstruction = `"${productName}"'s Core Consumer is "Both" — it's sold to Pro and Retail buyers alike. Write ONE sentence giving the reason/direction for targeting both audiences with this specific product (e.g. its price point, use case, or positioning that makes it work for both).
+
+Return ONLY valid JSON: { "note": "..." }`;
+  const raw = await callAiForJson<{ note?: string }>(systemInstruction, `Product: ${productName}`, "GTM-CoreConsumerBothNote", { timeoutMs: 15_000 });
+  const note = raw?.note?.trim();
+  return note && note.toUpperCase() !== "N/A" ? note : null;
+}
+
+export async function applyCoreConsumerBothNote(
+  fields: Record<string, GtmFieldAnswer>,
+  schema: GtmField[],
+  productName: string
+): Promise<void> {
+  if (!schema.some(f => f.id === "core_consumer")) return;
+  const current = fields["core_consumer"];
+  if (!current || current.answer !== "Both" || current.notes) return;
+  const note = await generateCoreConsumerBothNote(productName);
+  if (note) fields["core_consumer"] = { ...current, notes: note };
 }
 
 export async function applyFeaturesAndExpertTip(

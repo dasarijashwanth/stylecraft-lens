@@ -25,6 +25,7 @@ import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similar
 import { meetsElaborationBar } from "./gtm-elaboration";
 import { GENERIC_EXEMPLARS } from "./gtm-reference-exemplars";
 import { hasCapsLead } from "./gtm-format-checks";
+import { renderStyleExemplarBlock, GTM_STYLE_EXEMPLARS } from "./gtm-style-exemplars";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
 import { listToolTypes } from "./db/tool-types";
 import { listCatalogProducts } from "./db/catalog-products";
@@ -32,7 +33,8 @@ import { listEnabledBrandNameHints } from "./db/brand-name-hints";
 import { matchCatalogProductByName } from "./our-product-position";
 import { extractOurSpecsFromTds } from "./spec-extraction";
 import { parsePriceToNumber } from "./pricing-analysis";
-import { applyFeaturesAndExpertTip } from "./gtm-features-and-tip";
+import { applyFeaturesAndExpertTip, applyCollectionKernelAdaptation, applyCoreConsumerBothNote } from "./gtm-features-and-tip";
+import { applyDeterministicNotesConventions } from "./gtm-notes-conventions";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
 // Confirmed live that a 45s/45s split here still produced a hard 504 (the
@@ -104,12 +106,56 @@ function sourceTextBlocks(sourceTexts: SourceTexts): string[] {
 const MOTOR_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Motor").map(f => f.id);
 const HEAT_TECH_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Heat/Plate Technology").map(f => f.id);
 
-export function structurallyInapplicableFieldIds(primaryCriterion: string | null | undefined): Set<string> {
+// GTM style-corpus work — a non-tool product_kind (accessory/replacement
+// part, e.g. SC559B, a foil head) structurally has none of these: confirmed
+// against the real Homie Shaver Replacement Foil GTM sheet, whose Lids/
+// Lever/Guards/Charging sections are ALL "N/A" and most Included in Box
+// rows are "N/A" too. whats_in_box_list and screw_driver_* are deliberately
+// KEPT eligible — an accessory can plausibly ship its own screwdriver/box
+// contents (a real judgment call, not a blanket rule — confirmed by
+// research finding no accessory-specific precedent that would justify
+// excluding these two).
+const LIDS_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Lids").map(f => f.id);
+const LEVER_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Lever").map(f => f.id);
+const GUARDS_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Guards").map(f => f.id);
+const CHARGING_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Charging").map(f => f.id);
+const ACCESSORY_NA_INCLUDED_IN_BOX_FIELD_IDS = [
+  "stretch_bracket_color",
+  "axis_shield_qty", "axis_shield_color", "axis_shield_material", "axis_shield_description",
+  "cam_follower_qty", "cam_follower_color",
+  "cleaning_brush_qty", "cleaning_brush_color",
+  "oil_bottle_qty",
+  "extra_screws_qty", "extra_screws_color",
+];
+
+export function structurallyInapplicableFieldIds(primaryCriterion: string | null | undefined, productKind?: string | null): Set<string> {
   const ids = new Set<string>();
-  if (!primaryCriterion) return ids;
-  if (primaryCriterion !== "motor") MOTOR_SECTION_FIELD_IDS.forEach(id => ids.add(id));
-  if (primaryCriterion !== "heat_technology") HEAT_TECH_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+  if (primaryCriterion) {
+    if (primaryCriterion !== "motor") MOTOR_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+    if (primaryCriterion !== "heat_technology") HEAT_TECH_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+  }
+  if (productKind && productKind !== "tool") {
+    LIDS_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+    LEVER_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+    GUARDS_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+    CHARGING_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+    ACCESSORY_NA_INCLUDED_IN_BOX_FIELD_IDS.forEach(id => ids.add(id));
+  }
   return ids;
+}
+
+// Resolves the linked catalog record's product_kind/collection for a
+// generation call — the project itself has no product_kind field of its
+// own (deliberately: adding one would mean analyze-form UI work out of
+// scope for this pass), so this reuses the same fuzzy name-match the
+// Manufacturer auto-detect cascade already relies on
+// (lib/our-product-position.ts's matchCatalogProductByName). A project with
+// no catalog link (ad-hoc/manual entry) resolves both to null, which is
+// exactly today's behavior everywhere that reads them.
+async function resolveCatalogProductKind(sources: GtmSources): Promise<{ productKind: string | null; collection: string | null }> {
+  const catalogProducts = await listCatalogProducts();
+  const matched = matchCatalogProductByName(sources.project.productName, catalogProducts);
+  return { productKind: matched?.product_kind ?? null, collection: matched?.collection ?? null };
 }
 
 // Text blob for lib/gtm-tier6-inference.ts's keyword-based hair_type
@@ -130,7 +176,7 @@ function buildHairTypeSourceText(sources: GtmSources): string {
 // admin-managed tables) rather than threading them through every caller.
 async function buildTier6ExtraInputs(sources: GtmSources, toolTypes: { type_key: string; label: string }[]) {
   const [catalogProducts, brandHints] = await Promise.all([listCatalogProducts(), listEnabledBrandNameHints()]);
-  const catalogLineupRows: CatalogLineupRow[] = catalogProducts.map(p => ({ tool_type: p.tool_type, target_price: p.target_price, active: p.active }));
+  const catalogLineupRows: CatalogLineupRow[] = catalogProducts.map(p => ({ tool_type: p.tool_type, target_price: p.target_price, active: p.active, product_kind: p.product_kind }));
 
   const ourToolType = sources.project.toolType || null;
   const toolTypeLabel = toolTypes.find(t => t.type_key === ourToolType)?.label || ourToolType || "product";
@@ -148,7 +194,7 @@ async function buildTier6ExtraInputs(sources: GtmSources, toolTypes: { type_key:
   }));
 
   return {
-    catalogLineup: { ourToolType, ourPriceRaw, catalogProducts: catalogLineupRows, toolTypeLabel },
+    catalogLineup: { ourToolType, ourPriceRaw, catalogProducts: catalogLineupRows, toolTypeLabel, ourProductKind: matchedCatalogProduct?.product_kind ?? null },
     performance: { ourRpm, ourMotorLabel, competitors },
     manufacturer: {
       productName: sources.project.productName,
@@ -164,6 +210,12 @@ function buildSystemInstruction(productName: string, schema: GtmField[]) {
   const fieldList = schema
     .map(f => `- ${f.id} [${f.section}] (${f.kind === "grounded" ? "HARD-GROUNDED" : "WRITTEN"}): ${f.question}`)
     .join("\n");
+
+  // Real-exemplar style corpus (lib/gtm-style-exemplars.ts) — only attached
+  // when this chunk actually contains a style-sensitive field, so purely
+  // grounded/spec chunks (dimensions, packaging, etc.) don't pay the token
+  // cost of a corpus they have no use for.
+  const styleExemplarBlock = renderStyleExemplarBlock(schema.map(f => f.group?.id || f.id));
 
   return `You are generating a Go-To-Market Product Knowledge sheet for ONE specific product: ${productName}. Write it like a real product marketing team would — detailed and structured, never one-word or generic.
 
@@ -194,7 +246,7 @@ ${fieldList}
 Return ONLY valid JSON — no markdown, no explanation — keyed by field id:
 { "<field_id>": { "answer": "...", "source": "project_record" | "competitive_analysis" | "tds" | "sales_kit" | "web" | "multiple" | "none" } }
 
-If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.`;
+If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.${styleExemplarBlock}`;
 }
 
 function buildUserContent(sourceTexts: SourceTexts) {
@@ -314,7 +366,8 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // category defaults) ever revisits these fields; see
   // structurallyInapplicableFieldIds above.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
-  const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion);
+  const { productKind, collection } = await resolveCatalogProductKind(sources);
+  const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion, productKind);
   const pipelineSchema = schema.filter(f => !structuralNaIds.has(f.id));
 
   // "internal"-kind fields (dieline, approved pricing, etc.) are never
@@ -379,6 +432,8 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // performance already settled) so Expert Tip's grounding has a real,
   // resolved feature list to reference — see lib/gtm-features-and-tip.ts.
   await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart);
+  await applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection);
+  await applyCoreConsumerBothNote(grounded, pipelineSchema, productName);
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
@@ -388,6 +443,11 @@ export async function generateAllFields(productName: string, sources: GtmSources
   applyCategoryDefaults(grounded, pipelineSchema, sources.project.category);
 
   await guardWrittenFieldsQuality(grounded, pipelineSchema, sources, productName, projectId, pipelineStart);
+
+  // Part E — deterministic Notes conventions (No lever./No guards.,
+  // assembled-on-unit qty phrasing). Runs last, after every AI/web/derived
+  // tier has settled, since it reads each field's final resolved answer.
+  applyDeterministicNotesConventions(grounded, pipelineSchema, sources, productKind);
 
   // Terminal step — converts anything still unresolved into
   // "Not found — checked {K} sources" ("Awaiting internal input" for
@@ -411,7 +471,8 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // real answer, so a regenerate of one of these skips AI/web entirely,
   // same as the full-document pipeline. See structurallyInapplicableFieldIds.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
-  if (structurallyInapplicableFieldIds(primaryCriterion).has(fieldId)) {
+  const { productKind, collection } = await resolveCatalogProductKind(sources);
+  if (structurallyInapplicableFieldIds(primaryCriterion, productKind).has(fieldId)) {
     return { answer: "N/A", source: "none" };
   }
 
@@ -456,11 +517,15 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     ...tier6Extra,
   });
   await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now());
+  await applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection);
+  await applyCoreConsumerBothNote(guarded, [schemaField], productName);
   applyCategoryDefaults(guarded, [schemaField], sources.project.category);
 
   if (schemaField.kind === "written") {
     await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now());
   }
+
+  applyDeterministicNotesConventions(guarded, [schemaField], sources, productKind);
 
   // AI + web search + Tier 6/6.5 + category default — the 4 tiers this
   // single-field regenerate actually ran above.
@@ -498,6 +563,23 @@ function meetsFormatConvention(fieldId: string, answer: string): boolean {
   return capsLeadCount / lines.length >= 0.5;
 }
 
+// Anti-copy guard against the real exemplar corpus (lib/gtm-style-exemplars.ts)
+// — distinct from GENERIC_EXEMPLARS' single generic-filler check above.
+// Compares against ALL 4 real products' text for this same field id;
+// >0.8 similarity means the model leaned on the exemplar's own wording
+// instead of writing fresh copy for THIS product. Collection-kernel
+// adaptations (lib/gtm-features-and-tip.ts) are the one sanctioned reuse
+// and are exempted by the caller before this ever runs on their answer.
+const EXEMPLAR_COPY_SIMILARITY_THRESHOLD = 0.8;
+
+function findExemplarCopyMatch(fieldOrGroupId: string, answer: string): string | null {
+  for (const ex of GTM_STYLE_EXEMPLARS) {
+    const text = ex.excerpts[fieldOrGroupId];
+    if (text && textSimilarity(answer, text) > EXEMPLAR_COPY_SIMILARITY_THRESHOLD) return text;
+  }
+  return null;
+}
+
 async function guardWrittenFieldsQuality(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
@@ -516,12 +598,16 @@ async function guardWrittenFieldsQuality(
     .filter(Boolean)
     .map(v => String(v));
 
-  type Reason = { kind: "boilerplate" | "shallow" | "generic" | "unformatted"; detail?: string };
+  type Reason = { kind: "boilerplate" | "shallow" | "generic" | "unformatted" | "exemplar_copy"; detail?: string };
   const retryReasons = new Map<string, Reason>();
 
   for (const f of writtenFields) {
     const current = fields[f.id];
     if (!current?.answer || current.answer.toUpperCase() === "N/A") continue;
+    // Collection-kernel adaptations (lib/gtm-features-and-tip.ts) are the
+    // one sanctioned reuse of another product's text — never run the
+    // exemplar-copy check (or any boilerplate-style check) against them.
+    if (current.sourceDetail?.collectionKernelAdapted) continue;
 
     const other = otherByFieldId.get(f.id);
     if (other?.answer && other.answer.toUpperCase() !== "N/A" && textSimilarity(current.answer, other.answer) > BOILERPLATE_SIMILARITY_THRESHOLD) {
@@ -535,6 +621,11 @@ async function guardWrittenFieldsQuality(
     const exemplar = GENERIC_EXEMPLARS[f.id];
     if (exemplar && textSimilarity(current.answer, exemplar) > BOILERPLATE_SIMILARITY_THRESHOLD) {
       retryReasons.set(f.id, { kind: "generic" });
+      continue;
+    }
+    const exemplarCopyMatch = findExemplarCopyMatch(f.group?.id || f.id, current.answer);
+    if (exemplarCopyMatch) {
+      retryReasons.set(f.id, { kind: "exemplar_copy", detail: exemplarCopyMatch });
       continue;
     }
     if (!meetsFormatConvention(f.id, current.answer)) {
@@ -568,6 +659,7 @@ async function guardWrittenFieldsQuality(
         shallow: `The previous draft was too short/shallow — it needs real depth (see the REQUIRED DEPTH guidance above for this field).`,
         generic: `The previous draft read like generic, could-apply-to-any-product marketing filler.`,
         unformatted: `The previous draft didn't follow the required format — each claim must start with a short ALL-CAPS claim phrase (e.g. "ZERO-GAP PRECISION — cuts closer without snagging"), followed by the supporting spec and a plain-language benefit.`,
+        exemplar_copy: `The previous draft copied or too closely paraphrased one of the STYLE EXEMPLAR documents' own text. Those describe a DIFFERENT product — write fresh copy grounded ONLY in ${productName}'s own real facts, matching the exemplars' depth/format/voice but never their actual wording.`,
       }[reason.kind];
       const retryInstruction = `${buildSystemInstruction(productName, [f])}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
       // These retries run concurrently for up to 9 written fields — a
@@ -581,8 +673,9 @@ async function guardWrittenFieldsQuality(
       const stillShallow = retryAnswer ? !meetsElaborationBar(f.id, retryAnswer) : true;
       const stillGeneric = exemplar && retryAnswer ? textSimilarity(retryAnswer, exemplar) > BOILERPLATE_SIMILARITY_THRESHOLD : false;
       const stillUnformatted = retryAnswer ? !meetsFormatConvention(f.id, retryAnswer) : true;
+      const stillExemplarCopy = retryAnswer ? !!findExemplarCopyMatch(f.group?.id || f.id, retryAnswer) : true;
 
-      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && !stillBoilerplate && !stillShallow && !stillGeneric && !stillUnformatted) {
+      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && !stillBoilerplate && !stillShallow && !stillGeneric && !stillUnformatted && !stillExemplarCopy) {
         fields[f.id] = { answer: retryAnswer, source: (retryRaw?.[f.id]?.source as GtmFieldSource) || current.source };
       } else {
         flagAsIs(f, reason.kind);

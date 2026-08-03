@@ -263,6 +263,11 @@ export interface GtmFieldAnswer {
   source: GtmFieldSource;
   sourceDetail?: any;
   flagged?: boolean;
+  // GTM style-corpus work, Part D — a deriver-written Notes value (e.g.
+  // Core Consumer "Both"'s reason, or Part E's deterministic conventions).
+  // lib/db/documents.ts's saveDocumentFields only ever uses this to fill a
+  // genuinely empty Notes slot — a human's existing Notes always wins.
+  notes?: string;
 }
 
 export interface ProductKnowledge {

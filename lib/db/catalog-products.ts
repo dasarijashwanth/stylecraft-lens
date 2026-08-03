@@ -32,6 +32,16 @@ export interface CatalogProductRow {
   // hasn't set yet.
   brand: string | null;
   sku: string | null;
+  // GTM style-corpus work — see supabase_schema.sql Section 38. product_kind
+  // drives structural N/A for accessory/replacement-part products
+  // (lib/gtm-generate.ts's structurallyInapplicableFieldIds); parent_sku
+  // links an accessory back to the tool it services; collection is matched
+  // against lib/db/collections.ts's narrative-kernel table at generation
+  // time. Every pre-existing row defaults product_kind to 'tool' (accurate
+  // — every row seeded before this was a full tool, never an accessory).
+  product_kind: string;
+  parent_sku: string | null;
+  collection: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +64,9 @@ function mockToRow(p: MockCatalogProduct): CatalogProductRow {
     source: p.source,
     brand: p.brand ?? null,
     sku: p.sku ?? null,
+    product_kind: p.productKind ?? "tool",
+    parent_sku: p.parentSku ?? null,
+    collection: p.collection ?? null,
     created_at: p.createdAt.toISOString(),
     updated_at: p.updatedAt.toISOString(),
   };
@@ -63,7 +76,11 @@ function mockToRow(p: MockCatalogProduct): CatalogProductRow {
 // added before this column existed — same discipline as legacy-brands.ts's
 // normalizeBrandRow.
 function normalizeRow(row: any): CatalogProductRow {
-  return { ...row, import_flags: row.import_flags || [] };
+  // Guards against product_kind coming back absent from a row selected
+  // before Section 38's ALTER TABLE has been run against production —
+  // same discipline as import_flags below (lib/db/legacy-brands.ts's
+  // normalizeBrandRow has the exact same precedent for a missing column).
+  return { ...row, import_flags: row.import_flags || [], product_kind: row.product_kind || "tool" };
 }
 
 // Active-only, name-sorted — what the analyze form's catalog picker shows.
@@ -110,6 +127,9 @@ export interface CatalogProductInput {
   source?: string;
   brand?: string | null;
   sku?: string | null;
+  productKind?: string;
+  parentSku?: string | null;
+  collection?: string | null;
 }
 
 export async function addCatalogProduct(input: CatalogProductInput): Promise<CatalogProductRow> {
@@ -131,6 +151,9 @@ export async function addCatalogProduct(input: CatalogProductInput): Promise<Cat
         source: input.source || "manual",
         brand: input.brand ?? null,
         sku: input.sku ?? null,
+        product_kind: input.productKind || "tool",
+        parent_sku: input.parentSku ?? null,
+        collection: input.collection ?? null,
       })
       .select()
       .single();
@@ -156,6 +179,9 @@ export async function addCatalogProduct(input: CatalogProductInput): Promise<Cat
     source: input.source || "manual",
     brand: input.brand ?? null,
     sku: input.sku ?? null,
+    productKind: input.productKind || "tool",
+    parentSku: input.parentSku ?? null,
+    collection: input.collection ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -183,6 +209,9 @@ export async function updateCatalogProduct(
     if (patch.active !== undefined) dbPatch.active = patch.active;
     if (patch.brand !== undefined) dbPatch.brand = patch.brand;
     if (patch.sku !== undefined) dbPatch.sku = patch.sku;
+    if (patch.productKind !== undefined) dbPatch.product_kind = patch.productKind;
+    if (patch.parentSku !== undefined) dbPatch.parent_sku = patch.parentSku;
+    if (patch.collection !== undefined) dbPatch.collection = patch.collection;
     const { data, error } = await supabaseAdmin.from("catalog_products").update(dbPatch).eq("id", id).select().single();
     if (error) throw error;
     return normalizeRow(data);
@@ -204,6 +233,9 @@ export async function updateCatalogProduct(
   if (patch.active !== undefined) row.active = patch.active;
   if (patch.brand !== undefined) row.brand = patch.brand;
   if (patch.sku !== undefined) row.sku = patch.sku;
+  if (patch.productKind !== undefined) row.productKind = patch.productKind;
+  if (patch.parentSku !== undefined) row.parentSku = patch.parentSku;
+  if (patch.collection !== undefined) row.collection = patch.collection;
   row.updatedAt = new Date();
   return mockToRow(row);
 }

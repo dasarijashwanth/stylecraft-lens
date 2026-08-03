@@ -24,16 +24,29 @@ export interface CatalogLineupRow {
   tool_type: string;
   target_price: number | null;
   active: boolean;
+  // GTM style-corpus work — pools an accessory/replacement-part product
+  // against OTHER accessories/replacement parts of the same tool_type,
+  // never against full tools. Confirmed against the real Homie Shaver
+  // Replacement Foil GTM sheet: its Good Better Best answer is literally
+  // "Best" despite a ~$10 price — a coherent answer only because it's
+  // ranked among other cheap replacement foils, not full shavers. Defaults
+  // to "tool" so every pre-existing row (all real tools, never an
+  // accessory) keeps its current pool/behavior unchanged.
+  product_kind?: string;
 }
 
 export function deriveGoodBetterBestLineup(
   ourToolType: string | null | undefined,
   ourPriceRaw: number | null,
   catalogProducts: CatalogLineupRow[],
-  toolTypeLabel: string
+  toolTypeLabel: string,
+  ourProductKind?: string | null
 ): GtmFieldAnswer | null {
   if (!ourToolType || ourPriceRaw == null) return null;
-  const siblings = catalogProducts.filter(p => p.active && p.tool_type === ourToolType && p.target_price != null);
+  const kind = ourProductKind || "tool";
+  const siblings = catalogProducts.filter(
+    p => p.active && p.tool_type === ourToolType && p.target_price != null && (p.product_kind || "tool") === kind
+  );
   if (siblings.length < 1) return null; // need >=1 sibling + ours = >=2 total, computeTiers' own floor
 
   const values = [ourPriceRaw, ...siblings.map(p => p.target_price as number)];
@@ -42,10 +55,11 @@ export function deriveGoodBetterBestLineup(
   if (!myTier) return null;
 
   const n = siblings.length;
+  const noun = kind === "tool" ? toolTypeLabel : kind.replace(/_/g, " ");
   return {
     answer: myTier,
     source: "derived",
-    sourceDetail: { label: `Derived from catalog lineup (${n} ${toolTypeLabel}${n === 1 ? "" : "s"})` },
+    sourceDetail: { label: `Derived from catalog lineup (${n} ${noun}${n === 1 ? "" : "s"})` },
   };
 }
 
@@ -226,6 +240,7 @@ export function applyTier6Inference(
       ourPriceRaw: number | null;
       catalogProducts: CatalogLineupRow[];
       toolTypeLabel: string;
+      ourProductKind?: string | null;
     } | null;
     performance?: {
       ourRpm: number | null;
@@ -251,7 +266,8 @@ export function applyTier6Inference(
       input.catalogLineup.ourToolType,
       input.catalogLineup.ourPriceRaw,
       input.catalogLineup.catalogProducts,
-      input.catalogLineup.toolTypeLabel
+      input.catalogLineup.toolTypeLabel,
+      input.catalogLineup.ourProductKind
     );
     if (derived) fields["good_better_best"] = derived;
   }

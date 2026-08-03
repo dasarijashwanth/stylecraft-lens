@@ -1359,3 +1359,59 @@ ON CONFLICT (brand) DO NOTHING;
 -- GTM tab. No CHECK constraint — same plain-VARCHAR convention as every
 -- other project column.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS sku VARCHAR(100);
+
+-- 38. CATALOG PRODUCTS: PRODUCT KIND + PARENT SKU + COLLECTION — GTM style
+-- corpus work. product_kind distinguishes a full tool from an accessory/
+-- replacement part (e.g. SC559B, a foil head) so Motor/Lids/Lever/Guards/
+-- Charging/most Included-in-Box fields resolve straight to N/A for it
+-- without ever attempting a scrape (see lib/gtm-generate.ts's
+-- structurallyInapplicableFieldIds). parent_sku links an accessory back to
+-- the tool it services (SC559B -> SC817B) for cross-sell/tier derivation.
+-- collection is the free-text product line name ("Homie", "360 Jeezy") a
+-- product belongs to, matched case-insensitively against the new
+-- collections table (Section 39) at generation time. No CHECK constraints —
+-- same plain-VARCHAR convention as every other catalog column.
+ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS product_kind VARCHAR(20) NOT NULL DEFAULT 'tool';
+ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS parent_sku VARCHAR(100);
+ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS collection VARCHAR(100);
+
+-- 39. COLLECTIONS — admin-editable narrative kernels (origin story, logo
+-- meaning, voice notes) for a named product line ("Homie", "360 Jeezy").
+-- When a product's catalog_products.collection matches a stored kernel,
+-- GTM's Product Name Origin / name-ties-to-story generation ADAPTS the
+-- kernel to the specific product instead of inventing a new story or
+-- copying it verbatim (see lib/gtm-features-and-tip.ts) — mirroring how the
+-- real Homie Clipper/Shaver/Foil GTM sheets repeat-and-adapt the same
+-- origin paragraph. Seeded with the real Homie and 360 Jeezy kernel text
+-- (quoted from those same approved sheets), same "always-seeded real
+-- default configuration" precedent as brand_name_hints.
+CREATE TABLE IF NOT EXISTS collections (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(100) NOT NULL UNIQUE,
+    narrative_kernel TEXT NOT NULL DEFAULT '',
+    logo_meaning TEXT NOT NULL DEFAULT '',
+    voice_notes TEXT NOT NULL DEFAULT '',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for collections" ON collections FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO collections (name, narrative_kernel, logo_meaning, voice_notes, sort_order) VALUES
+    (
+        'Homie',
+        'Homie is a term rooted in loyalty, familiarity, and community - it''s the person who always has your back, reliable, real, and never pretentious. The Homie name was established with the Homie Nano Clipper and carried through the full collection (Clipper, Trimmer, Shaver) to represent StyleCraft''s connection to the grooming community at every level.',
+        'The stylized H with a heart in the logo reinforces that emotional bond - this is a brand that cares about craft and the people who practice it.',
+        'Confident, down-to-earth, community-rooted. Not trying to be premium - owning the accessible-pro lane with pride. Real talk, no fluff. A homie doesn''t show off, they just show up and deliver.',
+        0
+    ),
+    (
+        '360 Jeezy',
+        'The 360 Jeezy collaboration represents a full-circle approach to barbering: precision, consistency, and mastery from every angle. Just like a clean 360 wave pattern, every detail matters. Co-designed with one of the industry''s most recognized barbers, every feature decision was made from behind the chair, not behind a desk.',
+        'N/A - no distinct logo lockup beyond the co-branded S|C x 360 Jeezy wordmark.',
+        'Bold, technical authority, craft language. Peer-to-peer trust from a working barber, not celebrity hype. Confident, professional, never generic/corporate.',
+        1
+    )
+ON CONFLICT (name) DO NOTHING;

@@ -14,6 +14,12 @@ export interface FieldAnswerLike {
   source: string;
   sourceDetail?: any;
   flagged?: boolean;
+  // GTM style-corpus work, Part D — lets a generation-time deriver write
+  // into Notes (e.g. Core Consumer "Both"'s 1-sentence reason, or Part E's
+  // "No lever."/"No guards." conventions) without ever clobbering a human's
+  // own typed Notes — see saveDocumentFields' prior?.notes ?? next.notes
+  // ordering below, where an existing human Notes value always wins.
+  notes?: string;
 }
 
 export interface DocumentRow {
@@ -246,7 +252,9 @@ export async function saveDocumentFields(
     // lib/gtm-field-schema.ts's INTERNAL_FIELD_OWNERS), else the general
     // marketing-team default.
     const owner = prior?.owner ?? f.owner ?? "Product Marketing";
-    const notes = prior?.notes ?? null;
+    // A human's already-typed Notes always wins — a deriver's `next.notes`
+    // only fills a genuinely empty slot, never overwrites one.
+    const notes = prior?.notes ?? next.notes ?? null;
 
     if (prior && prior.answer !== next.answer) {
       historyRows.push({ document_field_id: prior.id, answer: prior.answer, changed_by: updatedBy });

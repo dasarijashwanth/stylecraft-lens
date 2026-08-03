@@ -7,6 +7,8 @@ import { GTM_FIELD_SCHEMA, GTM_SOURCE_LABELS, type GtmFieldSource } from "@/lib/
 import { isRealAnswer } from "@/lib/field-answer-state";
 import { sanitizeCsvCell } from "@/lib/csv-safe";
 import { filterTrailingEmptyGroupRows } from "@/lib/gtm-group-fields";
+import { listCatalogProducts } from "@/lib/db/catalog-products";
+import { resolveHeaderSku } from "@/lib/our-product-position";
 
 // A flagged field's `answer` almost always still holds the real (if
 // imperfect/conflicting) value — never destroy it with a generic message.
@@ -37,6 +39,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const fields = await getDocumentFields(document.id);
     const byId = new Map(fields.map(f => [f.field_id, f]));
+    const catalogProducts = await listCatalogProducts();
+    const headerSku = resolveHeaderSku(project.productName, catalogProducts, (project as any).sku);
 
     // Iterate the SCHEMA, not the saved rows — guarantees exactly one row
     // per schema field (including ones never generated/saved), so the
@@ -60,11 +64,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       } else {
         answer = trimmed;
       }
-      // Product Title renders "{Product Title} — {SKU}" once a SKU is set
-      // (GTM Schema v3) — SKU lives on the project record, not as its own
-      // GTM field.
-      if (schemaField.id === "product_title" && (project as any).sku && isRealAnswer(trimmed)) {
-        answer = `${answer} — ${(project as any).sku}`;
+      // Product Title renders "{Product Title} — {SKU}" once a SKU is
+      // known (GTM Schema v3) — prefers the linked catalog record's own
+      // sku over the project's own sku field (see
+      // lib/our-product-position.ts's resolveHeaderSku).
+      if (schemaField.id === "product_title" && headerSku && isRealAnswer(trimmed)) {
+        answer = `${answer} — ${headerSku}`;
       }
 
       const source = GTM_SOURCE_LABELS[(entry?.source as GtmFieldSource) || "none"] ?? GTM_SOURCE_LABELS.none;

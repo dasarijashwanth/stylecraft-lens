@@ -40,6 +40,21 @@ export function matchCatalogProductByName(productName: string, catalogProducts: 
   );
 }
 
+// GTM style-corpus work, Part D — Product Title's header suffix
+// ("{Product Title} — {SKU}", GTM Schema v3) prefers the linked catalog
+// record's OWN sku (the real identity source per the 4 real GTM sheets —
+// SKU is product/catalog identity, not project-level data) over the
+// project's own manually-typed sku field, falling back to that field for
+// an ad-hoc/non-catalog project with no catalog link at all.
+export function resolveHeaderSku(
+  productName: string,
+  catalogProducts: CatalogProductRow[],
+  projectSku: string | null | undefined
+): string | null {
+  const matched = matchCatalogProductByName(productName, catalogProducts);
+  return matched?.sku || projectSku || null;
+}
+
 function tierFromPercentile(percentile: number): LineupTier {
   if (percentile >= 0.75) return "flagship";
   if (percentile >= 0.35) return "mid";

@@ -274,6 +274,21 @@ export interface MockBrandNameHint {
   updatedAt: Date;
 }
 
+// GTM style-corpus work — admin-editable narrative kernel (origin story,
+// logo meaning, voice notes) for a named product line ("Homie", "360
+// Jeezy"). See lib/db/collections.ts.
+export interface MockCollection {
+  id: string;
+  name: string;
+  narrativeKernel: string;
+  logoMeaning: string;
+  voiceNotes: string;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MockMotorFamily {
   id: string;
   familyKey: string;
@@ -407,6 +422,12 @@ export interface MockCatalogProduct {
   // null until an admin fills it in (no SKU data exists in the seed source).
   brand?: string | null;
   sku?: string | null;
+  // Section 38 — GTM style-corpus work. productKind defaults to "tool" for
+  // every existing seed row (accurate — none of them are accessories);
+  // parentSku/collection stay null/undefined until an admin sets them.
+  productKind?: string;
+  parentSku?: string | null;
+  collection?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -578,6 +599,9 @@ class MemoryDatabase {
   // default StyleCraft/Gamma+ name-prefix hints for GTM's Manufacturer
   // auto-detect cascade, not an empty admin table.
   brandNameHints: MockBrandNameHint[] = [];
+  // Same always-seeded precedent — real default Homie/360 Jeezy collection
+  // kernels (lib/db/collections.ts), not an empty admin table.
+  collections: MockCollection[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
   // Replaces competitorMatchingConfig above — per-tool-type weight profiles.
   // Same always-seeded precedent as motorFamilies/toolTypes.
@@ -620,6 +644,7 @@ class MemoryDatabase {
     this.seedBrandedMotorNameDefaults();
     this.seedCatalogProductDefaults();
     this.seedBrandNameHintDefaults();
+    this.seedCollectionDefaults();
     this.seedFaqDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
@@ -1119,6 +1144,43 @@ class MemoryDatabase {
         id: `bhint_${i}`,
         brand: d.brand,
         namePrefixes: d.namePrefixes,
+        enabled: true,
+        sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 39 collections seed INSERT
+  // exactly — real Homie/360 Jeezy narrative kernel text quoted verbatim
+  // from the approved GTM sheets, not invented.
+  seedCollectionDefaults() {
+    if (this.collections.length > 0) return;
+    const now = new Date();
+    const defs: { name: string; narrativeKernel: string; logoMeaning: string; voiceNotes: string }[] = [
+      {
+        name: "Homie",
+        narrativeKernel:
+          "Homie is a term rooted in loyalty, familiarity, and community - it's the person who always has your back, reliable, real, and never pretentious. The Homie name was established with the Homie Nano Clipper and carried through the full collection (Clipper, Trimmer, Shaver) to represent StyleCraft's connection to the grooming community at every level.",
+        logoMeaning: "The stylized H with a heart in the logo reinforces that emotional bond - this is a brand that cares about craft and the people who practice it.",
+        voiceNotes: "Confident, down-to-earth, community-rooted. Not trying to be premium - owning the accessible-pro lane with pride. Real talk, no fluff. A homie doesn't show off, they just show up and deliver.",
+      },
+      {
+        name: "360 Jeezy",
+        narrativeKernel:
+          "The 360 Jeezy collaboration represents a full-circle approach to barbering: precision, consistency, and mastery from every angle. Just like a clean 360 wave pattern, every detail matters. Co-designed with one of the industry's most recognized barbers, every feature decision was made from behind the chair, not behind a desk.",
+        logoMeaning: "N/A - no distinct logo lockup beyond the co-branded S|C x 360 Jeezy wordmark.",
+        voiceNotes: "Bold, technical authority, craft language. Peer-to-peer trust from a working barber, not celebrity hype. Confident, professional, never generic/corporate.",
+      },
+    ];
+    defs.forEach((d, i) => {
+      this.collections.push({
+        id: `collection_${i}`,
+        name: d.name,
+        narrativeKernel: d.narrativeKernel,
+        logoMeaning: d.logoMeaning,
+        voiceNotes: d.voiceNotes,
         enabled: true,
         sortOrder: i,
         createdAt: now,
