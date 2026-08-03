@@ -1376,7 +1376,11 @@ async function resolveAmazonProductForCandidate(asin: string | undefined | null,
 async function enrichCompetitorsWithRainforest(competitors: any[], toolTypes: ToolTypeRow[], requiredToolType?: ToolType | null): Promise<any[]> {
   if (!hasRainforestKey) return competitors;
 
-  return mapWithConcurrency(competitors, 3, async (c) => {
+  // Concurrency 5 (was 3) — safe to raise now that every Rainforest call is
+  // individually time-bounded (see RAINFOREST_REQUEST_TIMEOUT_MS in
+  // lib/rainforest.ts); 5-10 candidates now clear in a single wave instead
+  // of two, directly cutting this step's wall-clock time.
+  return mapWithConcurrency(competitors, 5, async (c) => {
       // Already live-verified by discoverCompetitorsLive/curated-legacy
       // discovery (a `type=search` result, already real/current for
       // price/rating) — BUT a `type=search` result never carries
@@ -2115,7 +2119,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           // failure path, which is correct for "Amazon lookup failed" but
           // wrong for "verified via brand site, simply not on Amazon").
           if (hasRainforestKey) {
-            competitors = await mapWithConcurrency(competitors, 3, async (c: any) => {
+            // Concurrency 5 — same reasoning as enrichCompetitorsWithRainforest above.
+            competitors = await mapWithConcurrency(competitors, 5, async (c: any) => {
               if (!c.sources?.brand_site || c.sources?.amazon) return c;
               const product = await resolveAmazonProductForCandidate(null, c.name, c.brand, toolTypes, identityCard.toolType);
               if (!product) return c;

@@ -292,7 +292,11 @@ export async function searchCuratedLegacyBrands(
 
       const band = computePriceBand(targetPriceRaw, "legacy", widenStep);
 
-      await mapWithConcurrency(unmatched, 3, async (brand) => {
+      // Concurrency 5 (was 3) — safe to raise now that every Rainforest call
+      // is individually time-bounded (RAINFOREST_REQUEST_TIMEOUT_MS in
+      // lib/rainforest.ts); registries commonly list 8-10 brands, so this
+      // directly cuts the number of concurrency waves needed per widen step.
+      await mapWithConcurrency(unmatched, 5, async (brand) => {
         const alias = pickSearchAlias(brand, isProfessional);
         // Tool-type word is explicit in the query (not left to whatever the
         // free-text subcategory happens to say) — "Wahl professional

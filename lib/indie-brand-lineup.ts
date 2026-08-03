@@ -52,7 +52,11 @@ export async function buildIndieBrandLineups(brands: { brand: string; subcategor
   const startTime = Date.now();
   const result = new Map<string, LineupProduct[]>();
 
-  await mapWithConcurrency(brands, 3, async ({ brand, subcategory }) => {
+  // Concurrency 5 (was 3) — safe to raise now that every Rainforest call is
+  // individually time-bounded (RAINFOREST_REQUEST_TIMEOUT_MS in
+  // lib/rainforest.ts), so a stalled lookup can no longer stall this whole
+  // batch's wall-clock time.
+  await mapWithConcurrency(brands, 5, async ({ brand, subcategory }) => {
     if (Date.now() - startTime > INDIE_LINEUP_TIME_BUDGET_MS) {
       result.set(brand, []);
       return;

@@ -238,11 +238,28 @@ class RainforestAuthError extends Error {
   }
 }
 
+// Every OTHER external call in this codebase has an explicit per-request
+// timeout (lib/safe-fetch.ts's DEFAULT_TIMEOUT_MS, lib/web-search.ts's
+// SEARCH_TIMEOUT_MS, etc.) — this one didn't, and it's the single most
+// frequently-called external API in the competitor-discovery pipeline
+// (every legacy-brand match, indie-lineup lookup, and Rainforest
+// enrichment pass funnels through here). A stalled/slow TCP response with
+// no timeout just sits there for however long the platform allows,
+// silently consuming the ENTIRE remaining request budget until Vercel
+// kills the function — surfacing to the user as "Connection dropped" with
+// no error ever persisted server-side (confirmed live: Phase 1/2 timing
+// out on every run once Rainforest's network path degraded). Every
+// caller's own "time budget" check (CURATED_BRAND_SEARCH_TIME_BUDGET_MS,
+// INDIE_LINEUP_TIME_BUDGET_MS, etc.) only measures elapsed time BETWEEN
+// calls — none of them can bound a single call already in flight, so this
+// fetch-level timeout is what actually makes those budgets meaningful.
+const RAINFOREST_REQUEST_TIMEOUT_MS = 10_000;
+
 async function fetchWithRetry(url: string, attempts = 2): Promise<any> {
   let lastErr: any;
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(url, { next: { revalidate: 3600 } });
+      const res = await fetch(url, { next: { revalidate: 3600 }, signal: AbortSignal.timeout(RAINFOREST_REQUEST_TIMEOUT_MS) });
       if (res.status === 401 || res.status === 402 || res.status === 403) {
         throw new RainforestAuthError(`HTTP ${res.status} (not retryable)`, res.status);
       }
