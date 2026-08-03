@@ -170,8 +170,10 @@ export async function generateTdsFields(
   await applyWebSearchFallback(grounded, aiEligibleSchema, productTitle, pipelineStart, TDS_PIPELINE_TIME_BUDGET_MS, toolTypes, project.toolType as any);
 
   // Terminal step — converts anything still unresolved into an honest
-  // "Not determinable — {reason}" ("Awaiting internal input" for
+  // "Not found — checked {K} sources" ("Awaiting internal input" for
   // internal-kind fields) instead of TDS_NOT_LISTED surviving to the UI/CSV
-  // as an unexplained placeholder.
-  return finalizeFieldAnswers(grounded, schema, "not found on the product page, Amazon listing, or project record");
+  // as an unexplained placeholder. K=3: AI extraction + Amazon-payload
+  // derivation + web search, the 3 tiers every eligible field here actually
+  // passed through above.
+  return finalizeFieldAnswers(grounded, schema, 3);
 }

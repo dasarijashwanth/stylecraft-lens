@@ -19,6 +19,11 @@ import type { ToolTypeRow } from "./db/tool-types";
 export interface WebFallbackField {
   id: string;
   question: string;
+  // GTM's select-kind fields (Core Consumer, Noise level) — a web answer
+  // not exactly matching one of these (case-insensitive) is rejected
+  // rather than accepted as free text. Absent (and therefore skipped) for
+  // every other field, and for TDS entirely (no select-kind TDS fields).
+  options?: string[];
 }
 
 export interface WebFallbackAnswer {
@@ -139,6 +144,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
       const raw = result.parsed?.[f.id];
       const answer = coerceAiAnswer(raw?.answer);
       if (!answer || answer.toUpperCase() === "N/A") continue;
+      if (f.options && !f.options.some(o => o.toLowerCase() === answer.toLowerCase())) continue;
 
       // No independent page fetch on this path (see runOneWebSearchCall's
       // own comment) — the model's self-reported source_hint is the only

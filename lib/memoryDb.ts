@@ -49,6 +49,7 @@ export interface MockProject {
   pricePoint?: string | null;
   productUrl?: string | null;
   asin?: string | null;
+  sku?: string | null;
   savedDefaults?: any;
   latestAnalysisId?: string | null;
   latestReportId?: string | null;

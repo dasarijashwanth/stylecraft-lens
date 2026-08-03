@@ -47,6 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
         keyDiff: project.keyDiff,
         pricePoint: project.pricePoint,
         companyContext: project.companyContext,
+        targetMarket: project.targetMarket,
       },
       salesKit,
       tds,

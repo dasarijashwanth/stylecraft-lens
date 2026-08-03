@@ -41,11 +41,16 @@ async function main() {
   // ---- Section 1: schema shape — renamed/removed/added fields ----
   console.log("\n[1] GTM_FIELD_SCHEMA shape");
   const byId = new Map(GTM_FIELD_SCHEMA.map(f => [f.id, f]));
-  assert(GTM_FIELD_SCHEMA.length === 79, `schema has the expected 79 fields (got ${GTM_FIELD_SCHEMA.length})`);
+  // Field count is asserted precisely in scripts/verify-gtm-schema-v3.ts
+  // instead of hardcoded here — GTM Schema v3 changed the total again
+  // (repeatable-row groups), so a literal count in this older script would
+  // just go stale every time the schema evolves further.
   assert(byId.get("good_better_best")?.question === "Good Better Best (Lineup)", "good_better_best renamed to 'Good Better Best (Lineup)'");
   assert(!byId.has("performance"), "old 'performance' field is gone");
   assert(!byId.has("comps"), "old 'comps' field is gone");
-  assert(!byId.has("comps_buying_guide"), "old 'comps_buying_guide' field is gone");
+  // comps_buying_guide was removed by GTM Schema v2 (this task) but revived
+  // by GTM Schema v3 as a fresh plain link/text field — no longer asserted
+  // gone here; see verify-gtm-schema-v3.ts for its current, correct shape.
   assert(byId.get("good_better_best_performance")?.question === "Good Better Best (Performance)", "new good_better_best_performance field exists with the right question");
   const chart = byId.get("comparison_chart_web_only");
   assert(!!chart, "new comparison_chart_web_only field exists");

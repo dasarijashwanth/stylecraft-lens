@@ -1351,3 +1351,11 @@ INSERT INTO brand_name_hints (brand, name_prefixes, sort_order) VALUES
     ('StyleCraft', ARRAY['Saber', 'Anime', 'Protege', 'Protégé', 'Reign', 'Rebel', 'Rogue', 'Instinct', 'Ergo', 'Solecito', 'Rival', 'Ace', 'Homie', 'Schnozzle', 'Sage', 'Stay-Temp', 'Stay Temp'], 0),
     ('Gamma+', ARRAY['Absolute', 'X-Evo', 'XEvo'], 1)
 ON CONFLICT (brand) DO NOTHING;
+
+-- 37. PROJECT SKU — GTM Schema v3's Product Title field renders
+-- "{Product Title} — {SKU}" once a SKU is set. Not one of the 76 GTM
+-- Product Knowledge fields itself (it's project-level identity data, same
+-- tier as motor_family/key_diff/price_point), editable inline from the
+-- GTM tab. No CHECK constraint — same plain-VARCHAR convention as every
+-- other project column.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS sku VARCHAR(100);

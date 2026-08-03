@@ -11,6 +11,7 @@ const ELABORATION_MIN_WORDS: Record<string, number> = {
   name_story_tie: 12,
   reason_to_buy: 40,
   expert_tip: 12,
+  up_sell: 25,
 };
 
 function wordCount(text: string): number {

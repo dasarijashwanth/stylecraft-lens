@@ -10,6 +10,7 @@ import { TdsPdf } from "./TdsPdf";
 import { GtmPdf } from "./GtmPdf";
 import { ActiveReportPdf } from "./ActiveReportPdf";
 import { listToolTypes } from "@/lib/db/tool-types";
+import { isRealAnswer } from "@/lib/field-answer-state";
 
 export type DocType = "sales-kit" | "tds" | "gtm" | "active-report";
 
@@ -92,6 +93,12 @@ export async function renderDocumentPdf(
     }
     const fields: Record<string, { answer: string; source: string; owner?: string | null; notes?: string | null }> = {};
     for (const r of rows) fields[r.field_id] = { answer: r.answer || "N/A", source: r.source || "none", owner: r.owner, notes: r.notes };
+    // Product Title renders "{Product Title} — {SKU}" once a SKU is set
+    // (GTM Schema v3) — SKU lives on the project record, not as its own
+    // GTM field.
+    if ((project as any).sku && fields.product_title && isRealAnswer(fields.product_title.answer)) {
+      fields.product_title = { ...fields.product_title, answer: `${fields.product_title.answer} — ${(project as any).sku}` };
+    }
     element = <GtmPdf productName={productName} projectName={projectName} productKnowledge={{ fields }} />;
   } else if (docType === "active-report") {
     const report = await getReport(id, session.userId);

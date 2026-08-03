@@ -15,9 +15,14 @@
 // moved here; lib/tds-generate.ts re-exports it for backward compatibility.
 export const TDS_NOT_LISTED = "Not listed on product page";
 
-// The two new honest terminal states (see lib/field-finalize.ts) that
-// replace bare "N/A"/"TBD" once every applicable tier has genuinely run.
+// The honest terminal states (see lib/field-finalize.ts) that replace bare
+// "N/A"/"TBD" once every applicable tier has genuinely run.
+// NOT_DETERMINABLE_PREFIX is kept only to still recognize existing saved
+// documents generated before GTM Schema v3 — every NEW terminal answer uses
+// NOT_FOUND_PREFIX's more specific "checked {K} sources" phrasing instead
+// (see lib/field-finalize.ts's sourcesChecked param).
 export const NOT_DETERMINABLE_PREFIX = "Not determinable — ";
+export const NOT_FOUND_PREFIX = "Not found — ";
 export const AWAITING_INTERNAL_INPUT = "Awaiting internal input";
 
 function isPlaceholder(trimmed: string): boolean {
@@ -26,6 +31,7 @@ function isPlaceholder(trimmed: string): boolean {
   if (trimmed === TDS_NOT_LISTED) return true;
   if (trimmed === AWAITING_INTERNAL_INPUT) return true;
   if (trimmed.startsWith(NOT_DETERMINABLE_PREFIX)) return true;
+  if (trimmed.startsWith(NOT_FOUND_PREFIX)) return true;
   return false;
 }
 
@@ -39,7 +45,8 @@ export function isRealAnswer(answer: string | null | undefined): boolean {
 }
 
 export function isNotDeterminable(answer: string | null | undefined): boolean {
-  return (answer ?? "").toString().trim().startsWith(NOT_DETERMINABLE_PREFIX);
+  const trimmed = (answer ?? "").toString().trim();
+  return trimmed.startsWith(NOT_DETERMINABLE_PREFIX) || trimmed.startsWith(NOT_FOUND_PREFIX);
 }
 
 export function isAwaitingInternalInput(answer: string | null | undefined): boolean {

@@ -24,6 +24,7 @@ import { verifyGrounding, checkConsistency, SourceTexts } from "./gtm-grounding"
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { meetsElaborationBar } from "./gtm-elaboration";
 import { GENERIC_EXEMPLARS } from "./gtm-reference-exemplars";
+import { hasCapsLead } from "./gtm-format-checks";
 import { DocumentFieldRow, getMostRecentOtherDocumentFields } from "./db/documents";
 import { listToolTypes } from "./db/tool-types";
 import { listCatalogProducts } from "./db/catalog-products";
@@ -90,6 +91,27 @@ function sourceTextBlocks(sourceTexts: SourceTexts): string[] {
   return [sourceTexts.projectRecord, sourceTexts.competitiveAnalysis, sourceTexts.tds, sourceTexts.salesKit];
 }
 
+// GTM Schema v3 — "structural N/A, skip scraping": a non-motorized
+// product's Motor fields (and a non-heat-tech product's Heat/Plate
+// Technology fields) can never have a real answer no matter how hard AI/
+// web search looks — the schema file's own long-standing comment already
+// promised this ("resolves to N/A the same way Motor already does") but
+// nothing ever actually skipped the tiers. Derived from the resolved tool
+// type's primary_criterion (lib/db/tool-types.ts) — only excludes a
+// section when the criterion is KNOWN and definitively doesn't match, so
+// an unresolved/custom tool type with no primary_criterion never loses
+// legitimate access to either section.
+const MOTOR_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Motor").map(f => f.id);
+const HEAT_TECH_SECTION_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.section === "Heat/Plate Technology").map(f => f.id);
+
+export function structurallyInapplicableFieldIds(primaryCriterion: string | null | undefined): Set<string> {
+  const ids = new Set<string>();
+  if (!primaryCriterion) return ids;
+  if (primaryCriterion !== "motor") MOTOR_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+  if (primaryCriterion !== "heat_technology") HEAT_TECH_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+  return ids;
+}
+
 // Text blob for lib/gtm-tier6-inference.ts's keyword-based hair_type
 // inference — every source that could plausibly mention hair type in
 // prose, not the structured spec fields already covered by gtm-derive.ts.
@@ -150,16 +172,21 @@ Rules:
 - HARD-GROUNDED fields (specs: dimensions, weight, RPM, run time, voltage, cord length, blade names, quantities, colors, pricing, warranty, box/pallet data, included-in-box items): copy values exactly as they appear in the sources, units included. If a value is not present in any source, return "N/A". NEVER estimate, infer, or reuse a value from another product.
 - WRITTEN fields (positioning statement, story, reason to buy, expert tip, messaging): write them specifically about THIS product, referencing its actual named features and specs from the sources. Do not produce generic copy that could apply to any similar product — every claim must trace back to a real fact in the sources.
 - Source priority, highest first: the Project Record > Competitive Analysis / TDS / Sales Kit documents > real web search. If a field's answer is not in the labeled sources below, use web search to find real, verifiable public information about this EXACT product (its official product page, retailer listings, spec sheets) — never general/world knowledge, never a guess, and never a value from a different or similar product. Mark any web-sourced field's "source" as "web" in your JSON response. Only return "N/A" if the answer genuinely cannot be found in the sources OR via a real web search.
-- Bias: specs/motor/blades/packaging/included-in-box come from TDS; positioning/pricing tiers/USPs/upsell/expert tip come from Sales Kit; COMPS/buying-guide/competitive context come from Competitive Analysis. Fields still missing after checking all of these are exactly the ones worth a web search.
+- Bias: specs/motor/blades/packaging/included-in-box come from TDS; positioning/pricing tiers/USPs/up-sell/expert tip come from Sales Kit; comps buying guide/competitive context come from Competitive Analysis. Fields still missing after checking all of these are exactly the ones worth a web search.
 
 REQUIRED DEPTH for these specific fields (this describes FORMAT AND DEPTH ONLY — never copy this wording, it is not about the current product):
 - why_creating_item: a numbered list of 4-6 concrete reasons (consumer need, competitive gap, identity/customization, credibility, system completion), each one sentence, specific to this product's real facts.
 - positioning_statement: a 4-6 sentence narrative paragraph covering origin, goal, design considerations, and the product's role in the lineup — not a single generic sentence.
 - product_name_origin / name_story_tie: 2-4 sentences connecting the actual product name to a real fact about the brand or product (skip gracefully to N/A if the sources give no real basis — never invent a naming story).
-- reason_to_buy: 5 numbered USPs, each a bolded-style claim followed by the supporting spec that backs it (e.g. "First-ever [real tech from sources] — [real spec value from sources]").
-- expert_tip: 1-2 sentences of concrete, actionable usage/maintenance advice tied to this product's real features.
-- features_full_list: a complete bullet list with exact spec values and units from the sources, not paraphrased summaries.
-Simple fields (core_consumer, good_better_best, warranty, certification_needed, etc.) stay short and exact — do not pad these with filler.
+- up_sell: one selling-motion paragraph naming a specific premium companion/step-up option and a price-framing or recurring-revenue hook (e.g. a replacement-part subscription) — never a generic "upgrade for more value" line.
+- reason_to_buy: 5-6 numbered claims, each starting with a short ALL-CAPS claim phrase followed by the supporting spec and a plain-language benefit (e.g. "ZERO-GAP PRECISION — 7,800rpm brushless motor cuts closer without snagging").
+- expert_tip: 2-4 sentences of concrete, actionable usage/maintenance advice tied to this product's real features; for an accessory/replacement-part product (no motor of its own), frame it as a usage-context tip for the tool it attaches to, not a fabricated feature of the accessory itself.
+- features_full_list_1..10 (each row is one feature): CAPS-lead phrase + exact spec value/unit, adding an "INCLUDES: ..." clause when the feature bundles a real included accessory.
+- screw_driver_brand: the real branded tool name if the sources name one (e.g. "S|C Pro"), never a generic "included screwdriver".
+- charging_led_function: a behavior-line description of what each LED state means (e.g. "Blinks red while charging, solid green when fully charged"), not just a color list.
+- guards_type: include real measurement breakdowns per guard when the sources give them (e.g. "Small comb: 2mm, 3mm; Large comb: 4mm, 5mm").
+- axis_shield_description / cam_follower_qty: note when a part ships pre-assembled on the unit (e.g. "2 (1 assembled)"), matching how these are actually packaged.
+Simple fields (good_better_best, warranty, certification_needed, etc.) stay short and exact — do not pad these with filler.
 
 FIELD SCHEMA (id [section] (grounded|written): question):
 ${fieldList}
@@ -233,10 +260,18 @@ async function callAiPerSection(productName: string, schema: GtmField[], userCon
   return anySucceeded ? merged : null;
 }
 
+// A select-kind field's answer must exactly match one of its fixed
+// options (case-insensitive) — never accepted as free text. Fields with no
+// `options` (the vast majority) always pass.
+export function matchesFieldOptions(schemaField: GtmField, answer: string): boolean {
+  if (!schemaField.options) return true;
+  return schemaField.options.some(o => o.toLowerCase() === answer.toLowerCase());
+}
+
 function mergeField(schemaField: GtmField, aiRaw: Record<string, { answer: string; source: string }> | null, derived: Record<string, GtmFieldAnswer>): { field: GtmFieldAnswer; fromAi: boolean } {
   const got = aiRaw?.[schemaField.id];
   const aiAnswer = coerceAiAnswer(got?.answer);
-  const aiUsable = !!aiAnswer && aiAnswer.toUpperCase() !== "N/A" && aiAnswer.toUpperCase() !== "TBD";
+  const aiUsable = !!aiAnswer && aiAnswer.toUpperCase() !== "N/A" && aiAnswer.toUpperCase() !== "TBD" && matchesFieldOptions(schemaField, aiAnswer);
   if (aiUsable) {
     return { field: { answer: aiAnswer!, source: (got?.source as GtmFieldSource) || "multiple" }, fromAi: true };
   }
@@ -274,18 +309,30 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const sourceTexts = buildSourceTexts(sources);
   const userContent = buildUserContent(sourceTexts);
 
+  // Structural N/A — resolved once up front, then threaded through every
+  // remaining tier as an exclusion so nothing (AI, web, Tier 6/6.5,
+  // category defaults) ever revisits these fields; see
+  // structurallyInapplicableFieldIds above.
+  const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
+  const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion);
+  const pipelineSchema = schema.filter(f => !structuralNaIds.has(f.id));
+
   // "internal"-kind fields (dieline, approved pricing, etc.) are never
   // asked of the AI — nothing about a packaging/pricing DECISION is
   // answerable by reading sources or web search. They still go through
   // mergeField below via the FULL schema, so the deterministic `derived`
   // floor (tiers 1-4) can still populate them from real TDS/project data.
-  const aiEligibleSchema = schema.filter(f => f.kind !== "internal");
+  const aiEligibleSchema = pipelineSchema.filter(f => f.kind !== "internal");
   const aiRaw = await callAiPerSection(productName, aiEligibleSchema, userContent, projectId);
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   const merged: Record<string, GtmFieldAnswer> = {};
   const aiSourcedIds = new Set<string>();
   for (const f of schema) {
+    if (structuralNaIds.has(f.id)) {
+      merged[f.id] = { answer: "N/A", source: "none" };
+      continue;
+    }
     const { field: value, fromAi } = mergeField(f, aiRaw, derived);
     merged[f.id] = value;
     // Web-sourced answers are real (OpenAI's own web_search tool actually
@@ -322,7 +369,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // but must never preempt a real web search result the way an eager
   // pre-AI derivation would (see lib/gtm-tier6-inference.ts).
   const tier6Extra = await buildTier6ExtraInputs(sources, toolTypes);
-  applyTier6Inference(grounded, schema, {
+  applyTier6Inference(grounded, pipelineSchema, {
     hairTypeSourceText: buildHairTypeSourceText(sources),
     ...tier6Extra,
   });
@@ -331,18 +378,25 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // from the now-resolved Features. Runs after Tier 6 (manufacturer/lineup/
   // performance already settled) so Expert Tip's grounding has a real,
   // resolved feature list to reference — see lib/gtm-features-and-tip.ts.
-  await applyFeaturesAndExpertTip(grounded, schema, sources, productName, pipelineStart);
+  await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart);
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
-  applyCategoryDefaults(grounded, schema, sources.project.category);
+  // Uses pipelineSchema (not the full schema) so a structurally-N/A field
+  // (e.g. Motor Type on a non-motorized product) never gets a category-
+  // typical guess layered on top of its already-final "N/A".
+  applyCategoryDefaults(grounded, pipelineSchema, sources.project.category);
 
-  await guardWrittenFieldsQuality(grounded, schema, sources, productName, projectId, pipelineStart);
+  await guardWrittenFieldsQuality(grounded, pipelineSchema, sources, productName, projectId, pipelineStart);
 
   // Terminal step — converts anything still unresolved into
-  // "Not determinable — {reason}" ("Awaiting internal input" for
-  // internal-kind fields) instead of a bare N/A/TBD.
-  return finalizeFieldAnswers(grounded, schema, "not found in product data, TDS/Sales Kit/Competitive Analysis, or web search");
+  // "Not found — checked {K} sources" ("Awaiting internal input" for
+  // internal-kind fields) instead of a bare N/A/TBD. Structurally-N/A
+  // fields are excluded from `pipelineSchema` so their literal "N/A" from
+  // above is never promoted to this terminal state. K=4: AI + web search +
+  // Tier 6/6.5 + category default, the 4 tiers every eligible field here
+  // actually passed through above.
+  return finalizeFieldAnswers(grounded, pipelineSchema, 4);
 }
 
 // Regenerates exactly one field through the same pipeline.
@@ -351,6 +405,15 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const productName = sources.project.productName;
   const schemaField = GTM_FIELD_SCHEMA.find(f => f.id === fieldId);
   if (!schemaField) throw new Error(`Unknown field id: ${fieldId}`);
+
+  // Structural N/A — a non-motorized product's Motor fields (and a non-
+  // heat-tech product's Heat/Plate Technology fields) can never have a
+  // real answer, so a regenerate of one of these skips AI/web entirely,
+  // same as the full-document pipeline. See structurallyInapplicableFieldIds.
+  const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
+  if (structurallyInapplicableFieldIds(primaryCriterion).has(fieldId)) {
+    return { answer: "N/A", source: "none" };
+  }
 
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
@@ -363,7 +426,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     const finalized = finalizeFieldAnswers(
       { [fieldId]: derived[fieldId] || { answer: "N/A", source: "none" } },
       [schemaField],
-      "no product-data source available for this internal field"
+      0 // internal-kind terminal is always "Awaiting internal input" — count is unused
     );
     return finalized[fieldId];
   }
@@ -399,7 +462,9 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now());
   }
 
-  const finalized = finalizeFieldAnswers(guarded, [schemaField], "not found in product sources or web search");
+  // AI + web search + Tier 6/6.5 + category default — the 4 tiers this
+  // single-field regenerate actually ran above.
+  const finalized = finalizeFieldAnswers(guarded, [schemaField], 4);
   return finalized[fieldId];
 }
 
@@ -419,6 +484,20 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
 // a JSON response. If the pipeline is already close to the time budget
 // (e.g. the main generation call itself ran long), retries are skipped
 // entirely and the fields are just flagged — never silently exceed the cap.
+// GTM Schema v3's CAPS-lead claim format — only Reason to Buy's numbered
+// claims are checked (majority of lines must lead with an ALL-CAPS phrase);
+// every other written field stays free narrative prose, no format
+// convention to enforce. See lib/gtm-format-checks.ts.
+const FORMAT_CONVENTION_FIELD_IDS = new Set(["reason_to_buy"]);
+
+function meetsFormatConvention(fieldId: string, answer: string): boolean {
+  if (!FORMAT_CONVENTION_FIELD_IDS.has(fieldId)) return true;
+  const lines = answer.split("\n").map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return true;
+  const capsLeadCount = lines.filter(hasCapsLead).length;
+  return capsLeadCount / lines.length >= 0.5;
+}
+
 async function guardWrittenFieldsQuality(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
@@ -437,7 +516,7 @@ async function guardWrittenFieldsQuality(
     .filter(Boolean)
     .map(v => String(v));
 
-  type Reason = { kind: "boilerplate" | "shallow" | "generic"; detail?: string };
+  type Reason = { kind: "boilerplate" | "shallow" | "generic" | "unformatted"; detail?: string };
   const retryReasons = new Map<string, Reason>();
 
   for (const f of writtenFields) {
@@ -456,6 +535,10 @@ async function guardWrittenFieldsQuality(
     const exemplar = GENERIC_EXEMPLARS[f.id];
     if (exemplar && textSimilarity(current.answer, exemplar) > BOILERPLATE_SIMILARITY_THRESHOLD) {
       retryReasons.set(f.id, { kind: "generic" });
+      continue;
+    }
+    if (!meetsFormatConvention(f.id, current.answer)) {
+      retryReasons.set(f.id, { kind: "unformatted" });
     }
   }
 
@@ -484,6 +567,7 @@ async function guardWrittenFieldsQuality(
         boilerplate: `The previous draft was too generic — it closely matched another product's copy for this field.`,
         shallow: `The previous draft was too short/shallow — it needs real depth (see the REQUIRED DEPTH guidance above for this field).`,
         generic: `The previous draft read like generic, could-apply-to-any-product marketing filler.`,
+        unformatted: `The previous draft didn't follow the required format — each claim must start with a short ALL-CAPS claim phrase (e.g. "ZERO-GAP PRECISION — cuts closer without snagging"), followed by the supporting spec and a plain-language benefit.`,
       }[reason.kind];
       const retryInstruction = `${buildSystemInstruction(productName, [f])}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
       // These retries run concurrently for up to 9 written fields — a
@@ -496,8 +580,9 @@ async function guardWrittenFieldsQuality(
       const stillBoilerplate = other?.answer && retryAnswer ? textSimilarity(retryAnswer, other.answer) > BOILERPLATE_SIMILARITY_THRESHOLD : false;
       const stillShallow = retryAnswer ? !meetsElaborationBar(f.id, retryAnswer) : true;
       const stillGeneric = exemplar && retryAnswer ? textSimilarity(retryAnswer, exemplar) > BOILERPLATE_SIMILARITY_THRESHOLD : false;
+      const stillUnformatted = retryAnswer ? !meetsFormatConvention(f.id, retryAnswer) : true;
 
-      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && !stillBoilerplate && !stillShallow && !stillGeneric) {
+      if (retryAnswer && retryAnswer.toUpperCase() !== "N/A" && !stillBoilerplate && !stillShallow && !stillGeneric && !stillUnformatted) {
         fields[f.id] = { answer: retryAnswer, source: (retryRaw?.[f.id]?.source as GtmFieldSource) || current.source };
       } else {
         flagAsIs(f, reason.kind);

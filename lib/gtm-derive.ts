@@ -44,7 +44,20 @@ export interface ProjectRecord {
   keyDiff?: string | null;
   pricePoint?: string | null;
   companyContext?: string | null;
+  // "pro" | "consumer" | "both" — already captured on every project (the
+  // analyze/new-project forms' Target Market select). Core Consumer's new
+  // select control (GTM Schema v3) derives straight from this instead of
+  // free AI narrative, since it's real, already-known data.
+  targetMarket?: string | null;
 }
+
+// Core Consumer's 3 fixed options map 1:1 onto the project's own
+// targetMarket value — same mapping as analyze/page.tsx's MARKET_LABELS.
+const CORE_CONSUMER_LABELS: Record<string, string> = {
+  pro: "Pro",
+  consumer: "Retail",
+  both: "Both",
+};
 
 // The 7 canonical family labels, fixed by design — mirrors
 // lib/validations.ts's MOTOR_FAMILY_VALUES and the seed labels in
@@ -85,6 +98,12 @@ export function deriveFieldsFromSources(
   const set = (id: string, value: GtmFieldAnswer | null) => {
     if (value) fields[id] = value;
   };
+  // Fills a repeatable-row group's rows 1..N from a plain string list —
+  // stops at however many real items exist, never force-fills a trailing
+  // row (see lib/gtm-group-fields.ts's trailing-empty-row trim downstream).
+  const setGroup = (idPrefix: string, items: string[], source: GtmFieldSource) => {
+    items.forEach((text, i) => set(`${idPrefix}_${i + 1}`, pick(text, source)));
+  };
 
   const t = tds || {};
   const ca = activeReport?.competitive_analysis || {};
@@ -97,11 +116,13 @@ export function deriveFieldsFromSources(
   // General — project record wins where it directly answers the field.
   set("item", firstOf([project.productName, "project_record"]));
   set("product_title", firstOf([project.productName, "project_record"], [t.product_title, "tds"]));
-  set("core_consumer", pick((salesKit?.target_customers || []).join("; "), "sales_kit"));
+  set("core_consumer", pick(project.targetMarket ? CORE_CONSUMER_LABELS[project.targetMarket] : null, "project_record"));
   set("positioning_statement", pick(ca.positioning_recommendation, "active_report"));
   set("approved_pricing", firstOf([project.pricePoint, "project_record"], [t.approved_pricing, "tds"], [pricing.price_positioning, "active_report"]));
-  set("features_full_list", pick((salesKit?.key_features || []).map((f: any) => f.headline).filter(Boolean).join("; "), "sales_kit"));
-  // upsell_cross_sell has no structured source today — left for AI/N/A.
+  // features_full_list is now a 10-row group (features_full_list_1..10) —
+  // its 3-source merge deriver lives in lib/gtm-features-and-tip.ts's
+  // deriveFeaturesFullList, run as an async Tier 6.5 step, not here.
+  // up_sell/cross_sell_1..5 have no structured source today — left for AI/N/A.
   set("reason_to_buy", firstOf([salesKit?.elevator_pitch, "sales_kit"], [project.keyDiff, "project_record"]));
   set("warranty", pick(t.warranty, "tds"));
   set("certification_needed", pick(t.certification_needed, "tds"));
@@ -121,7 +142,7 @@ export function deriveFieldsFromSources(
 
   // Tool Description
   set("material", pick(t.material, "tds"));
-  set("top_6_features", pick((salesKit?.key_features || []).slice(0, 6).map((f: any) => f.headline).filter(Boolean).join("; "), "sales_kit"));
+  setGroup("top_6_features", (salesKit?.key_features || []).slice(0, 6).map((f: any) => f.headline).filter(Boolean), "sales_kit");
   set("care_directions", pick(t.care_directions, "tds"));
   set("product_description", pick(t.product_description, "tds"));
 

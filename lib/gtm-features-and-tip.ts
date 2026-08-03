@@ -83,15 +83,19 @@ function buildOurListingBullets(tds: Record<string, string> | null): string[] {
   return bullets;
 }
 
-export interface FeatureMergeResult {
-  answer: string;
-  source: "derived";
-  sourceDetail: { bullets: FeatureBullet[]; competitorsUsed: number };
-  flagged?: boolean;
+// GTM Schema v3 — Features (full list) is a 10-row repeatable group
+// (features_full_list_1..10, see lib/gtm-field-schema.ts's groupFields)
+// rather than one multi-line field. Each bullet becomes its own row/answer,
+// tagged with its source exactly like before; trailing unused rows are
+// simply never written (lib/gtm-group-fields.ts trims them from CSV/PDF).
+export const FEATURES_FULL_LIST_GROUP_SIZE = 10;
+
+function renderFeatureRowAnswer(bullet: FeatureBullet): string {
+  return `${bullet.text} [${SOURCE_TAGS[bullet.source]}]`;
 }
 
-function renderFeatureAnswer(bullets: FeatureBullet[]): string {
-  return bullets.map(b => `${b.text} [${SOURCE_TAGS[b.source]}]`).join("\n");
+function stripSourceTag(rowAnswer: string): string {
+  return rowAnswer.replace(/\s*\[[^\]]+\]\s*$/, "").trim();
 }
 
 // Deterministic floor — never depends on the Sales Kit or an AI call
@@ -165,22 +169,17 @@ ${competitorFeatureText}`;
     );
 }
 
-export async function deriveFeaturesFullList(sources: GtmSources): Promise<FeatureMergeResult | null> {
+// Returns the merged bullet list (deterministic floor + AI competitor
+// top-up when still short), capped at the group's row count — the caller
+// (applyFeaturesAndExpertTip) writes one bullet per row.
+export async function deriveFeaturesFullList(sources: GtmSources): Promise<FeatureBullet[]> {
   const floor = deriveFeaturesFullListDeterministic(sources.project.description, sources.tds);
   const ca = sources.activeReport?.competitive_analysis || {};
   const competitors: CompetitorSpecSource[] = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])];
   const ourSpecs = extractOurSpecsFromTds(sources.tds);
 
   const topUp = await topUpFeaturesWithCompetitors(sources.project.productName, floor, ourSpecs, competitors);
-  const bullets = [...floor, ...topUp];
-  if (bullets.length === 0) return null;
-
-  return {
-    answer: renderFeatureAnswer(bullets),
-    source: "derived",
-    sourceDetail: { bullets, competitorsUsed: competitors.length },
-    flagged: bullets.some(b => b.source === "unconfirmed"),
-  };
+  return [...floor, ...topUp].slice(0, FEATURES_FULL_LIST_GROUP_SIZE);
 }
 
 // CHANGE 4 — Expert Tip, generated FROM the now-resolved Features (never
@@ -225,28 +224,37 @@ export async function applyFeaturesAndExpertTip(
   productName: string,
   pipelineStart: number
 ): Promise<void> {
-  const wantsFeatures = schema.some(f => f.id === "features_full_list") && isUnresolved(fields, "features_full_list");
+  // Features (full list) is a 10-row group — gate on row 1 as the
+  // representative "still needs deriving" check, same as any other field.
+  const wantsFeatures = schema.some(f => f.id === "features_full_list_1") && isUnresolved(fields, "features_full_list_1");
   if (wantsFeatures) {
-    const derived = await deriveFeaturesFullList(sources);
-    if (derived) fields["features_full_list"] = derived;
+    const bullets = await deriveFeaturesFullList(sources);
+    bullets.forEach((bullet, i) => {
+      fields[`features_full_list_${i + 1}`] = {
+        answer: renderFeatureRowAnswer(bullet),
+        source: "derived",
+        sourceDetail: { source: bullet.source },
+        flagged: bullet.source === "unconfirmed",
+      };
+    });
   }
 
   const wantsTip = schema.some(f => f.id === "expert_tip") && isUnresolved(fields, "expert_tip");
   if (!wantsTip) return;
 
-  // Expert Tip's grounding basis: the just-resolved Features field if this
-  // same call resolved it above, else whatever the document already has
-  // (full-document generation always resolves Features first in the same
-  // pass; a single-field regenerate of ONLY expert_tip has no Features in
-  // `fields` at all, so it falls back to the document's existing answers —
-  // see sources.existingFieldAnswers, populated by the regenerate route).
-  const featuresAnswer = fields["features_full_list"]?.answer ?? sources.existingFieldAnswers?.["features_full_list"];
-  if (!isRealAnswer(featuresAnswer)) return;
-
-  const confirmedFeatureLines = featuresAnswer!
-    .split("\n")
-    .map(line => line.replace(/\s*\[[^\]]+\]\s*$/, "").trim())
-    .filter(line => line && !line.startsWith("Category-expected"));
+  // Expert Tip's grounding basis: whichever features_full_list_N rows are
+  // real right now — either just-resolved above (full-document generation
+  // always resolves Features first in the same pass) or, for a single-field
+  // regenerate of ONLY expert_tip (no Features rows in `fields` at all),
+  // the document's existing answers (sources.existingFieldAnswers,
+  // populated by the regenerate route).
+  const confirmedFeatureLines: string[] = [];
+  for (let i = 1; i <= FEATURES_FULL_LIST_GROUP_SIZE; i++) {
+    const rowAnswer = fields[`features_full_list_${i}`]?.answer ?? sources.existingFieldAnswers?.[`features_full_list_${i}`];
+    if (!isRealAnswer(rowAnswer)) continue;
+    const line = stripSourceTag(rowAnswer!);
+    if (line && !line.startsWith("Category-expected")) confirmedFeatureLines.push(line);
+  }
   if (confirmedFeatureLines.length === 0) return;
 
   const tip = await generateExpertTip(productName, confirmedFeatureLines);

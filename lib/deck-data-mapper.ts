@@ -85,6 +85,24 @@ function buildCompetitorRows(report: any): CompetitorRow[] {
   }));
 }
 
+const TOP_6_FEATURES_GROUP_SIZE = 6;
+
+// top_6_features became a 6-row repeatable group in GTM Schema v3
+// (top_6_features_1..6, see lib/gtm-field-schema.ts) — joins whichever
+// rows have real content into one bulleted block for the deck's
+// feature_list token, same "stop at the first empty row" trim as the
+// CSV/PDF exports (lib/gtm-group-fields.ts).
+function buildTop6FeaturesList(gtmByFieldId: Map<string, DocumentFieldRow>): string {
+  const lines: string[] = [];
+  for (let i = 1; i <= TOP_6_FEATURES_GROUP_SIZE; i++) {
+    const field = gtmByFieldId.get(`top_6_features_${i}`);
+    if (!field || !isRealAnswer(field.answer)) break;
+    const clean = sanitizeText(field.answer);
+    if (clean) lines.push(clean);
+  }
+  return lines.join("\n");
+}
+
 function buildSpecHighlights(tdsByFieldId: Map<string, DocumentFieldRow>): string {
   const parts: string[] = [];
   for (const { id, label } of SPEC_HIGHLIGHT_FIELDS) {
@@ -124,6 +142,8 @@ function resolveComputed(name: string, ctx: ResolveCtx): DeckValue {
       return ctx.competitors;
     case "spec_highlights":
       return buildSpecHighlights(ctx.tdsByFieldId);
+    case "feature_list":
+      return buildTop6FeaturesList(ctx.gtmByFieldId);
     case "provenance_summary":
       return buildProvenanceSummary(ctx);
     default:

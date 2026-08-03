@@ -34,6 +34,11 @@ interface ProjectInput {
   // never via the project name (see lib/snapshot-capture.ts).
   productUrl?: string;
   asin?: string;
+  // OUR product's own SKU — distinct from any competitor/catalog SKU.
+  // GTM Schema v3's Product Title field renders "{Product Title} — {SKU}"
+  // once set; not part of the 76-item GTM inventory itself, so it lives
+  // here at the project level instead of as a GTM field.
+  sku?: string;
 }
 
 // Supabase columns are snake_case, but the rest of this app (Prisma models,
@@ -59,6 +64,7 @@ function toProjectShape(row: any) {
     pricePoint: row.price_point,
     productUrl: row.product_url,
     asin: row.asin,
+    sku: row.sku,
     savedDefaults: row.saved_defaults,
     latestAnalysisId: row.latest_analysis_id,
     latestReportId: row.latest_report_id,
@@ -95,6 +101,7 @@ export async function createProject(userId: string, orgId: string, data: Project
         price_point: data.pricePoint ?? null,
         product_url: data.productUrl ?? null,
         asin: data.asin ?? null,
+        sku: data.sku ?? null,
         last_used_at: new Date().toISOString(),
       })
       .select()
@@ -143,6 +150,7 @@ export async function createProject(userId: string, orgId: string, data: Project
       pricePoint: data.pricePoint || null,
       productUrl: data.productUrl || null,
       asin: data.asin || null,
+      sku: data.sku || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -253,6 +261,7 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   pricePoint: "price_point",
   productUrl: "product_url",
   asin: "asin",
+  sku: "sku",
   savedDefaults: "saved_defaults",
   latestAnalysisId: "latest_analysis_id",
   latestReportId: "latest_report_id",

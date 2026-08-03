@@ -6,10 +6,11 @@
 // terminal state instead of a bare "N/A"/"TBD": genuine human-decision
 // fields ("internal" kind, see lib/gtm-field-schema.ts) become
 // "Awaiting internal input"; everything else becomes
-// "Not determinable — {reason}" — so the UI/CSV never shows an unexplained
-// bare placeholder again. Never touches a field that already has a real
-// answer.
-import { AWAITING_INTERNAL_INPUT, NOT_DETERMINABLE_PREFIX, isRealAnswer } from "./field-answer-state";
+// "Not found — checked {K} sources" (GTM Schema v3's more specific, auditable
+// phrasing — replaces the old one-size-fits-all "Not determinable — {reason}"
+// sentence) — so the UI/CSV never shows an unexplained bare placeholder
+// again. Never touches a field that already has a real answer.
+import { AWAITING_INTERNAL_INPUT, NOT_FOUND_PREFIX, isRealAnswer } from "./field-answer-state";
 
 export interface FinalizableAnswer {
   answer: string;
@@ -26,7 +27,7 @@ export interface FinalizableField {
 export function finalizeFieldAnswers<T extends FinalizableAnswer>(
   fields: Record<string, T>,
   schema: FinalizableField[],
-  notDeterminableReason: string
+  sourcesChecked: number
 ): Record<string, T> {
   const result: Record<string, T> = { ...fields };
 
@@ -34,7 +35,9 @@ export function finalizeFieldAnswers<T extends FinalizableAnswer>(
     const entry = result[f.id];
     if (entry && isRealAnswer(entry.answer)) continue;
 
-    const terminalAnswer = f.kind === "internal" ? AWAITING_INTERNAL_INPUT : `${NOT_DETERMINABLE_PREFIX}${notDeterminableReason}`;
+    const terminalAnswer = f.kind === "internal"
+      ? AWAITING_INTERNAL_INPUT
+      : `${NOT_FOUND_PREFIX}checked ${sourcesChecked} source${sourcesChecked === 1 ? "" : "s"}`;
     result[f.id] = {
       ...(entry as T),
       answer: terminalAnswer,

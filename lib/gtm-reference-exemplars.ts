@@ -23,4 +23,6 @@ export const GENERIC_EXEMPLARS: Record<string, string> = {
     "1. High quality construction. 2. Great performance. 3. Trusted brand. 4. Affordable price. 5. Backed by warranty and customer support.",
   expert_tip:
     "For best results, use this product as directed and maintain it regularly to keep it performing at its best.",
+  up_sell:
+    "This product presents a great opportunity to upsell customers to a premium option, encouraging them to invest in quality and unlock repeat purchases down the line.",
 };

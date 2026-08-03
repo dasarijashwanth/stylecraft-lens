@@ -1,8 +1,10 @@
-// The 79-field "Product Knowledge" spec sheet for the Go-To-Market tab.
-// Single source of truth for both the generation pipeline (app/api/documents/generate,
-// lib/gtm-derive.ts, lib/gtm-grounding.ts) and the UI grid (ProductKnowledgeSection in
-// app/(app)/dashboard/projects/[id]/page.tsx) — every consumer must iterate this list,
-// never hardcode the field count or IDs elsewhere.
+// The "Product Knowledge" spec sheet for the Go-To-Market tab — GTM Schema
+// v3's full field inventory (see the repo owner's own numbered spec, GTM
+// Schema v3). Single source of truth for both the generation pipeline
+// (app/api/documents/generate, lib/gtm-derive.ts, lib/gtm-grounding.ts) and
+// the UI grid (ProductKnowledgeSection in
+// app/(app)/dashboard/projects/[id]/page.tsx) — every consumer must iterate
+// this list, never hardcode the field count or IDs elsewhere.
 
 export type GtmFieldKind = "grounded" | "written" | "internal";
 
@@ -27,21 +29,32 @@ export interface GtmField {
   // rather than folded into the question itself.
   helperText?: string;
   // Marks a field whose UI control is NOT the default plain textarea — the
-  // render loop in ProductKnowledgeSection special-cases these ids. Every
-  // other field (the vast majority) is left undefined and renders the
-  // generic textarea.
-  uiControl?: "sku_picker";
+  // render loop in ProductKnowledgeSection special-cases these ids/kinds.
+  // Every other field (the vast majority) is left undefined and renders the
+  // generic textarea. "select" is generic (keyed off uiControl+options, not
+  // a per-field-id branch); "sku_picker" is the one per-field-id exception
+  // (Comparison Chart WEB ONLY).
+  uiControl?: "sku_picker" | "select";
+  // Fixed choices for uiControl:"select" fields — an AI/derived answer not
+  // exactly matching one of these (case-insensitive) is treated as
+  // unresolved rather than accepted as free text.
+  options?: string[];
+  // Marks one row of a repeatable-row group (Features/Cross Sell/Top 6/
+  // Icons) — same document_fields row shape as every other field (own
+  // Owner/Notes/history), just tagged so the UI can render row groups and
+  // CSV/PDF can trim trailing empty rows. See lib/gtm-group-fields.ts.
+  group?: { id: string; index: number; total: number };
 }
 
 // Narrative fields — the rest of the schema defaults to "grounded".
 const WRITTEN_FIELD_IDS = new Set([
-  "core_consumer",
   "why_creating_item",
   "positioning_statement",
   "product_name_origin",
   "name_story_tie",
   "new_line_or_current",
   "new_technology",
+  "up_sell",
   "reason_to_buy",
   "expert_tip",
 ]);
@@ -55,6 +68,8 @@ export const INTERNAL_FIELD_IDS = new Set([
   "pallet_tier_total",
   "pallets_high",
   "approved_pricing",
+  "trademark_symbol",
+  "rating_label",
 ]);
 
 const INTERNAL_FIELD_OWNERS: Record<string, string> = {
@@ -64,35 +79,61 @@ const INTERNAL_FIELD_OWNERS: Record<string, string> = {
   pallet_tier_total: "Ops",
   pallets_high: "Ops",
   approved_pricing: "Sales",
+  trademark_symbol: "Legal",
+  rating_label: "Product Marketing",
 };
 
-function field(id: string, section: string, question: string, extra?: { helperText?: string; uiControl?: "sku_picker" }): GtmField {
+interface FieldExtra {
+  helperText?: string;
+  uiControl?: "sku_picker" | "select";
+  options?: string[];
+  group?: { id: string; index: number; total: number };
+}
+
+function field(id: string, section: string, question: string, extra?: FieldExtra): GtmField {
   const kind: GtmFieldKind = WRITTEN_FIELD_IDS.has(id) ? "written" : INTERNAL_FIELD_IDS.has(id) ? "internal" : "grounded";
   return { id, section, question, kind, ...(kind === "internal" ? { owner: INTERNAL_FIELD_OWNERS[id] } : {}), ...extra };
+}
+
+// Builds one repeatable-row group — N field entries sharing an id prefix,
+// each independently editable (own Owner/Notes/history via the normal
+// document_fields row) but visually and export-wise treated as one group
+// (lib/gtm-group-fields.ts's filterTrailingEmptyGroupRows, the UI's group
+// render branch in ProductKnowledgeSection).
+function groupFields(idPrefix: string, section: string, rowLabel: string, total: number): GtmField[] {
+  return Array.from({ length: total }, (_, i) => {
+    const index = i + 1;
+    return field(`${idPrefix}_${index}`, section, `${rowLabel} #${index}`, { group: { id: idPrefix, index, total } });
+  });
 }
 
 export const GTM_FIELD_SCHEMA: GtmField[] = [
   // General
   field("item", "General", "Item"),
-  field("core_consumer", "General", "Core Consumer"),
+  field("core_consumer", "General", "Core Consumer", { uiControl: "select", options: ["Pro", "Retail", "Both"] }),
   field("why_creating_item", "General", "Why are we creating this item? (consumer need, competitive product, etc.)"),
   field("positioning_statement", "General", "What is the positioning statement? (story)"),
   field("product_name_origin", "General", "Product Name Origin"),
   field("name_story_tie", "General", "How does this product name tie to the story?"),
   field("new_line_or_current", "General", "New Line or Current Collection?"),
   field("new_technology", "General", "New Technology?"),
-  field("approved_pricing", "General", "Approved Pricing"),
+  field("approved_pricing", "General", "Approved Pricing", { helperText: "Format: Salon: $X   Retail: $Y" }),
   field("good_better_best", "General", "Good Better Best (Lineup)"),
   field("good_better_best_performance", "General", "Good Better Best (Performance)"),
   field("hair_type", "General", "Hair Type"),
-  field("features_full_list", "General", "Features (full list)"),
-  field("upsell_cross_sell", "General", "Up-sell / Cross-sell products"),
+  ...groupFields("features_full_list", "General", "Feature", 10),
+  field("up_sell", "General", "Up-sell (Sales play opportunity)"),
+  ...groupFields("cross_sell", "General", "Cross Sell Product", 5),
   field("reason_to_buy", "General", "Reason to Buy (Unique Selling Points)"),
   field("expert_tip", "General", "Expert Tip"),
   field("comparison_chart_web_only", "General", "Comparison Chart WEB ONLY", {
     helperText: "Select two products to feature as comparisons on the DTC site and provide the SKUs. You may include products from either StyleCraft or Gamma+.",
     uiControl: "sku_picker",
   }),
+  // Revived per GTM Schema v3 as a plain link/URL text field — distinct
+  // from Comparison Chart WEB ONLY above (a picker), and from the removed
+  // COMPS field from GTM Schema v2 (not restored; this is a fresh field).
+  field("comps_buying_guide", "General", "Comps for Buying Guide"),
   field("trademark_symbol", "General", "Trademark Symbol"),
   field("warranty", "General", "Warranty"),
   field("certification_needed", "General", "Certification Needed"),
@@ -111,20 +152,28 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   field("pallets_high", "Packaging & Logistics", "Pallets High"),
 
   // Tool Description
+  // Header renders "{Product Title} — {SKU}" in the UI/CSV/PDF once a SKU is
+  // set — SKU itself lives on the project record (lib/db/projects.ts), not
+  // as its own GTM field, since it's not part of the 76-item inventory.
   field("product_title", "Tool Description", "Product Title"),
   field("material", "Tool Description", "Material"),
-  field("top_6_features", "Tool Description", "Top 6 Features in Priority Order"),
-  field("feature_icons", "Tool Description", "6 Icons for the Features"),
+  ...groupFields("top_6_features", "Tool Description", "Top Feature", 6),
+  ...groupFields("feature_icons", "Tool Description", "Icon", 6),
   field("care_directions", "Tool Description", "Care Directions"),
   // Grounded (verbatim from the Amazon listing), not written — see kind
   // classification above. Deliberately excluded from WRITTEN_FIELD_IDS.
+  // Kept even though it isn't itemized in GTM Schema v3's inventory (same
+  // "don't silently drop an existing valuable field" call as Heat/Plate
+  // Technology below).
   field("product_description", "Tool Description", "Product Description"),
 
   // Motor
   field("motor_type", "Motor", "Motor Type"),
   field("motor_rpm", "Motor", "RPM"),
   field("motor_run_time", "Motor", "Run Time"),
+  field("motor_recharge_time", "Motor", "Recharge Time"),
   field("motor_speed", "Motor", "Speed"),
+  field("motor_noise_level", "Motor", "Noise level", { uiControl: "select", options: ["Ultra Quiet", "Low", "Moderate"] }),
 
   // Heat/Plate Technology — the parallel section for motorless styling
   // tools (flat iron/curling iron/hot brush, see lib/db/tool-types.ts's
@@ -138,7 +187,7 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   // Blades
   field("blade_name", "Blades", "Blade Name"),
   field("fixed_blade", "Blades", "Fixed Blade"),
-  field("cutting_blade", "Blades", "Cutting Blade"),
+  field("cutting_blade", "Blades", "Cutting Blade", { helperText: "Select the closest match, or choose Other and describe it in Notes." }),
 
   // Lids
   field("lids_qty", "Lids", "Qty"),

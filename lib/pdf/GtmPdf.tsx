@@ -2,6 +2,7 @@ import { Document, Page, Text, View } from "@react-pdf/renderer";
 import { styles, CoverHeader, PageFooter, SectionHeader, FourColHeader, FourColRow } from "./shared";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS } from "../gtm-field-schema";
 import { isRealAnswer } from "../field-answer-state";
+import { filterTrailingEmptyGroupRows } from "../gtm-group-fields";
 
 export function GtmPdf({
   productName,
@@ -13,6 +14,9 @@ export function GtmPdf({
   productKnowledge: any;
 }) {
   const fields = productKnowledge?.fields || {};
+  // Default: trim trailing empty repeatable-row-group rows (Features/Cross
+  // Sell/Top 6/Icons) from the export — see lib/gtm-group-fields.ts.
+  const exportSchema = filterTrailingEmptyGroupRows(GTM_FIELD_SCHEMA, id => fields[id]?.answer);
 
   return (
     <Document>
@@ -27,7 +31,7 @@ export function GtmPdf({
           <View key={section}>
             <SectionHeader title={section} />
             <FourColHeader />
-            {GTM_FIELD_SCHEMA.filter(f => f.section === section).map(f => {
+            {exportSchema.filter(f => f.section === section).map(f => {
               const entry = fields[f.id];
               return (
                 <FourColRow

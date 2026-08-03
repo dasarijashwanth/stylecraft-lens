@@ -77,11 +77,11 @@ async function main() {
       stuck_internal: { answer: "N/A", source: "none" },
     },
     finalizeSchema,
-    "not found anywhere"
+    4
   );
   assert(finalized.real_field.answer === "A real spec", "a real answer is left untouched by finalize");
-  assert(finalized.stuck_grounded.answer === "Not determinable — not found anywhere", "a stuck grounded field becomes Not determinable with the given reason");
-  assert(finalized.stuck_internal.answer === "Awaiting internal input", "a stuck internal field becomes Awaiting internal input, not Not determinable");
+  assert(finalized.stuck_grounded.answer === "Not found — checked 4 sources", "a stuck grounded field becomes 'Not found — checked K sources' with the given count");
+  assert(finalized.stuck_internal.answer === "Awaiting internal input", "a stuck internal field becomes Awaiting internal input, not Not found");
   assert(finalized.stuck_grounded.source === "none" && finalized.stuck_internal.source === "none", "finalized terminal states are tagged source: none");
 
   // ---- Section 3: tier-6 derivation — pure correctness + never preempts a real answer ----

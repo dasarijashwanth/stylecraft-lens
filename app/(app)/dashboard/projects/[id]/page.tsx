@@ -1,7 +1,7 @@
 // app/(app)/dashboard/projects/[id]/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -396,7 +396,7 @@ export default function ProjectDetailPage() {
             <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
-          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
+          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
         </div>
       </div>
 
@@ -1258,6 +1258,16 @@ const SOURCE_LABELS = GTM_SOURCE_LABELS;
 
 const OWNER_OPTIONS = ["Product Marketing", "Marketing", "Sales", "Legal", "Ops"];
 
+// GTM Schema v3's repeatable-row groups (lib/gtm-field-schema.ts's
+// groupFields) — the overall label shown once above row #1, distinct from
+// each row's own "{Label} #{n}" question text.
+const GTM_GROUP_LABELS: Record<string, string> = {
+  features_full_list: "Features (full list)",
+  cross_sell: "Cross Sell Products",
+  top_6_features: "Top 6 Features in Priority Order",
+  feature_icons: "6 Icons for the Features",
+};
+
 const isFieldComplete = isRealAnswer;
 
 type FieldRow = {
@@ -1312,7 +1322,19 @@ function formatFillReport(report: FillReport | null): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
-function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: { projectId: string; pipelineStatus?: string; pipelinePhase?: string }) {
+function ProductKnowledgeSection({
+  projectId,
+  pipelineStatus,
+  pipelinePhase,
+  projectSku,
+  onSkuChange,
+}: {
+  projectId: string;
+  pipelineStatus?: string;
+  pipelinePhase?: string;
+  projectSku?: string | null;
+  onSkuChange?: (sku: string) => void;
+}) {
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
   const [fillReport, setFillReport] = useState<FillReport | null>(null);
@@ -1320,7 +1342,35 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
   const [fillingAll, setFillingAll] = useState(false);
   const [fillProgress, setFillProgress] = useState<{ done: number; total: number } | null>(null);
+  const [skuDraft, setSkuDraft] = useState(projectSku || "");
+  const [skuSaving, setSkuSaving] = useState(false);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => { setSkuDraft(projectSku || ""); }, [projectSku]);
+
+  async function saveSku(value: string) {
+    setSkuSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku: value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to save SKU");
+      onSkuChange?.(value);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save SKU");
+    } finally {
+      setSkuSaving(false);
+    }
+  }
+
+  function handleSkuChange(value: string) {
+    setSkuDraft(value);
+    if (debounceTimers.current["__sku"]) clearTimeout(debounceTimers.current["__sku"]);
+    debounceTimers.current["__sku"] = setTimeout(() => saveSku(value), 800);
+  }
 
   useEffect(() => {
     (async () => {
@@ -1645,8 +1695,15 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                     : notDeterminable
                     ? "Not Determinable"
                     : SOURCE_LABELS[entry?.source || "none"];
+                  const bothNeedsNotes = f.id === "core_consumer" && entry?.answer === "Both" && !entry?.notes?.trim();
                   return (
-                    <div key={f.id} className="flex flex-col gap-1">
+                    <Fragment key={f.id}>
+                    {f.group?.index === 1 && (
+                      <div className="md:col-span-2 pt-1">
+                        <h5 className="text-[9px] font-bold text-text-muted uppercase tracking-wider">{GTM_GROUP_LABELS[f.group.id] || f.question}</h5>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1">
                       <div className="flex items-center justify-between gap-2">
                         <label className="font-semibold text-text-primary text-[11px] flex items-center gap-1">
                           {f.question}
@@ -1703,6 +1760,15 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                           slots={(entry?.source_detail?.slots as (ComparisonChartSlot | null)[] | undefined) || [null, null]}
                           onSave={(answer, slots) => saveFieldWithDetail(f.id, answer, { slots })}
                         />
+                      ) : f.uiControl === "select" && f.options ? (
+                        <select
+                          value={entry?.answer || ""}
+                          onChange={e => handleFieldChange(f.id, e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-[11px]"
+                        >
+                          <option value="">Select…</option>
+                          {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
                       ) : (
                         <textarea
                           rows={2}
@@ -1712,6 +1778,15 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                           className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
                             flagged ? "border-danger/40" : "border-border"
                           }`}
+                        />
+                      )}
+                      {f.id === "product_title" && (
+                        <input
+                          type="text"
+                          value={skuDraft}
+                          onChange={e => handleSkuChange(e.target.value)}
+                          placeholder="SKU (renders as Product Title — SKU)"
+                          className="w-full px-2.5 py-1 border border-border rounded-lg bg-surface-1 text-text-secondary placeholder-text-muted outline-none focus:border-accent text-[10px]"
                         />
                       )}
                       <div className="flex items-center gap-2">
@@ -1727,8 +1802,10 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                           type="text"
                           value={entry?.notes || ""}
                           onChange={e => handleNotesChange(f.id, e.target.value)}
-                          placeholder="Notes…"
-                          className="flex-1 px-1.5 py-1 border border-border rounded-md bg-surface-1 text-text-secondary placeholder-text-muted text-[9px] outline-none focus:border-accent"
+                          placeholder={bothNeedsNotes ? "Required: why Both, and how to balance the two audiences" : "Notes…"}
+                          className={`flex-1 px-1.5 py-1 border rounded-md bg-surface-1 text-text-secondary placeholder-text-muted text-[9px] outline-none focus:border-accent ${
+                            bothNeedsNotes ? "border-warning/50" : "border-border"
+                          }`}
                         />
                       </div>
                       <div className="h-3 text-[9px] text-text-muted">
@@ -1737,6 +1814,7 @@ function ProductKnowledgeSection({ projectId, pipelineStatus, pipelinePhase }: {
                         {status === "regenerating" && "Regenerating…"}
                       </div>
                     </div>
+                    </Fragment>
                   );
                 })}
               </div>

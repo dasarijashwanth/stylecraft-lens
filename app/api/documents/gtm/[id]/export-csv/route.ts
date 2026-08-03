@@ -6,6 +6,7 @@ import { getDocumentById, getDocumentFields } from "@/lib/db/documents";
 import { GTM_FIELD_SCHEMA, GTM_SOURCE_LABELS, type GtmFieldSource } from "@/lib/gtm-field-schema";
 import { isRealAnswer } from "@/lib/field-answer-state";
 import { sanitizeCsvCell } from "@/lib/csv-safe";
+import { filterTrailingEmptyGroupRows } from "@/lib/gtm-group-fields";
 
 // A flagged field's `answer` almost always still holds the real (if
 // imperfect/conflicting) value — never destroy it with a generic message.
@@ -39,8 +40,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     // Iterate the SCHEMA, not the saved rows — guarantees exactly one row
     // per schema field (including ones never generated/saved), so the
-    // exported row count always equals GTM_FIELD_SCHEMA.length.
-    const rows = GTM_FIELD_SCHEMA.map(schemaField => {
+    // exported row count always equals GTM_FIELD_SCHEMA.length, MINUS
+    // whichever trailing empty repeatable-row-group rows get trimmed below
+    // (default: trim — see lib/gtm-group-fields.ts).
+    const exportSchema = filterTrailingEmptyGroupRows(GTM_FIELD_SCHEMA, id => byId.get(id)?.answer);
+    const rows = exportSchema.map(schemaField => {
       const entry = byId.get(schemaField.id);
       const trimmed = (entry?.answer ?? "").trim();
 
@@ -55,6 +59,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         answer = "N/A";
       } else {
         answer = trimmed;
+      }
+      // Product Title renders "{Product Title} — {SKU}" once a SKU is set
+      // (GTM Schema v3) — SKU lives on the project record, not as its own
+      // GTM field.
+      if (schemaField.id === "product_title" && (project as any).sku && isRealAnswer(trimmed)) {
+        answer = `${answer} — ${(project as any).sku}`;
       }
 
       const source = GTM_SOURCE_LABELS[(entry?.source as GtmFieldSource) || "none"] ?? GTM_SOURCE_LABELS.none;
