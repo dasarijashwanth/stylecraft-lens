@@ -1050,7 +1050,7 @@ export function selectByCompositeScore(
   identity: IdentityCard,
   limit: number,
   ctx: CompositeScoringContext,
-  opts: { allowStaticFallbackTopup?: boolean; requireMotorEvidenceFirst?: boolean } = {}
+  opts: { allowStaticFallbackTopup?: boolean; requireMotorEvidenceFirst?: boolean; nearestSimilarMode?: boolean } = {}
 ): any[] {
   const allowStaticFallbackTopup = opts.allowStaticFallbackTopup ?? true;
   const withPrice = candidates.map(c => ({
@@ -1062,12 +1062,23 @@ export function selectByCompositeScore(
   const widestBand = computePriceBand(targetPriceRaw, tier, 2);
 
   let accepted: any[] = [];
-  for (let widenStep = 0; widenStep <= 2; widenStep++) {
-    const band = computePriceBand(targetPriceRaw, tier, widenStep);
-    const inBand = withPrice.filter(c => c._resolvedPrice != null && isWithinBand(c._resolvedPrice, band));
-    if (inBand.length >= limit || widenStep === 2) {
-      accepted = inBand;
-      break;
+  if (opts.nearestSimilarMode) {
+    // Nearest-similar fallback (only reached when the normal ladder — up to
+    // 3 AI-discovery rounds plus the ±30/40/50% widen loop below — still
+    // couldn't fill every slot) draws from a deliberately much wider band
+    // than the normal widest step: 40%-250% of target, not clamped to the
+    // normal ±50%. This is a distinct, explicit band, not another widenStep
+    // on computePriceBand (which stays untouched — it's used elsewhere and
+    // its 50%-floor clamp is intentional for the NORMAL ladder).
+    accepted = withPrice.filter(c => c._resolvedPrice != null && c._resolvedPrice >= targetPriceRaw * 0.4 && c._resolvedPrice <= targetPriceRaw * 2.5);
+  } else {
+    for (let widenStep = 0; widenStep <= 2; widenStep++) {
+      const band = computePriceBand(targetPriceRaw, tier, widenStep);
+      const inBand = withPrice.filter(c => c._resolvedPrice != null && isWithinBand(c._resolvedPrice, band));
+      if (inBand.length >= limit || widenStep === 2) {
+        accepted = inBand;
+        break;
+      }
     }
   }
 
@@ -1108,6 +1119,21 @@ export function selectByCompositeScore(
     let theirLineupPercentile: number | null = null;
     let theirLineupSample: LineupProduct[] | null = null;
 
+    // computePriceScoreAbsolute saturates to 0 beyond ±50% of target — its
+    // normal operating domain (the standard widen loop never accepts
+    // anything past that anyway). nearestSimilarMode's band is much wider
+    // (40%-250%), so reusing that formula would score every off-band
+    // candidate identically (0), leaving ties broken by incoming pool
+    // order instead of actual price closeness — silently breaking the
+    // spec's own tie-break order (motor, then price, then rating count).
+    // This wider, non-saturating divisor keeps "closer price wins"
+    // meaningful across the full nearest-similar range.
+    const priceScoreForCandidate = (price: number): number => {
+      if (!opts.nearestSimilarMode) return computePriceScoreAbsolute(price, targetPriceRaw);
+      const diff = Math.abs(price - targetPriceRaw);
+      return Math.max(0, 1 - Math.min(1, diff / (1.5 * targetPriceRaw)));
+    };
+
     if (tier === "emerging" && ctx.ourLineupPercentile != null && ctx.indieLineups) {
       const lineup = ctx.indieLineups.get(c.brand) || [];
       const pct = lineup.length >= 2 ? computePercentileInLineup(c._resolvedPrice, lineup) : null;
@@ -1117,10 +1143,10 @@ export function selectByCompositeScore(
         theirLineupPercentile = pct;
         theirLineupSample = lineup;
       } else {
-        priceScore = computePriceScoreAbsolute(c._resolvedPrice, targetPriceRaw);
+        priceScore = priceScoreForCandidate(c._resolvedPrice);
       }
     } else {
-      priceScore = computePriceScoreAbsolute(c._resolvedPrice, targetPriceRaw);
+      priceScore = priceScoreForCandidate(c._resolvedPrice);
     }
 
     const theirSpecs = extractCompetitorSpecs(c);
@@ -1142,6 +1168,32 @@ export function selectByCompositeScore(
 
     const outOfBand = !isWithinBand(c._resolvedPrice, primaryBand);
     const { _resolvedPrice, ai_claimed_price, ...rest } = c;
+
+    // Only ever attached (see the nearest_match spread below) when this
+    // call is the nearest-similar fallback — computed unconditionally here
+    // since every input it needs (motor/heat-tech tier, out-of-band flag)
+    // is already in scope, cheap, and never shipped otherwise.
+    let nearestMatchReason: string | null = null;
+    if (opts.nearestSimilarMode) {
+      const reasonParts: string[] = [];
+      if (ctx.primaryCriterion === "motor") {
+        if (motorMatchTier === "unverified") reasonParts.push("Motor type unverified");
+        else if (motorMatchTier && motorMatchTier !== "exact") {
+          reasonParts.push(`Different motor (${motorExtraction?.label || "unknown"} vs your ${ctx.ourMotor?.label || "motor"})`);
+        }
+      } else if (ctx.primaryCriterion === "heat_technology") {
+        if (heatTechMatchTier === "unverified") reasonParts.push("Plate/heat technology unverified");
+        else if (heatTechMatchTier && heatTechMatchTier !== "exact") {
+          reasonParts.push(`Different plate/heat technology (${heatTechExtraction?.label || "unknown"} vs your ${ctx.ourHeatTech?.label || "plate/heat technology"})`);
+        }
+      }
+      if (outOfBand) {
+        reasonParts.push(`$${_resolvedPrice.toFixed(2)} vs your $${targetPriceRaw.toFixed(2)} target`);
+      }
+      nearestMatchReason = reasonParts.length > 0
+        ? reasonParts.join(", ")
+        : `Closest available ${tier} ${getToolTypeLabel(identity.toolType, ctx.toolTypes).toLowerCase()} — no exact-fit competitor found`;
+    }
 
     return {
       ...rest,
@@ -1192,13 +1244,23 @@ export function selectByCompositeScore(
       differentiator_match: differentiatorMatch,
       composite_score: compositeScore,
       ...(outOfBand ? { out_of_band: true, out_of_band_reason: buildOutOfBandLabel(_resolvedPrice, primaryBand) } : {}),
+      ...(opts.nearestSimilarMode ? { nearest_match: true, nearest_match_reason: nearestMatchReason } : {}),
     };
   });
 
   scored.sort((a, b) => b.composite_score - a.composite_score);
 
   let final: any[];
-  if (opts.requireMotorEvidenceFirst) {
+  if (opts.nearestSimilarMode) {
+    // No verified/unverified split here — a nearest-similar pick is
+    // included ONLY because nothing better was available, so the honest
+    // ranking (verified and unverified candidates scored/sorted together,
+    // purely by composite_score) is exactly what should decide order.
+    // dedupeToOnePerBrand still applies for legacy (unchanged brand-
+    // diversity rule); every candidate already carries nearest_match/
+    // nearest_match_reason from the scoring map above.
+    final = tier === "legacy" ? dedupeToOnePerBrand(scored, limit) : scored.slice(0, limit);
+  } else if (opts.requireMotorEvidenceFirst) {
     // Motor evidence required to be a first-class ("verified") candidate —
     // exact/adjacent/different tiers all mean "we found real motor-type
     // text for this candidate," even a confirmed mismatch; only
@@ -1810,7 +1872,7 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
 // instructions in fillRoundExtraInstruction already push toward genuinely
 // different query angles without needing an explicit banned-query list).
 interface FillLoopMarker {
-  round: 1 | 2 | 3;
+  round: 1 | 2 | 3 | 4;
   searchesSoFar: number;
 }
 
@@ -1819,16 +1881,24 @@ interface FillLoopMarker {
 // actual rule. Round 3 is the genuine relaxation ladder — motor-unconfirmed
 // candidates, non-curated brands (legacy only), and a wider price band are
 // explicitly permitted — but tool-type/product-category correctness is
-// never relaxed at either round.
-function fillRoundExtraInstruction(round: 2 | 3, tier: CompetitorTier): string {
+// never relaxed at either round. Round 4 (the nearest-similar last resort —
+// only reached when finalize's own relaxed pool-rescan still can't fill
+// every slot, see the finalize blocks below) deliberately switches query
+// STRATEGY rather than repeating round 3's relaxed terms again — rounds 1-3
+// are brand-targeted; round 4 asks for generic category best-sellers
+// instead, since that's a genuinely different angle rounds 1-3 never tried.
+function fillRoundExtraInstruction(round: 2 | 3 | 4, tier: CompetitorTier): string {
   if (round === 2) {
     return tier === "legacy"
       ? "ADDITIONAL SEARCH ROUND — the first round didn't fill all 5 slots. Broaden your search: try more brand names, alternate query phrasings (synonyms/singular-plural of the product type), and check additional Amazon search result pages beyond the first. Do not lower any standard — every candidate must still meet all the rules above."
       : "ADDITIONAL SEARCH ROUND — the first round didn't fill all 5 slots. Broaden your search: try more indie/DTC brand names, alternate query phrasings, additional roundup/review articles, and additional Amazon search result pages beyond the first. Do not lower any standard — every candidate must still meet all the rules above.";
   }
-  return tier === "legacy"
-    ? "RELAXED SEARCH ROUND — after two full search rounds, slots are still open. This time it's OK to include: a candidate whose motor type can't be confirmed from its own listing (say so in inclusion_rationale), a candidate from a brand not on any curated list, or a candidate priced up to 50% away from the target price if nothing closer exists. Still reject anything of the wrong product type."
-    : "RELAXED SEARCH ROUND — after two full search rounds, slots are still open. This time it's OK to include: a candidate whose motor type can't be confirmed from its own listing (say so in inclusion_rationale), or a candidate priced up to 50% away from the target price if nothing closer exists. Still reject anything of the wrong product type or an already-excluded large brand.";
+  if (round === 3) {
+    return tier === "legacy"
+      ? "RELAXED SEARCH ROUND — after two full search rounds, slots are still open. This time it's OK to include: a candidate whose motor type can't be confirmed from its own listing (say so in inclusion_rationale), a candidate from a brand not on any curated list, or a candidate priced up to 50% away from the target price if nothing closer exists. Still reject anything of the wrong product type."
+      : "RELAXED SEARCH ROUND — after two full search rounds, slots are still open. This time it's OK to include: a candidate whose motor type can't be confirmed from its own listing (say so in inclusion_rationale), or a candidate priced up to 50% away from the target price if nothing closer exists. Still reject anything of the wrong product type or an already-excluded large brand.";
+  }
+  return "NEAREST-SIMILAR SEARCH ROUND — every prior round and price relaxation still couldn't fill every slot. Switch strategy entirely: search for generic category best-sellers and new-brand entrants instead of specific brand names — e.g. \"best [product type] [this year]\", \"new [product type] brands [this year]\", or an Amazon category search sorted by relevance/rating. Motor/plate-heat technology match is NOT required this round, and price can be as low as 40% or as high as 250% of the target price. The ONLY rule that still applies without exception: the product must be a real, verifiable, correct-tool-type product — never invent a product or accept the wrong product type.";
 }
 
 // Cross-round dedup — reject a newly-found candidate that's already in the
@@ -1847,6 +1917,24 @@ function mergeNewCandidatesIntoPool(pool: any[], incoming: any[]): any[] {
     return true;
   });
   return [...pool, ...fresh];
+}
+
+// The nearest-similar fallback's own exclusion filter — everything in
+// `pool` NOT already represented in `selected`, same ASIN/brand+name dedup
+// key as mergeNewCandidatesIntoPool above (just filtering the opposite
+// direction: keep candidates NOT matching `selected`, rather than merging
+// new ones in), so a nearest-similar pick can never duplicate an
+// already-seated real competitor.
+function excludeAlreadySelected(pool: any[], selected: any[]): any[] {
+  const seenAsins = new Set(selected.map((c: any) => (c.asin || "").toUpperCase()).filter((a: string) => /^[A-Z0-9]{10}$/.test(a)));
+  const seenBrandName = new Set(selected.map((c: any) => `${normalizeBrandToken(c.brand || "")}|${normalizeBrandToken(c.name || "")}`));
+  return pool.filter((c: any) => {
+    const asin = (c.asin || "").toUpperCase();
+    if (/^[A-Z0-9]{10}$/.test(asin) && seenAsins.has(asin)) return false;
+    const key = `${normalizeBrandToken(c.brand || "")}|${normalizeBrandToken(c.name || "")}`;
+    if (seenBrandName.has(key)) return false;
+    return true;
+  });
 }
 
 // A slot the fill loop genuinely could not fill after exhausting the full
@@ -2270,9 +2358,27 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // real search round has already run.
       const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
 
-      if (trialSelection.length < 5 && updatedFill.round < 3) {
+      // Rounds 1->2 and 2->3 are unchanged (strict trial, exactly as before
+      // the nearest-similar feature). Round 3->4 is a separate, later
+      // decision: round 4 is the nearest-similar last resort (spec's "one
+      // additional targeted search pass"), so it should only trigger when
+      // even a RELAXED (nearestSimilarMode) trial over the full pool still
+      // can't fill every slot — gating it on the strict trial count like
+      // rounds 1-3 would fire it almost every time even one verified pick
+      // is missing, defeating "only when genuinely needed."
+      let shouldRunAnotherRound: boolean;
+      if (updatedFill.round < 3) {
+        shouldRunAnotherRound = trialSelection.length < 5;
+      } else if (updatedFill.round === 3) {
+        const relaxedTrial = selectByCompositeScore(pool, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { nearestSimilarMode: true, allowStaticFallbackTopup: false });
+        shouldRunAnotherRound = relaxedTrial.length < 5;
+      } else {
+        shouldRunAnotherRound = false; // round 4 already ran — never a 5th
+      }
+
+      if (shouldRunAnotherRound && updatedFill.round < 4) {
         await updateAnalysisPhase(analysisId, 1, "phase1_result", {
-          __phase1Fill: { round: (updatedFill.round + 1) as 1 | 2 | 3, searchesSoFar: updatedFill.searchesSoFar },
+          __phase1Fill: { round: (updatedFill.round + 1) as 1 | 2 | 3 | 4, searchesSoFar: updatedFill.searchesSoFar },
           __phase1Pool: pool,
           __phase1RegistrySnapshot: legacyRegistrySnapshot,
         }, webSearchCount);
@@ -2280,10 +2386,25 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       }
 
       // ----------------------------------------------------
-      // PHASE 1b: FINALIZE — full relaxation ladder + honest empty slots
+      // PHASE 1b: FINALIZE — full relaxation ladder, nearest-similar
+      // fallback, then (only if that's still not enough) an honest empty
+      // slot — never rendered until every real avenue has been tried.
       // ----------------------------------------------------
       let competitors = selectByCompositeScore(pool, targetPriceRaw, "legacy", identityCard, 5, scoringCtx, { allowStaticFallbackTopup: true, requireMotorEvidenceFirst: true });
-      const stillShort = 5 - competitors.length;
+      let stillShort = 5 - competitors.length;
+      if (stillShort > 0) {
+        // Nearest-similar fallback — everything already gathered this run
+        // (pool) that wasn't selected above, re-scored under a much wider
+        // band and with no motor/heat-tech evidence requirement (see
+        // selectByCompositeScore's nearestSimilarMode). Hard rules still
+        // apply: every candidate in `pool` already passed tool-type
+        // filtering on the way in, and excludeAlreadySelected keeps this
+        // from duplicating an already-seated pick.
+        const unusedPool = excludeAlreadySelected(pool, competitors);
+        const nearestPicks = selectByCompositeScore(unusedPool, targetPriceRaw, "legacy", identityCard, stillShort, scoringCtx, { nearestSimilarMode: true, allowStaticFallbackTopup: false });
+        competitors = [...competitors, ...nearestPicks];
+        stillShort = 5 - competitors.length;
+      }
       for (let i = 0; i < stillShort; i++) {
         competitors.push(buildEmptySlotPlaceholder("legacy", identityCard, toolTypes, ourMotorLabel, updatedFill.searchesSoFar));
       }
@@ -2489,8 +2610,48 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         keyDiff: context.keyDiff ?? null,
         penalizedAsins: correctionSignals.penalizedAsins,
       };
-      result.competitors = selectByCompositeScore(result.competitors, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true, allowStaticFallbackTopup: true });
-      const stillShortEmerging = 5 - result.competitors.length;
+      // Captured before the reassignment below — this is the full,
+      // already-enriched candidate pool the nearest-similar fallback draws
+      // from if the normal selection still comes up short.
+      const enrichedPool = result.competitors;
+      result.competitors = selectByCompositeScore(enrichedPool, targetPriceRaw, "emerging", identityCard, 5, scoringCtx, { requireMotorEvidenceFirst: true, allowStaticFallbackTopup: true });
+      let stillShortEmerging = 5 - result.competitors.length;
+
+      if (stillShortEmerging > 0) {
+        // Nearest-similar fallback — same reasoning as Phase 1's (see its
+        // own finalize block): everything already gathered this run that
+        // wasn't selected above, re-scored under a much wider band with no
+        // motor/heat-tech evidence requirement. Tool type and registry-
+        // brand exclusion are already guaranteed (enrichedPool only ever
+        // received tool-type-filtered, non-registry-brand candidates on
+        // the way in during Phase 2a).
+        const unusedPool = excludeAlreadySelected(enrichedPool, result.competitors);
+        const nearestPicks = selectByCompositeScore(unusedPool, targetPriceRaw, "emerging", identityCard, stillShortEmerging, scoringCtx, { nearestSimilarMode: true, allowStaticFallbackTopup: false });
+        result.competitors = [...result.competitors, ...nearestPicks];
+        stillShortEmerging = 5 - result.competitors.length;
+      }
+
+      if (stillShortEmerging > 0 && fillRoundsUsed < 4) {
+        // Last resort: even the nearest-similar rescan over the full pool
+        // couldn't fill every slot — run ONE more, differently-angled
+        // search round (see fillRoundExtraInstruction's round 4 text)
+        // before accepting an empty slot. __phase2Stage flips to
+        // "needs_round4" (NOT back to "discovered"), so the next /continue
+        // call re-enters the PHASE 2a block above; __phase2Fill: {round:4}
+        // makes that block's existing fill.round!==1 branch run
+        // fillRoundExtraInstruction(4, "emerging") with zero further
+        // changes needed there. Once round 4 completes, 2a's own existing
+        // transition-to-"discovered" logic naturally hands back to this
+        // same 2b block a second time (fillRoundsUsed will then read 4,
+        // which is why this guard can never trigger a second round 4).
+        await updateAnalysisPhase(analysisId, 2, "phase2_result", {
+          __phase2Stage: "needs_round4",
+          __phase2Fill: { round: 4, searchesSoFar: searchesSoFarPhase2 },
+          __phase2Pool: enrichedPool,
+        }, webSearchCount);
+        return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: webSearchCount };
+      }
+
       for (let i = 0; i < stillShortEmerging; i++) {
         result.competitors.push(buildEmptySlotPlaceholder("emerging", identityCard, toolTypes, ourMotorLabel, searchesSoFarPhase2));
       }
@@ -2842,6 +3003,12 @@ export async function replaceCompetitor(
     replaced_from_asin: oldAsin,
     out_of_band: isOutOfBand,
     out_of_band_reason: isOutOfBand ? buildOutOfBandLabel(newCompetitor.price_raw, primaryBand!) : null,
+    // A manual ASIN swap is a human-confirmed real product — never leave a
+    // stale "Nearest Match" badge on a competitor the user just fixed
+    // themselves. The generic object-spread above would otherwise carry
+    // nearest_match/nearest_match_reason forward unchanged from oldCompetitor.
+    nearest_match: false,
+    nearest_match_reason: null,
   };
 
   const patch: { phase1_result?: object; phase2_result?: object; phase3_result?: object } = {};

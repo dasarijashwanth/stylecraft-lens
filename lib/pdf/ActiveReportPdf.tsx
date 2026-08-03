@@ -66,6 +66,7 @@ function competitorSummary(c: any): string {
   // default and needs no extra tag; a competitor the curated registry
   // couldn't fill (lib/analysisEngine.ts's AI top-up fallback) does.
   if (c.brand_list_status === "not_curated") parts.push("Not on curated legacy list");
+  if (c.nearest_match) parts.push(`Nearest match: ${c.nearest_match_reason || "no exact-fit candidate found"}`);
   return parts.length > 0 ? parts.join(" · ") : "No verified pricing/rating data found for this competitor";
 }
 
@@ -86,7 +87,8 @@ function competitorEvidenceLine(c: any): string {
   const sourceLabel = c.sources?.brand_site && c.sources?.amazon ? "brand site + Amazon"
     : c.sources?.brand_site ? `brand site (${c.sources.brand_site.url})`
     : c.sources?.amazon ? "Amazon" : "unspecified";
-  return `${criterionLabel}: ${criterionLine} · Source: ${sourceLabel}`;
+  const nearestMatchClause = c.nearest_match ? ` · Nearest match (adjacent-market reference, not a direct competitor): ${c.nearest_match_reason || "no exact-fit candidate found"}` : "";
+  return `${criterionLabel}: ${criterionLine} · Source: ${sourceLabel}${nearestMatchClause}`;
 }
 
 export function ActiveReportPdf({

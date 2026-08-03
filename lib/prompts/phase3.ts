@@ -19,12 +19,16 @@ export async function buildPhase3Prompt(
       price: c.price ?? null,
       tier: "legacy" as const,
       asin: c.asin ?? null,
+      nearest_match: c.nearest_match ?? false,
+      nearest_match_reason: c.nearest_match_reason ?? null,
     })),
     ...(phase2?.competitors ?? []).map((c: any) => ({
       name: c.name,
       price: c.price ?? null,
       tier: "emerging" as const,
       asin: c.asin ?? null,
+      nearest_match: c.nearest_match ?? false,
+      nearest_match_reason: c.nearest_match_reason ?? null,
     })),
   ];
 
@@ -44,8 +48,15 @@ export async function buildPhase3Prompt(
     competitors: allCompetitors,
   });
 
-  // Find price floor, ceiling, average from real data for context block
+  // Find price floor, ceiling, average from real data for context block —
+  // nearest-match competitors are deliberately excluded from this
+  // calculation: they were seated specifically because their price fell
+  // outside the normal band, so including them would skew the floor/
+  // ceiling the model is separately told to reason about (and to treat
+  // those same entries as adjacent-market references, not direct rivals —
+  // see ABSOLUTE RULE 8 below).
   const realPrices = allCompetitors
+    .filter((c: any) => !c.nearest_match)
     .map((c: any) => parseFloat((c.price ?? "").replace(/[^0-9.]/g, "")))
     .filter((n: number) => !isNaN(n) && n > 0);
 
@@ -65,7 +76,7 @@ PRODUCT BEING ANALYZED:
 
 REAL COMPETITOR PRICES FROM PHASE 1/2 RESEARCH (Amazon-sourced):
 ${allCompetitors.map((c: any) =>
-  ` ${c.tier === "legacy" ? "LEGACY" : "EMERGING"} | ${c.name} | Price: ${c.price ?? "—"} | ASIN: ${c.asin ?? "N/A"}`
+  ` ${c.tier === "legacy" ? "LEGACY" : "EMERGING"} | ${c.name} | Price: ${c.price ?? "—"} | ASIN: ${c.asin ?? "N/A"}${c.nearest_match ? ` | NEAREST-MATCH (adjacent-market reference, not a direct competitor — ${c.nearest_match_reason || "no exact-fit candidate found"})` : ""}`
 ).join("\n")}
 
 You have live Google Search available — use it to verify current market size, CAGR, and trend data for this category and price tier before writing the analysis.
@@ -87,6 +98,7 @@ ABSOLUTE RULES:
 5. Opportunities MUST reference this product's specific price gap vs named competitors.
 6. Every factual claim that isn't directly restating the competitor price data already provided above MUST have a matching entry in "citations" with a real URL and a short VERBATIM quote from that page — a quote you paraphrase or invent will fail server-side verification and be discarded. If you cannot find a citable source for a claim, omit the claim rather than stating it uncited.
 7. Do not include analysis of any other product category. Do not reuse boilerplate from previous analyses — every claim must trace to the competitor data or category above.
+8. Any competitor marked NEAREST-MATCH above was included only because no exact-fit competitor could be found — treat it as an adjacent-market reference point, never as a direct rival. Do not build a threat, positioning claim, or price-gap argument primarily around a nearest-match entry; prefer the non-nearest-match competitors for those. It's fine to mention one briefly for context (e.g. "the broader market includes X at $Y"), but never present it as if it directly competes on motor/plate-heat technology or market segment.
 ${extraInstruction ? `\n${extraInstruction}\n` : ""}
 Return ONLY valid JSON. No markdown.`;
 

@@ -111,6 +111,17 @@ interface Competitor {
   // candidate had ZERO motor evidence (no verified competitor could fill
   // the slot) and was pulled in only as a last-resort, explicitly labeled.
   motor_unverified_fallback?: boolean;
+  // Set by selectByCompositeScore's nearestSimilarMode — the full ladder
+  // (rounds 1-3, the normal price-band widen loop, even a dedicated round-4
+  // search) still couldn't find an exact-fit competitor for this slot, so
+  // the nearest real, verified product available was seated instead — a
+  // real competitor, never an empty_slot placeholder. nearest_match_reason
+  // is a one-line human-readable deviation (e.g. "Different motor (Rotary
+  // vs your Brushless), $89.00 vs your $299.00 target"). Reset to
+  // false/null by lib/analysisEngine.ts's replaceCompetitor on a manual
+  // ASIN swap — a human-confirmed pick is never still "nearest match."
+  nearest_match?: boolean;
+  nearest_match_reason?: string | null;
   // Which source(s) actually produced this competitor — brand-site specs
   // are authoritative for motor/technical data; Amazon supplies live
   // price/rating/reviews/BSR when a listing exists. `amazon: null` means a
@@ -871,6 +882,11 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
               Different plate/heat technology ({heatTechLabelWithBranded(c) || "unknown"})
             </span>
           )}
+          {c.nearest_match && (
+            <span className="px-2 py-0.5 rounded text-[9px] font-semibold bg-warning/10 border border-warning/25 text-warning" title={c.nearest_match_reason || "No exact-fit competitor was found for this slot — showing the nearest similar product instead."}>
+              Nearest Match
+            </span>
+          )}
         </div>
       )}
 
@@ -879,6 +895,13 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           into (see lib/analysisEngine.ts's applyPriceBandGate). */}
       {c.out_of_band && c.out_of_band_reason && (
         <p className="text-[10px] text-warning leading-snug">{c.out_of_band_reason}</p>
+      )}
+
+      {/* Nearest-match disclosure — same "always visible, not hover-only"
+          reasoning as the out-of-band line above (see
+          lib/analysisEngine.ts's selectByCompositeScore nearestSimilarMode). */}
+      {c.nearest_match && c.nearest_match_reason && (
+        <p className="text-[10px] text-warning leading-snug">{c.nearest_match_reason}</p>
       )}
 
       {isValidAsin && <div className="text-[10px] text-text-muted font-mono leading-none">ASIN: {c.asin}</div>}

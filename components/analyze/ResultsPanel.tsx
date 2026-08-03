@@ -27,11 +27,13 @@ interface ResultsPanelProps {
       matching_weights?: { motor: number; price: number; feature: number } | null;
       legacy_registry_snapshot?: { category_slug: string; category_name: string; brands: any[] } | null;
       form_inputs?: Record<string, any> | null;
+      web_searches_performed?: number;
     };
     phase2: {
       competitors: any[];
       matching_weights?: { motor: number; price: number; feature: number } | null;
       form_inputs?: Record<string, any> | null;
+      web_searches_performed?: number;
     };
     phase3: {
       amazon_category: string;
@@ -117,6 +119,12 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
   const phase2RealCompetitors = (phase2.competitors || []).filter((c: any) => !c.empty_slot);
   const phase1CriterionLabel = describeCriterionForCompetitors(phase1RealCompetitors);
   const phase2CriterionLabel = describeCriterionForCompetitors(phase2RealCompetitors);
+  // lib/analysisEngine.ts's nearest-similar fallback (selectByCompositeScore's
+  // nearestSimilarMode) — a real, verified competitor seated only because no
+  // exact-fit candidate was found after the full discovery ladder ran. Used
+  // below for the compact per-tier header note.
+  const phase1NearestMatchCount = phase1RealCompetitors.filter((c: any) => c.nearest_match).length;
+  const phase2NearestMatchCount = phase2RealCompetitors.filter((c: any) => c.nearest_match).length;
   // Threaded into each CompetitorCard so its "Why this competitor" section
   // can name the actual differentiator a match was scored against, not
   // just show an unlabeled checkmark.
@@ -538,6 +546,11 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             )}
           </p>
         )}
+        {phase1NearestMatchCount > 0 && (
+          <p className="text-[10px] text-warning italic -mt-3">
+            {phase1NearestMatchCount} of {phase1RealCompetitors.length} legacy slots filled with nearest-similar products (no exact fits after {phase1.web_searches_performed ?? 0} queries) — see the &quot;Nearest Match&quot; badge on each.
+          </p>
+        )}
 
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
@@ -572,6 +585,11 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         {phase2.matching_weights && (
           <p className="text-[10px] text-text-muted italic -mt-3">
             Competitors prioritized {phase2CriterionLabel ? `by ${phase2CriterionLabel}, then ` : "by "}price (indie: relative to each brand&apos;s own lineup tier), then comparable specs.
+          </p>
+        )}
+        {phase2NearestMatchCount > 0 && (
+          <p className="text-[10px] text-warning italic -mt-3">
+            {phase2NearestMatchCount} of {phase2RealCompetitors.length} emerging slots filled with nearest-similar products (no exact fits after {phase2.web_searches_performed ?? 0} queries) — see the &quot;Nearest Match&quot; badge on each.
           </p>
         )}
 

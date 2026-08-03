@@ -8,6 +8,13 @@ export interface CompetitorSummary {
   price: string | null;
   tier: "legacy" | "emerging";
   asin: string | null;
+  // Set when this competitor was seated by the nearest-similar fallback
+  // (lib/analysisEngine.ts's selectByCompositeScore nearestSimilarMode) —
+  // a real, verified product included only because no exact-fit candidate
+  // was found. Threaded through so Phase 3 can tell the model to treat it
+  // as an adjacent-market reference, never a direct rival.
+  nearest_match?: boolean;
+  nearest_match_reason?: string | null;
 }
 
 export interface ParagraphInput {

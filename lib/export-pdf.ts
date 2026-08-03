@@ -37,6 +37,14 @@ function competitorCriterionDifferentBadge(c: any): string {
   return c.motor_match_tier === "different" ? ` <span style="font-size:9px; color:#b45309;">(different motor)</span>` : "";
 }
 
+// Set by lib/analysisEngine.ts's selectByCompositeScore nearestSimilarMode
+// — a real, verified competitor seated only because no exact-fit candidate
+// was found after the full discovery ladder ran. Same inline-badge pattern
+// as competitorCriterionDifferentBadge above, distinct color.
+function nearestMatchBadge(c: any): string {
+  return c.nearest_match ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(Nearest Match)</span>` : "";
+}
+
 // Column/section header label for a whole table of competitors — 'none'
 // falls back to "Motor Type" only because every existing caller of this
 // helper already filters to non-empty tables of motor/heat-tech-scored
@@ -114,7 +122,8 @@ function renderCompetitorEvidenceHTML(ca: any): string {
           : c.sources?.brand_site ? `brand site (${escapeHtml(c.sources.brand_site.url)})`
           : c.sources?.amazon ? "Amazon" : "unspecified";
         const fallbackLine = c.motor_unverified_fallback ? ` — included as a last-resort, ${isHeatTech ? "plate/heat-technology" : "motor"}-unverified pick` : "";
-        return `<li><strong>${escapeHtml(c.name || "Unknown")}</strong> — ${criterionLine}; ${priceLine}; source: ${sourceLabel}${fallbackLine}</li>`;
+        const nearestMatchLine = c.nearest_match ? ` — <strong>Nearest match (adjacent-market reference):</strong> ${escapeHtml(c.nearest_match_reason || "no exact-fit candidate found")}` : "";
+        return `<li><strong>${escapeHtml(c.name || "Unknown")}</strong> — ${criterionLine}; ${priceLine}; source: ${sourceLabel}${fallbackLine}${nearestMatchLine}</li>`;
       }).join("")}
     </ul>
   `;
@@ -639,7 +648,7 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
         <div class="comp-card">
           <div class="comp-header">
             <div>
-              <div class="comp-name">${escapeHtml(c.name)}${c.brand_list_status === "not_curated" ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(Not on curated legacy list)</span>` : ""}</div>
+              <div class="comp-name">${escapeHtml(c.name)}${c.brand_list_status === "not_curated" ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(Not on curated legacy list)</span>` : ""}${nearestMatchBadge(c)}</div>
               <div class="comp-brand">${escapeHtml(c.brand)}</div>
             </div>
             <div class="comp-price">${escapeHtml(c.price) || "—"}</div>
@@ -678,7 +687,7 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
       <tbody>
         ${(ca.large_brand_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${escapeHtml(c.name)}</strong>${competitorCriterionDifferentBadge(c)}</td>
+            <td><strong>${escapeHtml(c.name)}</strong>${competitorCriterionDifferentBadge(c)}${nearestMatchBadge(c)}</td>
             <td>${competitorCriterionCellValue(c)}</td>
             <td>${escapeHtml(c.price) || "—"}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
@@ -699,7 +708,7 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
         <div class="comp-card">
           <div class="comp-header">
             <div>
-              <div class="comp-name">${escapeHtml(c.name)}</div>
+              <div class="comp-name">${escapeHtml(c.name)}${nearestMatchBadge(c)}</div>
               <div class="comp-brand">${escapeHtml(c.brand)}</div>
             </div>
             <div class="comp-price">${escapeHtml(c.price) || "—"}</div>
@@ -738,7 +747,7 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
       <tbody>
         ${(ca.indie_emerging_competitors || []).map((c: any) => `
           <tr>
-            <td><strong>${escapeHtml(c.name)}</strong>${competitorCriterionDifferentBadge(c)}</td>
+            <td><strong>${escapeHtml(c.name)}</strong>${competitorCriterionDifferentBadge(c)}${nearestMatchBadge(c)}</td>
             <td>${competitorCriterionCellValue(c)}</td>
             <td>${escapeHtml(c.price) || "—"}${c.price_logic === "relative" ? ` <span style="font-size:9px; color:#666;">(relative tier)</span>` : ""}</td>
             <td>${renderStarRating(c.rating) || "—"}</td>
