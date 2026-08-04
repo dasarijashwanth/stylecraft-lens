@@ -1595,3 +1595,68 @@ $$,
 -- document was actually written against.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS voice_guide_id UUID REFERENCES brand_voice_guides(id) ON DELETE SET NULL;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS voice_guide_version INTEGER;
+
+-- 44. UPLOADED SOURCE DOCS — externally-authored TDS/Spec Sheet/Sales Kit/
+-- Other files a team uploads for a project (pre-launch products with no
+-- web presence especially need this), parsed into extracted_facts and
+-- injected as a top-priority grounded source in the GTM fill ladder. NOT
+-- the app's own disabled TDS-generation feature (lib/tds-generate.ts,
+-- gated by isTdsEnabled() in lib/feature-flags.ts, stays untouched) — this
+-- ingests a real file as source material, a different concern that
+-- happens to share GTM's field vocabulary (lib/tds-field-schema.ts).
+-- Versioned per (project_id, doc_type): a replacement upload is a new row,
+-- old ones kept for audit/rollback, only one active per project+type at a
+-- time — same precedent as Section 42's brand_voice_guides, scoped here to
+-- (project_id, doc_type) instead of (brand). The binary file lives in
+-- Supabase Storage bucket "project-source-docs" (create it manually in the
+-- Supabase dashboard, private — no public URL, same as "deck-templates").
+CREATE TABLE IF NOT EXISTS uploaded_source_docs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL,
+    doc_type VARCHAR(20) NOT NULL, -- 'tds' | 'spec_sheet' | 'sales_kit' | 'other'
+    file_path VARCHAR(500) NOT NULL,
+    file_name VARCHAR(255),
+    file_size_bytes INTEGER,
+    mime_type VARCHAR(100),
+    version INTEGER NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    full_text TEXT, -- sanitizeText() applied — used for narrative grounding + fact re-verification
+    extraction_status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | complete | failed
+    uploaded_by VARCHAR(255),
+    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uploaded_source_docs_one_active_idx ON uploaded_source_docs(project_id, doc_type, is_active) WHERE is_active = true;
+ALTER TABLE uploaded_source_docs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for uploaded_source_docs" ON uploaded_source_docs FOR ALL USING (true) WITH CHECK (true);
+
+-- Structured facts extracted from an uploaded_source_docs row — one row per
+-- (source_doc_id, field_id), field_id matching GTM_FIELD_SCHEMA/
+-- TDS_FIELD_SCHEMA's own ids directly (no separate vocabulary to
+-- translate). confirmed_by_user distinguishes an AI-extracted candidate
+-- (already verbatim-quote-verified against the doc's own full_text before
+-- ever being inserted) from a human's explicit correction/addition, which
+-- always wins in the fill ladder regardless of which doc type it came from.
+CREATE TABLE IF NOT EXISTS extracted_facts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    source_doc_id UUID NOT NULL REFERENCES uploaded_source_docs(id) ON DELETE CASCADE,
+    project_id UUID NOT NULL,
+    field_id VARCHAR(100) NOT NULL,
+    value TEXT NOT NULL,
+    raw_text TEXT, -- verbatim quote from the source doc backing this value
+    source_location VARCHAR(100), -- e.g. "p.3", "Motor sheet"
+    confirmed_by_user BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE(source_doc_id, field_id)
+);
+ALTER TABLE extracted_facts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for extracted_facts" ON extracted_facts FOR ALL USING (true) WITH CHECK (true);
+
+-- documents.source_doc_versions — provenance stamp for the "out of date
+-- sources" banner. Unlike voice_guide (one guide per brand, a single FK
+-- fits), a project can have several active doc TYPES at once — JSONB is
+-- this codebase's own established shape for "a map of several typed
+-- values" (document_fields.source_detail, gtm_workbook_templates.sheet_summary).
+-- Shape: {"tds": {"id": "...", "version": 2}, "spec_sheet": {"id": "...", "version": 1}}
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_doc_versions JSONB;

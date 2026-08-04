@@ -148,6 +148,8 @@ export interface MockDocument {
   // time, see lib/db/documents.ts's setDocumentVoiceGuide.
   voiceGuideId?: string | null;
   voiceGuideVersion?: number | null;
+  // Uploaded TDS Ingestion — see lib/db/documents.ts's DocumentRow.source_doc_versions.
+  sourceDocVersions?: Record<string, { id: string; version: number }> | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -251,6 +253,42 @@ export interface MockBrandVoiceGuide {
   version: number;
   isActive: boolean;
   createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Uploaded TDS Ingestion — externally-authored TDS/Spec Sheet/Sales Kit/
+// Other files a team uploads per project (lib/db/uploaded-source-docs.ts).
+// Versioned per (projectId, docType): a replacement upload auto-activates
+// immediately, deactivating the prior active row for that project+type.
+export interface MockUploadedSourceDoc {
+  id: string;
+  projectId: string;
+  docType: string; // 'tds' | 'spec_sheet' | 'sales_kit' | 'other'
+  fileBase64: string;
+  fileName: string | null;
+  fileSizeBytes: number | null;
+  mimeType: string | null;
+  version: number;
+  isActive: boolean;
+  fullText: string | null;
+  extractionStatus: string; // pending | complete | failed
+  uploadedBy: string | null;
+  uploadedAt: Date;
+  updatedAt: Date;
+}
+
+// Structured facts extracted from a MockUploadedSourceDoc row
+// (lib/db/extracted-facts.ts) — one row per (sourceDocId, fieldId).
+export interface MockExtractedFact {
+  id: string;
+  sourceDocId: string;
+  projectId: string;
+  fieldId: string;
+  value: string;
+  rawText: string | null;
+  sourceLocation: string | null;
+  confirmedByUser: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -604,6 +642,10 @@ class MemoryDatabase {
   // Same always-seeded precedent as collections/brandNameHints — real
   // default StyleCraft voice guide content, not an empty admin table.
   brandVoiceGuides: MockBrandVoiceGuide[] = [];
+  // Uploaded TDS Ingestion — starts empty, real usage data, not a seeded
+  // default (there's no sensible default TDS to seed per-project).
+  uploadedSourceDocs: MockUploadedSourceDoc[] = [];
+  extractedFacts: MockExtractedFact[] = [];
   projectDecks: MockProjectDeck[] = [];
   // Unlike deckTemplates/projectDecks (an empty admin-fills-it-in feature),
   // this registry must be non-empty in local dev without Supabase too —

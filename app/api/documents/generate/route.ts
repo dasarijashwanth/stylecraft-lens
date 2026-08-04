@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { getProjectReports } from "@/lib/db/reports";
-import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsFieldsForProject, setDocumentVoiceGuide } from "@/lib/db/documents";
+import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsFieldsForProject, setDocumentVoiceGuide, setDocumentSourceDocVersions } from "@/lib/db/documents";
 import { getLatestOutput } from "@/lib/project-outputs";
 import { GTM_FIELD_SCHEMA, visibleGtmSchema } from "@/lib/gtm-field-schema";
 import { generateAllFields, GtmSources } from "@/lib/gtm-generate";
 import { isRealAnswer } from "@/lib/field-answer-state";
 import { resolveBrandForProduct, getActiveVoiceGuide } from "@/lib/brand-voice";
+import { getUploadedTdsContext } from "@/lib/gtm-uploaded-tds";
 
 export const maxDuration = 60;
 
@@ -46,6 +47,8 @@ export async function POST(req: NextRequest) {
         pricePoint: project.pricePoint,
         companyContext: project.companyContext,
         targetMarket: project.targetMarket,
+        productUrl: (project as any).productUrl,
+        asin: (project as any).asin,
       },
       salesKit,
       tds,
@@ -69,6 +72,16 @@ export async function POST(req: NextRequest) {
     const brand = await resolveBrandForProduct(project.productName);
     const voiceGuide = await getActiveVoiceGuide(brand);
     await setDocumentVoiceGuide(document.id, voiceGuide.id, voiceGuide.version);
+
+    // Uploaded TDS Ingestion — records which active source-doc version(s)
+    // this generation actually used, so a later replacement can show an
+    // "out of date sources" banner.
+    const uploadedTdsContext = await getUploadedTdsContext(projectId);
+    if (uploadedTdsContext.docsUsed.length > 0) {
+      const versions: Record<string, { id: string; version: number }> = {};
+      for (const d of uploadedTdsContext.docsUsed) versions[d.docType] = { id: d.id, version: d.version };
+      await setDocumentSourceDocVersions(document.id, versions);
+    }
 
     const savedFields = await getDocumentFields(document.id);
     const byId: Record<string, { answer?: string | null }> = {};

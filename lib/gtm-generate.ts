@@ -38,6 +38,7 @@ import { parsePriceToNumber } from "./pricing-analysis";
 import { applyFeaturesAndExpertTip, applyCollectionKernelAdaptation, applyCoreConsumerBothNote } from "./gtm-features-and-tip";
 import { applyDeterministicNotesConventions } from "./gtm-notes-conventions";
 import { applyBoxOnlyDerivation } from "./gtm-box-only";
+import { getUploadedTdsContext, applyUploadedTdsFacts, buildUploadedTdsPromptBlock, buildPreLaunchGroundingRule, buildTdsGroundingBlock } from "./gtm-uploaded-tds";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
 // Confirmed live that a 45s/45s split here still produced a hard 504 (the
@@ -75,7 +76,7 @@ export interface GtmSources {
   existingFieldAnswers?: Record<string, string> | null;
 }
 
-export function buildSourceTexts(sources: GtmSources): SourceTexts {
+export function buildSourceTexts(sources: GtmSources, uploadedTdsBlock: string = ""): SourceTexts {
   return {
     projectRecord: JSON.stringify({
       productName: sources.project.productName,
@@ -89,11 +90,12 @@ export function buildSourceTexts(sources: GtmSources): SourceTexts {
     competitiveAnalysis: JSON.stringify(sources.activeReport?.competitive_analysis || {}),
     tds: JSON.stringify(sources.tds || {}),
     salesKit: JSON.stringify(sources.salesKit || {}),
+    uploadedTds: uploadedTdsBlock,
   };
 }
 
 function sourceTextBlocks(sourceTexts: SourceTexts): string[] {
-  return [sourceTexts.projectRecord, sourceTexts.competitiveAnalysis, sourceTexts.tds, sourceTexts.salesKit];
+  return [sourceTexts.projectRecord, sourceTexts.competitiveAnalysis, sourceTexts.tds, sourceTexts.salesKit, sourceTexts.uploadedTds];
 }
 
 // GTM Schema v3 — "structural N/A, skip scraping": a non-motorized
@@ -212,7 +214,7 @@ async function buildTier6ExtraInputs(sources: GtmSources, toolTypes: { type_key:
   };
 }
 
-function buildSystemInstruction(productName: string, schema: GtmField[], voiceBlock: string = "") {
+function buildSystemInstruction(productName: string, schema: GtmField[], voiceBlock: string = "", preLaunchRule: string = "") {
   const fieldList = schema
     .map(f => `- ${f.id} [${f.section}] (${f.kind === "grounded" ? "HARD-GROUNDED" : "WRITTEN"}): ${f.question}`)
     .join("\n");
@@ -238,7 +240,7 @@ Rules:
 - Answer every field using ONLY the labeled sources provided below. Cite the source per field.
 - HARD-GROUNDED fields (specs: dimensions, weight, RPM, run time, voltage, cord length, blade names, quantities, colors, pricing, warranty, box/pallet data, included-in-box items): copy values exactly as they appear in the sources, units included. If a value is not present in any source, return "N/A". NEVER estimate, infer, or reuse a value from another product.
 - WRITTEN fields (positioning statement, story, reason to buy, expert tip, messaging): write them specifically about THIS product, referencing its actual named features and specs from the sources. Do not produce generic copy that could apply to any similar product — every claim must trace back to a real fact in the sources.
-- Source priority, highest first: the Project Record > Competitive Analysis / TDS / Sales Kit documents > real web search. If a field's answer is not in the labeled sources below, use web search to find real, verifiable public information about this EXACT product (its official product page, retailer listings, spec sheets) — never general/world knowledge, never a guess, and never a value from a different or similar product. Mark any web-sourced field's "source" as "web" in your JSON response. Only return "N/A" if the answer genuinely cannot be found in the sources OR via a real web search.
+- Source priority, highest first: the Project Record > the team's own UPLOADED_TDS (if provided — an externally-authored Technical Data Sheet, the most authoritative source for hard specs) > Competitive Analysis / TDS / Sales Kit documents > real web search. If a field's answer is not in the labeled sources below, use web search to find real, verifiable public information about this EXACT product (its official product page, retailer listings, spec sheets) — never general/world knowledge, never a guess, and never a value from a different or similar product. Mark any web-sourced field's "source" as "web" in your JSON response. Only return "N/A" if the answer genuinely cannot be found in the sources OR via a real web search.
 - Bias: specs/motor/blades/packaging/included-in-box come from TDS; positioning/pricing tiers/USPs/up-sell/expert tip come from Sales Kit; comps buying guide/competitive context come from Competitive Analysis. Fields still missing after checking all of these are exactly the ones worth a web search.
 
 REQUIRED DEPTH for these specific fields (this describes FORMAT AND DEPTH ONLY — never copy this wording, it is not about the current product):
@@ -261,10 +263,19 @@ ${fieldList}
 Return ONLY valid JSON — no markdown, no explanation — keyed by field id:
 { "<field_id>": { "answer": "...", "source": "project_record" | "competitive_analysis" | "tds" | "sales_kit" | "web" | "multiple" | "none" } }
 
-If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.${styleExemplarBlock}${voiceSection}`;
+If the answer genuinely cannot be found in the sources or via web search, return { "answer": "N/A", "source": "none" }. Every field id listed above must appear in your response.${styleExemplarBlock}${voiceSection}${preLaunchRule}`;
 }
 
 function buildUserContent(sourceTexts: SourceTexts) {
+  // <UPLOADED_TDS> is the team's own externally-authored TDS/spec-sheet
+  // file (lib/gtm-uploaded-tds.ts) — distinct from <TDS> above, which is
+  // this app's OWN (currently disabled) TDS-generation document. Omitted
+  // entirely when the project has no active uploaded source doc, so an
+  // empty tag never confuses the model into thinking one was checked.
+  const uploadedTdsBlock = sourceTexts.uploadedTds
+    ? `\n\n<UPLOADED_TDS>\n${sourceTexts.uploadedTds}\n</UPLOADED_TDS>`
+    : "";
+
   return `<PROJECT_RECORD>
 ${sourceTexts.projectRecord}
 </PROJECT_RECORD>
@@ -279,7 +290,7 @@ ${sourceTexts.tds}
 
 <SALES_KIT>
 ${sourceTexts.salesKit}
-</SALES_KIT>`;
+</SALES_KIT>${uploadedTdsBlock}`;
 }
 
 function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number; maxToolCalls?: number; projectId?: string }) {
@@ -309,12 +320,12 @@ function callAi(systemInstruction: string, userContent: string, opts?: { timeout
 // any one of them needs more time than it's given.
 const FIELDS_PER_CHUNK = 4;
 
-async function callAiPerSection(productName: string, schema: GtmField[], userContent: string, projectId: string, voiceBlock: string = ""): Promise<Record<string, { answer: string; source: string }> | null> {
+async function callAiPerSection(productName: string, schema: GtmField[], userContent: string, projectId: string, voiceBlock: string = "", preLaunchRule: string = ""): Promise<Record<string, { answer: string; source: string }> | null> {
   const chunks: GtmField[][] = [];
   for (let i = 0; i < schema.length; i += FIELDS_PER_CHUNK) chunks.push(schema.slice(i, i + FIELDS_PER_CHUNK));
 
   const results = await Promise.all(
-    chunks.map(fields => callAi(buildSystemInstruction(productName, fields, voiceBlock), userContent, { maxToolCalls: 3, projectId }))
+    chunks.map(fields => callAi(buildSystemInstruction(productName, fields, voiceBlock, preLaunchRule), userContent, { maxToolCalls: 3, projectId }))
   );
 
   const merged: Record<string, { answer: string; source: string }> = {};
@@ -373,8 +384,6 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const pipelineStart = Date.now();
   const toolTypes = await listToolTypes();
   const schema = GTM_FIELD_SCHEMA;
-  const sourceTexts = buildSourceTexts(sources);
-  const userContent = buildUserContent(sourceTexts);
 
   // Structural N/A — resolved once up front, then threaded through every
   // remaining tier as an exclusion so nothing (AI, web, Tier 6/6.5,
@@ -394,13 +403,27 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const voiceGuide = await getActiveVoiceGuide(brand);
   const voiceBlock = buildVoiceBlock(voiceGuide);
 
+  // Uploaded TDS Ingestion — resolved once per generation run, same
+  // caching-by-call-shape discipline as the voice guide above. A
+  // "pre-launch/custom" product (no productUrl/asin — no live web presence
+  // for the AI web-search tier below to find anything) gets the hard
+  // "no market/web claims" narrative rule; the fact override itself
+  // (applyUploadedTdsFacts below) applies regardless of pre-launch status.
+  const isPreLaunch = !sources.project.productUrl && !sources.project.asin;
+  const uploadedTdsContext = await getUploadedTdsContext(projectId);
+  const uploadedTdsPromptText = buildUploadedTdsPromptBlock(uploadedTdsContext);
+  const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
+
+  const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText);
+  const userContent = buildUserContent(sourceTexts);
+
   // "internal"-kind fields (dieline, approved pricing, etc.) are never
   // asked of the AI — nothing about a packaging/pricing DECISION is
   // answerable by reading sources or web search. They still go through
   // mergeField below via the FULL schema, so the deterministic `derived`
   // floor (tiers 1-4) can still populate them from real TDS/project data.
   const aiEligibleSchema = pipelineSchema.filter(f => f.kind !== "internal");
-  const aiRaw = await callAiPerSection(productName, aiEligibleSchema, userContent, projectId, voiceBlock);
+  const aiRaw = await callAiPerSection(productName, aiEligibleSchema, userContent, projectId, voiceBlock, preLaunchRule);
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   const merged: Record<string, GtmFieldAnswer> = {};
@@ -435,11 +458,39 @@ export async function generateAllFields(productName: string, sources: GtmSources
     }
   }
 
+  // Uploaded TDS Ingestion — overrides grounded/spec fields verbatim from
+  // the team's own uploaded source doc(s), the top-priority external
+  // source (only a literal project-record value outranks it). Re-verifies
+  // grounding against the doc's own stored text — but ONLY for AI-extracted
+  // facts, never a user's explicit correction, whose whole point is to
+  // override what the document itself says.
+  const uploadedTdsSourcedIds = applyUploadedTdsFacts(grounded, pipelineSchema, uploadedTdsContext);
+  const uploadedTdsUnconfirmedIds = new Set(Array.from(uploadedTdsSourcedIds).filter(id => !grounded[id]?.sourceDetail?.confirmedByUser));
+  if (uploadedTdsUnconfirmedIds.size > 0) {
+    const groundedUploadedTds = verifyGrounding(
+      grounded,
+      pipelineSchema.filter(f => uploadedTdsUnconfirmedIds.has(f.id)),
+      uploadedTdsContext.fullTextBlocks
+    );
+    Object.assign(grounded, groundedUploadedTds);
+  }
+
   // Tier 5 — web fallback fills genuinely-unanswered fields before the
   // quality guard runs, so a web-sourced answer still gets checked for
   // depth/genericness like any other written-field answer. Internal fields
   // are excluded from the eligible schema, same reasoning as the AI call.
-  await applyWebSearchFallback(grounded, aiEligibleSchema, productName, pipelineStart, PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any);
+  // Pre-launch products (no web presence) skip the attempt entirely and
+  // log why, rather than searching for something that can't exist.
+  await applyWebSearchFallback(
+    grounded,
+    aiEligibleSchema,
+    productName,
+    pipelineStart,
+    PIPELINE_TIME_BUDGET_MS,
+    toolTypes,
+    sources.project?.toolType as any,
+    isPreLaunch ? "pre-launch: no web presence" : undefined
+  );
 
   // Tier 6 (computed derivation, e.g. good_better_best/hair_type) runs
   // strictly after the web-search tier — these are pure/free to compute
@@ -455,10 +506,11 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // from the now-resolved Features. Runs after Tier 6 (manufacturer/lineup/
   // performance already settled) so Expert Tip's grounding has a real,
   // resolved feature list to reference — see lib/gtm-features-and-tip.ts.
-  await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock);
-  await applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock);
-  await applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock);
-  await applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock);
+  const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
+  await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock);
+  await applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock, tdsGroundingBlock);
+  await applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock);
+  await applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock);
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
@@ -467,7 +519,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // typical guess layered on top of its already-final "N/A".
   applyCategoryDefaults(grounded, pipelineSchema, sources.project.category);
 
-  await guardWrittenFieldsQuality(grounded, pipelineSchema, sources, productName, projectId, pipelineStart, voiceBlock);
+  await guardWrittenFieldsQuality(grounded, pipelineSchema, sources, productName, projectId, pipelineStart, voiceBlock, preLaunchRule);
 
   // Part E — deterministic Notes conventions (No lever./No guards.,
   // assembled-on-unit qty phrasing). Runs last, after every AI/web/derived
@@ -481,7 +533,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // above is never promoted to this terminal state. K=4: AI + web search +
   // Tier 6/6.5 + category default, the 4 tiers every eligible field here
   // actually passed through above.
-  return finalizeFieldAnswers(grounded, pipelineSchema, 4);
+  return finalizeFieldAnswers(grounded, pipelineSchema, 4, isPreLaunch ? "pre-launch: no web presence" : undefined);
 }
 
 // Regenerates exactly one field through the same pipeline.
@@ -502,6 +554,13 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   }
   const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
 
+  // Uploaded TDS Ingestion — same resolution as generateAllFields above.
+  const isPreLaunch = !sources.project.productUrl && !sources.project.asin;
+  const uploadedTdsContext = await getUploadedTdsContext(projectId);
+  const uploadedTdsPromptText = buildUploadedTdsPromptBlock(uploadedTdsContext);
+  const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
+  const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
+
   const derived = deriveFieldsFromSources(sources.project, sources.salesKit, sources.tds, sources.activeReport);
 
   // "internal"-kind fields are genuine human decisions — the API route
@@ -518,8 +577,8 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     return finalized[fieldId];
   }
 
-  const sourceTexts = buildSourceTexts(sources);
-  const systemInstruction = buildSystemInstruction(productName, [schemaField], voiceBlock);
+  const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText);
+  const systemInstruction = buildSystemInstruction(productName, [schemaField], voiceBlock, preLaunchRule);
   const userContent = buildUserContent(sourceTexts);
 
   // A single field needs far less search than the full 77-field sweep —
@@ -528,35 +587,50 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const aiRaw = await callAi(systemInstruction, userContent, { timeoutMs: 30_000, projectId });
   const { field: mergedField, fromAi } = mergeField(schemaField, aiRaw, derived);
 
-  const grounded = fromAi && mergedField.source !== "web"
+  let grounded = fromAi && mergedField.source !== "web"
     ? verifyGrounding({ [fieldId]: mergedField }, [schemaField], sourceTextBlocks(sourceTexts))[fieldId]
     : mergedField;
+
+  // Uploaded TDS Ingestion — same verbatim-override + re-verification as
+  // generateAllFields, scoped to this one field.
+  if (schemaField.kind === "grounded" && grounded.source !== "project_record") {
+    const singleFieldMap: Record<string, GtmFieldAnswer> = { [fieldId]: grounded };
+    const overridden = applyUploadedTdsFacts(singleFieldMap, [schemaField], uploadedTdsContext);
+    if (overridden.has(fieldId)) {
+      grounded = singleFieldMap[fieldId].sourceDetail?.confirmedByUser
+        ? singleFieldMap[fieldId]
+        : verifyGrounding(singleFieldMap, [schemaField], uploadedTdsContext.fullTextBlocks)[fieldId];
+    }
+  }
 
   // Web fallback + tier-6 inference + category default apply regardless of
   // field kind — a single regenerated "grounded" field deserves the same
   // second-chance tiers the full 77-field sweep already gives it above.
   const guarded = { [fieldId]: grounded };
-  await applyWebSearchFallback(guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any);
+  await applyWebSearchFallback(
+    guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any,
+    isPreLaunch ? "pre-launch: no web presence" : undefined
+  );
   const tier6Extra = await buildTier6ExtraInputs(sources, toolTypes);
   applyTier6Inference(guarded, [schemaField], {
     hairTypeSourceText: buildHairTypeSourceText(sources),
     ...tier6Extra,
   });
-  await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock);
-  await applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection, voiceBlock);
-  await applyCoreConsumerBothNote(guarded, [schemaField], productName, voiceBlock);
-  await applyBoxOnlyDerivation(guarded, [schemaField], productName, voiceBlock);
+  await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock, tdsGroundingBlock);
+  await applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection, voiceBlock, tdsGroundingBlock);
+  await applyCoreConsumerBothNote(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock);
+  await applyBoxOnlyDerivation(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock);
   applyCategoryDefaults(guarded, [schemaField], sources.project.category);
 
   if (schemaField.kind === "written") {
-    await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now(), voiceBlock);
+    await guardWrittenFieldsQuality(guarded, [schemaField], sources, productName, projectId, Date.now(), voiceBlock, preLaunchRule);
   }
 
   applyDeterministicNotesConventions(guarded, [schemaField], sources, productKind);
 
   // AI + web search + Tier 6/6.5 + category default — the 4 tiers this
   // single-field regenerate actually ran above.
-  const finalized = finalizeFieldAnswers(guarded, [schemaField], 4);
+  const finalized = finalizeFieldAnswers(guarded, [schemaField], 4, isPreLaunch ? "pre-launch: no web presence" : undefined);
   return finalized[fieldId];
 }
 
@@ -614,7 +688,8 @@ async function guardWrittenFieldsQuality(
   productName: string,
   projectId: string,
   pipelineStart: number,
-  voiceBlock: string = ""
+  voiceBlock: string = "",
+  preLaunchRule: string = ""
 ) {
   const writtenFields = schema.filter(f => f.kind === "written");
   if (writtenFields.length === 0) return;
@@ -715,7 +790,7 @@ async function guardWrittenFieldsQuality(
         exemplar_copy: `The previous draft copied or too closely paraphrased one of the STYLE EXEMPLAR documents' own text. Those describe a DIFFERENT product — write fresh copy grounded ONLY in ${productName}'s own real facts, matching the exemplars' depth/format/voice but never their actual wording.`,
         voice_violation: `The previous draft violated brand voice rules (${reason.detail}). Rewrite it to fix these specific issues — keep every fact/spec/number exactly as given, change only the voice/tone problem.`,
       }[reason.kind];
-      const retryInstruction = `${buildSystemInstruction(productName, [f], voiceBlock)}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
+      const retryInstruction = `${buildSystemInstruction(productName, [f], voiceBlock, preLaunchRule)}\n\n${instructionByReason} Rewrite it using these specific facts about ${productName}: ${facts.join("; ") || "(use the specs and description from the sources above)"}.`;
       // These retries run concurrently for up to 9 written fields — a
       // shorter timeout each keeps the whole Promise.all safely inside the
       // pipeline's remaining time budget (checked just above this block).

@@ -20,6 +20,7 @@ async function generateMainStatement(
   productName: string,
   positioningStatement: string,
   voiceBlock: string,
+  tdsGroundingBlock: string = "",
   retryInstruction?: string
 ): Promise<string | null> {
   const systemInstruction = `Distill this positioning statement for "${productName}" into ONE punchy box-front statement, at most 15 words, grounded only in the statement below — no new claims.
@@ -28,7 +29,7 @@ POSITIONING STATEMENT:
 ${positioningStatement}
 ${retryInstruction ? `\n${retryInstruction}` : ""}
 
-Return ONLY valid JSON: { "statement": "..." }${voiceBlock}\n${getToneDirective("launch")}`;
+Return ONLY valid JSON: { "statement": "..." }${voiceBlock}\n${getToneDirective("launch")}${tdsGroundingBlock}`;
 
   const raw = await callAiForJson<{ statement?: string }>(systemInstruction, `Product: ${productName}`, "GTM-BoxMainStatement", { timeoutMs: 15_000 });
   const statement = raw?.statement?.trim();
@@ -39,6 +40,7 @@ async function generateBoxFeatures(
   productName: string,
   topFeatures: string[],
   voiceBlock: string,
+  tdsGroundingBlock: string = "",
   retryInstruction?: string
 ): Promise<string[]> {
   const systemInstruction = `Condense each of these Top 6 Features for "${productName}" into a box-length bullet, at most 12 words each, grounded only in the feature text below — no new claims, keep the real spec value if the feature has one.
@@ -47,7 +49,7 @@ TOP 6 FEATURES:
 ${topFeatures.map((f, i) => `${i + 1}. ${f}`).join("\n")}
 ${retryInstruction ? `\n${retryInstruction}` : ""}
 
-Return ONLY valid JSON: { "features": ["..."] } — same order, same count as the input list.${voiceBlock}\n${getToneDirective("launch")}`;
+Return ONLY valid JSON: { "features": ["..."] } — same order, same count as the input list.${voiceBlock}\n${getToneDirective("launch")}${tdsGroundingBlock}`;
 
   const raw = await callAiForJson<{ features?: string[] }>(systemInstruction, `Product: ${productName}`, "GTM-BoxFeatures", { timeoutMs: 20_000 });
   return (raw?.features || []).filter(f => typeof f === "string" && f.trim()).map(f => f.trim());
@@ -57,18 +59,19 @@ export async function applyBoxOnlyDerivation(
   fields: Record<string, GtmFieldAnswer>,
   schema: GtmField[],
   productName: string,
-  voiceBlock: string = ""
+  voiceBlock: string = "",
+  tdsGroundingBlock: string = ""
 ): Promise<void> {
   const wantsMainStatement = schema.some(f => f.id === "box_main_statement") && isUnresolved(fields, "box_main_statement");
   if (wantsMainStatement) {
     const positioning = fields["positioning_statement"]?.answer;
     if (isRealAnswer(positioning)) {
-      const statement = await generateMainStatement(productName, positioning!, voiceBlock);
+      const statement = await generateMainStatement(productName, positioning!, voiceBlock, tdsGroundingBlock);
       if (statement) {
         const guarded = await runVoiceGuardedText(
           statement,
           "launch",
-          correction => generateMainStatement(productName, positioning!, voiceBlock, correction)
+          correction => generateMainStatement(productName, positioning!, voiceBlock, tdsGroundingBlock, correction)
         );
         fields["box_main_statement"] = { answer: guarded.text, source: "derived", flagged: guarded.flagged, sourceDetail: Object.keys(guarded.sourceDetail).length ? guarded.sourceDetail : undefined };
       }
@@ -83,14 +86,14 @@ export async function applyBoxOnlyDerivation(
       if (isRealAnswer(answer)) topFeatures.push(answer!);
     }
     if (topFeatures.length > 0) {
-      const condensed = await generateBoxFeatures(productName, topFeatures, voiceBlock);
+      const condensed = await generateBoxFeatures(productName, topFeatures, voiceBlock, tdsGroundingBlock);
       const voiceChecks = condensed.map(text => checkVoiceCompliance(text, "launch"));
       const violatingIndices = voiceChecks.map((c, i) => ({ i, violations: c.violations })).filter(v => v.violations.length > 0);
 
       let final = condensed.map((text, i) => voiceChecks[i].text);
       if (violatingIndices.length > 0) {
         const correction = buildVoiceCorrectionInstruction(violatingIndices.flatMap(v => v.violations));
-        const retryFeatures = await generateBoxFeatures(productName, topFeatures, voiceBlock, correction);
+        const retryFeatures = await generateBoxFeatures(productName, topFeatures, voiceBlock, tdsGroundingBlock, correction);
         violatingIndices.forEach(v => {
           const replacement = retryFeatures[v.i];
           if (!replacement) return;

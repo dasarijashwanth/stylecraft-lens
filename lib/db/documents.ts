@@ -36,6 +36,12 @@ export interface DocumentRow {
   // existed, or for doc_types that never inject a voice block (TDS).
   voice_guide_id?: string | null;
   voice_guide_version?: number | null;
+  // Uploaded TDS Ingestion — which active uploaded-source-doc version(s)
+  // were used when this document was generated, keyed by doc_type: e.g.
+  // {"tds": {"id": "...", "version": 2}}. Compared against the project's
+  // CURRENTLY active docs to show an "out of date sources" banner when a
+  // doc has since been replaced.
+  source_doc_versions?: Record<string, { id: string; version: number }> | null;
   created_at: string;
   updated_at: string;
 }
@@ -99,7 +105,12 @@ export async function getDocumentByProject(projectId: string, docType: string): 
   }
   const doc = memoryDb.documents.find(d => d.projectId === projectId && d.docType === docType);
   if (!doc) return null;
-  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null, created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString() };
+  return {
+    id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status,
+    drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null,
+    source_doc_versions: doc.sourceDocVersions ?? null,
+    created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString(),
+  };
 }
 
 export async function getOrCreateDocument(projectId: string, docType: string): Promise<DocumentRow> {
@@ -167,7 +178,26 @@ export async function getDocumentById(documentId: string): Promise<DocumentRow |
   }
   const doc = memoryDb.documents.find(d => d.id === documentId);
   if (!doc) return null;
-  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null, created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString() };
+  return {
+    id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status,
+    drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null,
+    voice_guide_id: doc.voiceGuideId ?? null, voice_guide_version: doc.voiceGuideVersion ?? null,
+    source_doc_versions: doc.sourceDocVersions ?? null,
+    created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString(),
+  };
+}
+
+// Uploaded TDS Ingestion — records which active uploaded-source-doc
+// version(s) were used when this document was generated, mirroring
+// setDocumentVoiceGuide's exact update-in-place style.
+export async function setDocumentSourceDocVersions(documentId: string, versions: Record<string, { id: string; version: number }>) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("documents").update({ source_doc_versions: versions, updated_at: new Date().toISOString() }).eq("id", documentId);
+    if (error) throw error;
+  } else {
+    const doc = memoryDb.documents.find(d => d.id === documentId);
+    if (doc) { doc.sourceDocVersions = versions; doc.updatedAt = new Date(); }
+  }
 }
 
 // For the anti-boilerplate check: the most recently updated OTHER project's

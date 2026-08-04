@@ -35,6 +35,7 @@ import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
+import { SourceDocsTab } from "@/components/project/SourceDocsTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS, visibleGtmSchema } from "@/lib/gtm-field-schema";
 import { ComparisonChartPicker, type ComparisonChartSlot } from "@/components/analyze/ComparisonChartPicker";
@@ -46,8 +47,8 @@ import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
 
-type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck";
-type ReportTab = Exclude<Tab, "project-deck">;
+type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck" | "sources";
+type ReportTab = Exclude<Tab, "project-deck" | "sources">;
 
 export default function ProjectDetailPage() {
   const router = useRouter();
@@ -319,7 +320,7 @@ export default function ProjectDetailPage() {
             {/* 5-Tab Navigation — always visible; Project Deck doesn't
                 depend on a linked report */}
             <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
-              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "project-deck"] as Tab[]).map(tab => (
+              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "project-deck", "sources"] as Tab[]).map(tab => (
                 <button
                   key={tab}
                   className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors whitespace-nowrap ${
@@ -349,7 +350,9 @@ export default function ProjectDetailPage() {
 
             {/* Tab Content Canvas */}
             <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
-              {activeTab === "project-deck" ? (
+              {activeTab === "sources" ? (
+                <SourceDocsTab projectId={id} />
+              ) : activeTab === "project-deck" ? (
                 <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : selectedReport ? (
                 <ReportTabContent
@@ -446,16 +449,20 @@ const TAB_LABELS: Record<Tab, string> = {
   "go-to-market":         "Go To Market",
   "content-form":         "Content Form",
   "project-deck":         "Project Deck",
+  "sources":              "Sources",
 };
 
 // Maps each tab to the FAQ category its contextual "?" icon deep-links to
-// (see lib/faq-seed-data.ts's FAQ_CATEGORIES).
+// (see lib/faq-seed-data.ts's FAQ_CATEGORIES). Sources reuses Go To Market's
+// category — the closest existing one (uploaded docs exist to feed GTM
+// generation), rather than adding a whole new FAQ category for this pass.
 const TAB_FAQ_CATEGORY: Record<Tab, string> = {
   "competitive-analysis": "Competitive Analysis Tab",
   "pricing":              "Pricing Tab",
   "go-to-market":         "Go To Market Tab",
   "content-form":         "Content Form Tab",
   "project-deck":         "Project Deck Tab",
+  "sources":              "Go To Market Tab",
 };
 
 // ─── Tab Content Container ──────────────────────────────────────────────────
@@ -1311,6 +1318,7 @@ const SOURCE_GROUP_LABELS: Record<string, string> = {
   derived: "derived",
   category_default: "category typical",
   gtm_cross_fill: "from GTM",
+  uploaded_tds: "uploaded TDS",
 };
 
 function formatFillReport(report: FillReport | null): string | null {
@@ -1350,6 +1358,14 @@ function ProductKnowledgeSection({
   const [fillProgress, setFillProgress] = useState<{ done: number; total: number } | null>(null);
   const [skuDraft, setSkuDraft] = useState(projectSku || "");
   const [skuSaving, setSkuSaving] = useState(false);
+  // Uploaded TDS Ingestion — which source-doc version(s) this document was
+  // actually generated against, vs. whichever are CURRENTLY active for the
+  // project — a mismatch means a source was uploaded/replaced since, so the
+  // "out of date sources" banner + re-fill action below can offer to catch
+  // this document back up.
+  const [sourceDocVersions, setSourceDocVersions] = useState<Record<string, { id: string; version: number }> | null>(null);
+  const [activeSourceDocs, setActiveSourceDocs] = useState<{ doc_type: string; id: string; version: number }[]>([]);
+  const [refilling, setRefilling] = useState(false);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => { setSkuDraft(projectSku || ""); }, [projectSku]);
@@ -1378,27 +1394,62 @@ function ProductKnowledgeSection({
     debounceTimers.current["__sku"] = setTimeout(() => saveSku(value), 800);
   }
 
+  async function loadDocument() {
+    setLoading(true);
+    try {
+      const [docRes, sourceDocsRes] = await Promise.all([
+        fetch(`/api/documents/gtm?projectId=${projectId}`),
+        fetch(`/api/projects/${projectId}/source-docs`).catch(() => null),
+      ]);
+      const data = await docRes.json();
+      if (data.document) {
+        setDocumentId(data.document.id);
+        const map: Record<string, FieldRow> = {};
+        for (const f of data.fields) map[f.field_id] = f;
+        setFields(map);
+        setFillReport(data.document.fillReport ?? null);
+        setSourceDocVersions(data.document.source_doc_versions ?? null);
+      }
+      if (sourceDocsRes && sourceDocsRes.ok) {
+        const sourceDocsData = await sourceDocsRes.json();
+        setActiveSourceDocs((sourceDocsData.docs || []).filter((d: any) => d.is_active));
+      }
+    } catch (e) {}
+    setLoading(false);
+  }
+
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`/api/documents/gtm?projectId=${projectId}`);
-        const data = await res.json();
-        if (data.document) {
-          setDocumentId(data.document.id);
-          const map: Record<string, FieldRow> = {};
-          for (const f of data.fields) map[f.field_id] = f;
-          setFields(map);
-          setFillReport(data.document.fillReport ?? null);
-        }
-      } catch (e) {}
-      setLoading(false);
-    })();
+    loadDocument();
     // Re-fetch whenever the auto-generation pipeline's status changes (e.g.
     // transitions to "complete") — otherwise a freshly-finished GTM document
     // only ever appeared after a manual page reload, since this fetch used
     // to depend only on projectId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, pipelineStatus]);
+
+  // A mismatch (or an active doc that wasn't stamped on this document at
+  // all) means at least one source has changed since this document was
+  // generated — never true before a document exists at all.
+  const docsOutOfDate = !!documentId && activeSourceDocs.some(d => {
+    const stamped = sourceDocVersions?.[d.doc_type];
+    return !stamped || stamped.id !== d.id;
+  });
+
+  async function handleRefillFromSources() {
+    if (!documentId) return;
+    setRefilling(true);
+    try {
+      const res = await fetch(`/api/documents/gtm/${documentId}/refill-from-sources`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      toast.success(data.changed > 0 ? `Updated ${data.changed} field(s) from your sources` : "No spec fields needed updating — nothing changed");
+      await loadDocument();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to re-fill from sources");
+    } finally {
+      setRefilling(false);
+    }
+  }
 
   // Excludes empty legacyOptional fields (e.g. Axis Shield when a product
   // has none) from both the completion count and its denominator, so a
@@ -1675,6 +1726,21 @@ function ProductKnowledgeSection({
           </div>
         )}
       </div>
+
+      {docsOutOfDate && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-warning-bg border-b border-warning/25 text-[11px]">
+          <span className="text-warning font-semibold">Sources have changed since this document was generated — spec fields may be out of date.</span>
+          <button
+            type="button"
+            onClick={handleRefillFromSources}
+            disabled={refilling}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-warning-bg hover:bg-warning/20 border border-warning/25 text-warning text-[10px] font-bold rounded-md transition-colors disabled:opacity-50 shrink-0"
+          >
+            {refilling ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+            <span>Re-fill from updated sources</span>
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <p className="p-4 text-text-muted text-[11px]">Loading…</p>

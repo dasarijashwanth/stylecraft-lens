@@ -49,6 +49,12 @@ export interface ProjectRecord {
   // select control (GTM Schema v3) derives straight from this instead of
   // free AI narrative, since it's real, already-known data.
   targetMarket?: string | null;
+  // Uploaded TDS Ingestion — a product with neither is "pre-launch/custom"
+  // (no live web presence for the AI web-search tier to find anything),
+  // which gates the <UPLOADED_TDS>-only narrative grounding rule and the
+  // web-search skip in lib/gtm-generate.ts/lib/web-search-fallback.ts.
+  productUrl?: string | null;
+  asin?: string | null;
 }
 
 // Core Consumer's 3 fixed options map 1:1 onto the project's own

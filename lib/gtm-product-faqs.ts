@@ -76,6 +76,7 @@ async function callFaqGeneration(
   factsBlock: string,
   reviewThemes: string[],
   voiceBlock: string,
+  tdsGroundingBlock: string = "",
   retryInstruction?: string
 ): Promise<FaqPair[]> {
   const systemInstruction = `Write 10 consumer/barber FAQs for ${productName}. Cover, at minimum: 1-2 usage/technique questions, battery/charging, blade care/maintenance and replacement, compatibility (blades/guards/ecosystem), warranty/support, who it's for (pro vs home), noise/comfort where relevant, and 1-2 differentiation questions a buyer comparing it to competitors would ask (informed by the category review themes below — never name competitor brands in answers; frame as category comparisons). Answers: 2-4 sentences, factual, grounded ONLY in the facts below. Each question must read like a real customer question.
@@ -87,7 +88,7 @@ CATEGORY REVIEW THEMES (for framing differentiation questions only — never sta
 ${reviewThemes.length ? reviewThemes.join("; ") : "(none available)"}
 ${retryInstruction ? `\n${retryInstruction}` : ""}
 
-Return ONLY valid JSON: { "faqs": [{ "question": "...", "answer": "..." }] } — exactly 10 entries.${voiceBlock}\n${getToneDirective("support")}`;
+Return ONLY valid JSON: { "faqs": [{ "question": "...", "answer": "..." }] } — exactly 10 entries.${voiceBlock}\n${getToneDirective("support")}${tdsGroundingBlock}`;
 
   const raw = await callAiForJson<{ faqs?: FaqPair[] }>(systemInstruction, `Product: ${productName}`, "GTM-ProductFAQs", { timeoutMs: 30_000 });
   return (raw?.faqs || []).filter(f => f && typeof f.question === "string" && typeof f.answer === "string").slice(0, 10);
@@ -97,7 +98,8 @@ async function deriveDifferentiatorsAndTalkingPoints(
   productName: string,
   reasonToBuy: string,
   brandTokens: string[],
-  voiceBlock: string
+  voiceBlock: string,
+  tdsGroundingBlock: string = ""
 ): Promise<Record<string, GtmFieldAnswer>> {
   const systemInstruction = `From these confirmed selling points for ${productName}:
 ${reasonToBuy}
@@ -106,7 +108,7 @@ Produce:
 1. "differentiators": 3-5 short bullet phrases — grounded only in the selling points above, no competitor brand names, framed as category comparisons where relevant.
 2. "talking_points": exactly 3 one-line rep talking points, each condensing one of the top selling points into a single confident sales line.
 
-Return ONLY valid JSON: { "differentiators": ["..."], "talking_points": ["...", "...", "..."] }${voiceBlock}\n${getToneDirective("peer_selling")}`;
+Return ONLY valid JSON: { "differentiators": ["..."], "talking_points": ["...", "...", "..."] }${voiceBlock}\n${getToneDirective("peer_selling")}${tdsGroundingBlock}`;
 
   const raw = await callAiForJson<{ differentiators?: string[]; talking_points?: string[] }>(
     systemInstruction,
@@ -153,7 +155,8 @@ Return ONLY valid JSON: { "differentiators": ["..."], "talking_points": ["...", 
 export async function generateProductFaqs(
   sources: GtmSources,
   gtmFields: Record<string, string>,
-  voiceBlock: string = ""
+  voiceBlock: string = "",
+  tdsGroundingBlock: string = ""
 ): Promise<Record<string, GtmFieldAnswer>> {
   const result: Record<string, GtmFieldAnswer> = {};
   const productName = sources.project.productName;
@@ -165,7 +168,7 @@ export async function generateProductFaqs(
     .slice(0, 10);
 
   if (factsBlock) {
-    const faqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock);
+    const faqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, tdsGroundingBlock);
     const voiceChecks = faqs.map(f => checkVoiceCompliance(f.answer, "support"));
     faqs.forEach((f, i) => { f.answer = voiceChecks[i].text; });
 
@@ -180,7 +183,7 @@ export async function generateProductFaqs(
         violatingIndices.some(v => v.voice.length > 0) &&
           buildVoiceCorrectionInstruction(violatingIndices.flatMap(v => v.voice)),
       ].filter(Boolean).join(" ");
-      const retryFaqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, combinedInstructions);
+      const retryFaqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, tdsGroundingBlock, combinedInstructions);
       violatingIndices.forEach(v => {
         const replacement = retryFaqs[v.i];
         if (!replacement) return;
@@ -224,7 +227,7 @@ export async function generateProductFaqs(
 
   const reasonToBuy = gtmFields["reason_to_buy"];
   if (isRealAnswer(reasonToBuy)) {
-    Object.assign(result, await deriveDifferentiatorsAndTalkingPoints(productName, reasonToBuy, brandTokens, voiceBlock));
+    Object.assign(result, await deriveDifferentiatorsAndTalkingPoints(productName, reasonToBuy, brandTokens, voiceBlock, tdsGroundingBlock));
   }
 
   return result;

@@ -325,7 +325,7 @@ export function visibleGtmSchema<T extends { id: string; legacyOptional?: boolea
   });
 }
 
-export type GtmFieldSource = "project_record" | "sales_kit" | "tds" | "active_report" | "web" | "multiple" | "none" | "derived" | "category_default" | "manual_edit";
+export type GtmFieldSource = "project_record" | "sales_kit" | "tds" | "active_report" | "web" | "multiple" | "none" | "derived" | "category_default" | "manual_edit" | "uploaded_tds";
 
 // Human-readable provenance labels — shared by the field-grid UI
 // (ProductKnowledgeSection) and the CSV export route so both present the
@@ -341,6 +341,7 @@ export const GTM_SOURCE_LABELS: Record<string, string> = {
   derived: "Derived",
   category_default: "Category Typical",
   manual_edit: "Manual",
+  uploaded_tds: "Uploaded TDS",
 };
 
 export interface GtmFieldAnswer {

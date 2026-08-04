@@ -27,7 +27,12 @@ export interface FinalizableField {
 export function finalizeFieldAnswers<T extends FinalizableAnswer>(
   fields: Record<string, T>,
   schema: FinalizableField[],
-  sourcesChecked: number
+  sourcesChecked: number,
+  // Uploaded TDS Ingestion — a pre-launch/custom product's web-search tier
+  // never runs (lib/web-search-fallback.ts's skipReason), so the generic
+  // "checked K sources" phrasing would falsely imply a web search was
+  // attempted and failed. Overrides that phrasing with the real reason.
+  terminalReasonOverride?: string
 ): Record<string, T> {
   const result: Record<string, T> = { ...fields };
 
@@ -37,7 +42,9 @@ export function finalizeFieldAnswers<T extends FinalizableAnswer>(
 
     const terminalAnswer = f.kind === "internal"
       ? AWAITING_INTERNAL_INPUT
-      : `${NOT_FOUND_PREFIX}checked ${sourcesChecked} source${sourcesChecked === 1 ? "" : "s"}`;
+      : terminalReasonOverride
+        ? `${NOT_FOUND_PREFIX}${terminalReasonOverride}`
+        : `${NOT_FOUND_PREFIX}checked ${sourcesChecked} source${sourcesChecked === 1 ? "" : "s"}`;
     result[f.id] = {
       ...(entry as T),
       answer: terminalAnswer,

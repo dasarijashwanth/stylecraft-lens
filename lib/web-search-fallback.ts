@@ -132,11 +132,18 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   pipelineStart: number,
   timeBudgetMs: number,
   toolTypes: ToolTypeRow[],
-  requiredToolType?: ToolType | null
+  requiredToolType?: ToolType | null,
+  // Uploaded TDS Ingestion — a pre-launch/custom product (no productUrl/
+  // asin) has no web presence for this tier to find anything; passing a
+  // reason skips the attempt entirely instead of searching for nothing.
+  // lib/field-finalize.ts's terminalReasonOverride surfaces WHY a field
+  // still ended up unresolved, so the honest reason threads through both.
+  skipReason?: string
 ): Promise<void> {
   const eligible = schema.filter(f => !isRealAnswer(fields[f.id]?.answer));
   if (eligible.length === 0 || (!hasOpenAIKey && !hasGeminiKey)) return;
   if (Date.now() - pipelineStart > timeBudgetMs) return;
+  if (skipReason) return;
 
   const applyResult = (targets: WebFallbackField[], result: WebSearchResult | null) => {
     if (!result) return;

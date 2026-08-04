@@ -60,8 +60,19 @@ async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Pr
 // time budget is exhausted, any brand not yet started is skipped entirely
 // (empty lineup, never a partial/guessed one) — the caller falls back to
 // absolute-band price scoring for those, never blocking Phase 2.
-export async function buildIndieBrandLineups(brands: { brand: string; subcategory: string }[]): Promise<Map<string, LineupProduct[]>> {
+// `timeBudgetMsOverride` — Phase 2b (lib/analysisEngine.ts) chains this call
+// to the SAME RAINFOREST_STEP_DEADLINE_MS clock the Rainforest enrichment
+// pass and the brand-site pass already share, instead of this function
+// always getting a fresh INDIE_LINEUP_TIME_BUDGET_MS regardless of how much
+// of that shared budget the earlier steps in the same request already
+// spent — the un-budgeted case could stack 52s + 12s + 8s = 72s in one
+// request, past Vercel's 60s cap.
+export async function buildIndieBrandLineups(
+  brands: { brand: string; subcategory: string }[],
+  timeBudgetMsOverride?: number
+): Promise<Map<string, LineupProduct[]>> {
   const startTime = Date.now();
+  const timeBudgetMs = timeBudgetMsOverride ?? INDIE_LINEUP_TIME_BUDGET_MS;
   const result = new Map<string, LineupProduct[]>();
 
   // Concurrency 5 (was 3) — safe to raise now that every Rainforest call is
@@ -69,7 +80,7 @@ export async function buildIndieBrandLineups(brands: { brand: string; subcategor
   // lib/rainforest.ts), so a stalled lookup can no longer stall this whole
   // batch's wall-clock time.
   await mapWithConcurrency(brands, 5, async ({ brand, subcategory }) => {
-    const budgetLeft = INDIE_LINEUP_TIME_BUDGET_MS - (Date.now() - startTime);
+    const budgetLeft = timeBudgetMs - (Date.now() - startTime);
     if (budgetLeft <= 0) {
       result.set(brand, []);
       return;

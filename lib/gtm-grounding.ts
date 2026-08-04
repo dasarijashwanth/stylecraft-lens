@@ -18,6 +18,7 @@ export interface SourceTexts {
   competitiveAnalysis: string;
   tds: string;
   salesKit: string;
+  uploadedTds: string;
 }
 
 export interface GroundableField {

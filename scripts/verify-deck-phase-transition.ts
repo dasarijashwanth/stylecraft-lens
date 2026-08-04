@@ -44,7 +44,7 @@ async function main() {
   console.log("\n[1] gtm -> deck transition with NO active template — degrades gracefully, never fails the step");
   const projectA = await createProject(USER_ID, ORG_ID, projectInput);
   await startGenerationState(projectA.id);
-  await updateGenerationState(projectA.id, { phase: "gtm", status: "running" }); // simulate TDS+GTM already done
+  await updateGenerationState(projectA.id, { phase: "deck", status: "running" }); // simulate TDS+GTM+FAQs already done, deck about to run
 
   const resultA = await runProjectGenerationStep(projectA.id, ORG_ID, USER_ID);
   assert(resultA.state.phase === "deck", `phase advances to "deck" (got "${resultA.state.phase}")`);
@@ -74,7 +74,7 @@ async function main() {
 
   const projectB = await createProject(USER_ID, ORG_ID, projectInput);
   await startGenerationState(projectB.id);
-  await updateGenerationState(projectB.id, { phase: "gtm", status: "running" });
+  await updateGenerationState(projectB.id, { phase: "deck", status: "running" });
 
   const resultB = await runProjectGenerationStep(projectB.id, ORG_ID, USER_ID);
   assert(resultB.state.phase === "deck" && resultB.state.status === "complete", `step completes at phase "deck" (got phase="${resultB.state.phase}" status="${resultB.state.status}")`);
@@ -97,7 +97,7 @@ async function main() {
 
   const projectC = await createProject(USER_ID, ORG_ID, projectInput);
   await startGenerationState(projectC.id);
-  await updateGenerationState(projectC.id, { phase: "gtm", status: "running" });
+  await updateGenerationState(projectC.id, { phase: "deck", status: "running" });
 
   const resultC = await runProjectGenerationStep(projectC.id, ORG_ID, USER_ID);
   assert(resultC.state.phase === "deck" && resultC.state.status === "complete", `pipeline step still completes despite a real deck-generation error (got phase="${resultC.state.phase}" status="${resultC.state.status}")`);

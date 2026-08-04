@@ -12,8 +12,9 @@ import { captureProductSnapshot } from "./snapshot-capture";
 import { getLatestSnapshot } from "./db/snapshots";
 import { generateTdsFields } from "./tds-generate";
 import { generateAllFields, GtmSources } from "./gtm-generate";
-import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, setDocumentVoiceGuide, getTdsFieldsForProject, getDocumentFields, flattenDocumentFields } from "./db/documents";
+import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, setDocumentVoiceGuide, setDocumentSourceDocVersions, getTdsFieldsForProject, getDocumentFields, flattenDocumentFields } from "./db/documents";
 import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock } from "./brand-voice";
+import { getUploadedTdsContext, buildTdsGroundingBlock } from "./gtm-uploaded-tds";
 import { TDS_FIELD_SCHEMA } from "./tds-field-schema";
 import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
 import { reconcileTdsFromGtm } from "./tds-gtm-reconcile";
@@ -86,7 +87,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       // the "tds" phase SLOT still exists (never removed from the enum:
       // scripts/backfill-gtm.ts seeds phase:"tds" directly, and
       // ProjectGenerationProgress.tsx's PHASE_INDEX keys off it), only its
-      // work is skipped — same idiom the "gtm" branch below already uses
+      // work is skipped — same idiom the "deck" branch below already uses
       // for a missing active deck template.
       if (!(await isTdsEnabled())) {
         logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "tds", outcome: "ok", errorMessage: "TDS disabled via feature flag", elapsedMs: Date.now() - stepStart });
@@ -144,6 +145,8 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           pricePoint: project.pricePoint,
           companyContext: project.companyContext,
           targetMarket: project.targetMarket,
+          productUrl: project.productUrl,
+          asin: project.asin,
         },
         salesKit,
         tds,
@@ -162,6 +165,15 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       const brand = await resolveBrandForProduct(project.productName);
       const voiceGuide = await getActiveVoiceGuide(brand);
       await setDocumentVoiceGuide(document.id, voiceGuide.id, voiceGuide.version);
+
+      // Uploaded TDS Ingestion — records which active source-doc version(s)
+      // this generation actually used, for the "out of date sources" banner.
+      const uploadedTdsContext = await getUploadedTdsContext(projectId);
+      if (uploadedTdsContext.docsUsed.length > 0) {
+        const sourceDocVersions: Record<string, { id: string; version: number }> = {};
+        for (const d of uploadedTdsContext.docsUsed) sourceDocVersions[d.docType] = { id: d.id, version: d.version };
+        await setDocumentSourceDocVersions(document.id, sourceDocVersions);
+      }
 
       // gtm is no longer a terminal phase — the pipeline continues into FAQ
       // generation (needs GTM's fully-resolved fields as grounding) and then
@@ -185,10 +197,19 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       // 10 auto-generated Product FAQs + Differentiators/Selling Position/
       // Rep Talking Points — grounded in GTM's already-resolved fields, so
       // this runs strictly after "gtm". Best-effort, same precedent as deck
-      // generation below: a real facts/analysis document already exists,
-      // FAQs are additive, and each one has its own in-app regenerate button
-      // for manual retry — a generation hiccup here must never fail the
-      // rest of project setup.
+      // generation: a real facts/analysis document already exists, FAQs are
+      // additive, and each one has its own in-app regenerate button for
+      // manual retry — a generation hiccup here must never fail the rest of
+      // project setup.
+      //
+      // Deck generation is deliberately its OWN phase/request (below), not
+      // run inline here — FAQ generation alone (initial call + a possible
+      // brand-name/voice-violation retry + differentiators/talking-points)
+      // can already approach this route's 60s maxDuration; stacking full
+      // deck generation on top in the same request risked a hard platform
+      // kill mid-request (confirmed: no per-call budget covers both
+      // together). Matches this file's own header rule — exactly one phase
+      // per request — which this branch previously violated.
       try {
         const document = await getOrCreateDocument(projectId, "gtm");
         const gtmDocFields = await getDocumentFields(document.id);
@@ -213,6 +234,8 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
             pricePoint: project.pricePoint,
             companyContext: project.companyContext,
             targetMarket: project.targetMarket,
+            productUrl: project.productUrl,
+            asin: project.asin,
           },
           salesKit,
           tds,
@@ -224,7 +247,10 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         const faqSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Product FAQ");
         const faqBrand = await resolveBrandForProduct(project.productName);
         const faqVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(faqBrand));
-        const faqFields = await generateProductFaqs(sources, gtmFieldsFlat, faqVoiceBlock);
+        const faqIsPreLaunch = !project.productUrl && !project.asin;
+        const faqUploadedTdsContext = await getUploadedTdsContext(projectId);
+        const faqTdsGroundingBlock = buildTdsGroundingBlock(faqUploadedTdsContext, faqIsPreLaunch);
+        const faqFields = await generateProductFaqs(sources, gtmFieldsFlat, faqVoiceBlock, faqTdsGroundingBlock);
         // Anything generateProductFaqs didn't resolve (a failed AI call for
         // one FAQ, or the margin/quantity internal-kind fields, which are
         // never AI-answerable) becomes an honest terminal state instead of
@@ -236,14 +262,20 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "faqs", outcome: "error", errorMessage: err.message || "FAQ generation failed", elapsedMs: Date.now() - stepStart });
       }
 
+      await updateGenerationState(projectId, { phase: "deck", status: "running" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "gtm->faqs", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      return { state: { ...state, phase: "deck", status: "running" }, phaseCompleted: "faqs" };
+    }
+
+    if (state.phase === "deck") {
       // Deck generation deliberately never fails the overall pipeline — TDS
       // and GTM are the required artifacts and already succeeded; the deck
       // is a bonus layer on top. A missing active template, or any real
       // rendering error, is logged and the project simply ends up with no
       // deck (or a project_decks row already marked "failed" with its own
       // real error — generateProjectDeck sets that itself before rethrowing).
-      // The Project Deck tab (Phase 4) surfaces this with its own Retry
-      // action instead of blocking the rest of project setup.
+      // The Project Deck tab surfaces this with its own Retry action instead
+      // of blocking the rest of project setup.
       try {
         const activeTemplate = await getActiveDeckTemplate();
         if (activeTemplate) {
@@ -260,7 +292,8 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       return { state: { ...state, phase: "deck", status: "complete" }, phaseCompleted: "deck" };
     }
 
-    // phase === "deck" but status wasn't already complete/failed — treat as done.
+    // Unexpected phase value (shouldn't happen for any real pipeline run) —
+    // mark complete rather than looping forever on an unrecognized state.
     await updateGenerationState(projectId, { status: "complete" });
     return { state: { ...state, status: "complete" }, phaseCompleted: null };
   } catch (err: any) {

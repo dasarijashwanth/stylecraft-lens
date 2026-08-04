@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { ToolType, getToolTypeLabel, toolTypesForIndustry } from "@/lib/tool-type-taxonomy";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { parsePriceToNumber } from "@/lib/pricing-analysis";
+import { uploadProjectSourceDoc } from "@/lib/upload-source-doc-client";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Consumer", both: "Both" };
 
@@ -79,6 +80,11 @@ export default function NewProjectPage() {
   // only; this is what actually identifies the product.
   const [productUrl, setProductUrl] = useState("");
   const [asin, setAsin] = useState("");
+  // Uploaded TDS Ingestion — optional, uploaded AFTER the project is
+  // created (a project id is required first); "Uploading TDS…" state
+  // covers that brief extra round-trip before the redirect.
+  const [tdsFile, setTdsFile] = useState<File | null>(null);
+  const [uploadingTds, setUploadingTds] = useState(false);
   const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
   const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
   // "+ Add new tool type…" inline mini-form state.
@@ -266,7 +272,19 @@ export default function NewProjectPage() {
       // regardless of whether a product anchor was given) — no client-side
       // trigger needed here anymore. The project page picks up the
       // in-progress pipeline via ProjectGenerationProgress.
-      toast.success("Project created");
+      if (tdsFile) {
+        setUploadingTds(true);
+        try {
+          await uploadProjectSourceDoc(data.project.id, "tds", tdsFile);
+          toast.success("Project created — TDS uploaded and being used to ground generation");
+        } catch (uploadErr: any) {
+          toast.error(uploadErr.message || "Project created, but the TDS upload failed — you can upload it from the project's Sources tab.");
+        } finally {
+          setUploadingTds(false);
+        }
+      } else {
+        toast.success("Project created");
+      }
       router.push(`/dashboard/projects/${data.project.id}`);
     } catch (err: any) {
       toast.error(err.message || "Failed to create project");
@@ -452,6 +470,19 @@ export default function NewProjectPage() {
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary placeholder-text-muted outline-none focus:border-accent font-mono"
               />
             </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="font-semibold text-text-primary block">Product TDS (recommended for pre-launch products)</label>
+            <input
+              type="file"
+              accept=".pdf,.xlsx,.xlsm,.docx"
+              onChange={(e) => setTdsFile(e.target.files?.[0] || null)}
+              className="w-full text-[11px] text-text-secondary file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-accent file:text-white file:text-[11px] file:font-bold file:cursor-pointer"
+            />
+            <p className="text-[10px] text-text-muted">
+              No product page or Amazon listing yet? Upload the real Technical Data Sheet (PDF/XLSX/DOCX) and it becomes the top-priority grounded source for Go-To-Market generation — specs fill in verbatim, narrative fields are written from its facts. You can also add or replace this later from the project&apos;s Sources tab.
+            </p>
           </div>
         </div>
 
@@ -665,10 +696,15 @@ export default function NewProjectPage() {
           </button>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || uploadingTds}
             className="px-4 py-2.5 rounded-lg bg-accent hover:bg-accent-hover font-semibold text-white flex items-center justify-center gap-1.5 transition-all shadow shadow-accent/25"
           >
-            {loading ? (
+            {uploadingTds ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Uploading TDS...</span>
+              </>
+            ) : loading ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 <span>Creating project...</span>

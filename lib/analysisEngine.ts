@@ -2572,7 +2572,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         if (ungrounded.length > 0) {
           const brandSiteHits = await discoverBrandSiteCandidatesForEmerging(
             ungrounded.map((c: any) => c.brand),
-            { toolType: identityCard.toolType, toolTypes, motorLabel: ourMotorLabel, analysisId, criterionTerm: criterionPhrasing(primaryCriterion).term }
+            { toolType: identityCard.toolType, toolTypes, motorLabel: ourMotorLabel, analysisId, criterionTerm: criterionPhrasing(primaryCriterion).term },
+            remainingRainforestBudget(startTime)
           );
           result.competitors = result.competitors.map((c: any) => {
             const hit = brandSiteHits.get(c.brand);
@@ -2592,7 +2593,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // every brand the AI ever mentioned.
       const subcategoryForLineups = identityCard.subcategory || identityCard.category || "";
       const distinctBrands: string[] = Array.from(new Set(result.competitors.map((c: any) => c.brand as string).filter(Boolean)));
-      const indieLineups = await buildIndieBrandLineups(distinctBrands.map(brand => ({ brand, subcategory: subcategoryForLineups })));
+      const indieLineups = await buildIndieBrandLineups(
+        distinctBrands.map(brand => ({ brand, subcategory: subcategoryForLineups })),
+        remainingRainforestBudget(startTime)
+      );
 
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,

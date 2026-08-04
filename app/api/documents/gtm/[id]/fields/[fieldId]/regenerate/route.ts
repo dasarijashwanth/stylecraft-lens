@@ -48,6 +48,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
         pricePoint: project.pricePoint,
         companyContext: project.companyContext,
         targetMarket: project.targetMarket,
+        productUrl: (project as any).productUrl,
+        asin: (project as any).asin,
       },
       salesKit,
       tds,
