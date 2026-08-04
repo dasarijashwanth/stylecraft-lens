@@ -2548,6 +2548,28 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       delete result.__phase2FillRoundsUsed;
       delete result.__phase2SearchesSoFar;
 
+      // Speed fix — indie brand lineups (below) only ever need each
+      // candidate's BRAND NAME, which mergeRainforestProductIntoCompetitor
+      // never overwrites (it spreads price/specs/description/etc. but never
+      // `.brand`) — so this lookup doesn't actually need to wait for
+      // Rainforest enrichment or the brand-site pass to finish. Previously
+      // all three ran sequentially against the SAME shared
+      // RAINFOREST_STEP_DEADLINE_MS clock (enrichment, then brand-site,
+      // then indie lineups), which is exactly the "searching indie
+      // competitors" step users reported as slow/repeatedly re-polling.
+      // Kicking indie lineups off here — in parallel with the
+      // enrichment-then-brand-site chain below — cuts this phase's
+      // wall-clock cost from the SUM of all three steps to roughly the MAX
+      // of them, with zero change to which brands get looked up (the brand
+      // SET is identical before/after enrichment; only enrichment/brand-site
+      // ever add data to existing candidates, never add/remove candidates).
+      const subcategoryForLineups = identityCard.subcategory || identityCard.category || "";
+      const distinctBrandsForLineups: string[] = Array.from(new Set(result.competitors.map((c: any) => c.brand as string).filter(Boolean)));
+      const indieLineupsPromise = buildIndieBrandLineups(
+        distinctBrandsForLineups.map(brand => ({ brand, subcategory: subcategoryForLineups })),
+        remainingRainforestBudget(startTime)
+      );
+
       if (hasRainforestKey) {
         result.competitors = await enrichCompetitorsWithRainforest(result.competitors, toolTypes, identityCard.toolType, startTime);
       }
@@ -2564,7 +2586,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // candidate. Folds straight into `description`, exactly like the
       // legacy path, so the existing extractCompetitorMotorType call in
       // selectByCompositeScore below picks it up for free — no new
-      // matching logic needed.
+      // matching logic needed. This DOES need to wait for enrichment
+      // (it only targets candidates enrichment left ungrounded), so it
+      // stays sequential — only the independent indie-lineups lookup above
+      // was pulled out of the chain.
       if (hasOpenAIKey && identityCard.toolType) {
         const ungrounded = result.competitors.filter((c: any) =>
           !c.specifications?.length && !c.attributes?.length && !c.feature_bullets?.length && !c.description && c.brand
@@ -2587,16 +2612,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         }
       }
 
-      // Build each surviving candidate's brand's own price lineup (Part 4) —
-      // the one genuinely new, costly operation this feature adds, so it's
-      // scoped to only the distinct brands still in play at this point, not
-      // every brand the AI ever mentioned.
-      const subcategoryForLineups = identityCard.subcategory || identityCard.category || "";
-      const distinctBrands: string[] = Array.from(new Set(result.competitors.map((c: any) => c.brand as string).filter(Boolean)));
-      const indieLineups = await buildIndieBrandLineups(
-        distinctBrands.map(brand => ({ brand, subcategory: subcategoryForLineups })),
-        remainingRainforestBudget(startTime)
-      );
+      const indieLineups = await indieLineupsPromise;
 
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
