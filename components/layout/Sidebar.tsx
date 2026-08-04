@@ -19,8 +19,7 @@ import {
   ToggleLeft,
   Package,
   FileSpreadsheet,
-  Mic,
-  Globe
+  Mic
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -56,7 +55,6 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           { label: "Brand Voice Guides", href: "/dashboard/admin/brand-voice", icon: Mic },
           { label: "Legacy Brands", href: "/dashboard/admin/legacy-brands", icon: Tags },
           { label: "Competitor Matching", href: "/dashboard/admin/competitor-matching", icon: Gauge },
-          { label: "Marketing Defaults", href: "/dashboard/admin/marketing-defaults", icon: Globe },
           { label: "Features", href: "/dashboard/admin/features", icon: ToggleLeft },
         ]
       : []),
