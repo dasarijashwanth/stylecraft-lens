@@ -17,6 +17,7 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { useFiresOnIncrease } from "@/lib/motion";
 import { Breadcrumb } from "./Breadcrumb";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -150,6 +151,8 @@ export default function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         >
           <Search className="w-5 h-5" />
         </button>
+
+        <ThemeToggle />
 
         {/* Notifications Dropdown */}
         <div className="relative">

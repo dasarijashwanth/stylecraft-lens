@@ -47,8 +47,17 @@ function zipContainsPath(buffer: Buffer, path: string): boolean {
   return buffer.includes(Buffer.from(path, "ascii"));
 }
 
+// Real-world PDFs frequently have a few leading bytes before "%PDF-" (a
+// UTF-8 BOM, or junk prepended by a scanner/third-party re-save tool) even
+// though byte 0 is what the spec recommends — every real PDF reader
+// (pdfjs, poppler, Acrobat itself) tolerates this and scans for the marker
+// within roughly the first 1KB rather than requiring it at offset 0.
+// Requiring an exact byte-0 match rejected genuine PDFs outright.
+const PDF_SNIFF_WINDOW_BYTES = 1024;
+const PDF_MARKER = Buffer.from("%PDF-", "ascii");
+
 export function detectDocType(buffer: Buffer): DetectedDocType {
-  if (buffer.length >= 5 && buffer.subarray(0, 5).toString("ascii") === "%PDF-") {
+  if (buffer.subarray(0, PDF_SNIFF_WINDOW_BYTES).includes(PDF_MARKER)) {
     return "pdf";
   }
   if (buffer.length >= 4 && buffer.subarray(0, 4).equals(ZIP_SIGNATURE)) {

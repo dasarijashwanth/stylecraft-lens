@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
-import { Toaster } from "sonner";
+import { ThemeProvider } from "next-themes";
 import TargetCursor from "@/components/ui/TargetCursor";
+import { ThemedToaster } from "@/components/theme/ThemedToaster";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,16 +19,16 @@ export default function RootLayout({
   const useClerk = !!publishableKey && publishableKey !== "pk_..." && publishableKey !== "";
 
   const content = (
-    <>
+    <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
       <TargetCursor cursorColor="#ffffff" cursorColorOnTarget="#6366F1" />
       {children}
-      <Toaster theme="dark" position="top-right" closeButton richColors />
-    </>
+      <ThemedToaster />
+    </ThemeProvider>
   );
 
   if (useClerk) {
     return (
-      <html lang="en">
+      <html lang="en" suppressHydrationWarning>
         <ClerkProvider publishableKey={publishableKey}>
           <body className="bg-bg text-text-primary antialiased">
             {content}
@@ -38,7 +39,7 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="bg-bg text-text-primary antialiased">
         {content}
       </body>

@@ -97,6 +97,13 @@ async function main() {
   console.log("\n[5] detectDocType — real signatures vs. mislabeled/foreign content");
   const realPdfBuffer = Buffer.from("%PDF-1.4\n%stuff");
   assert(detectDocType(realPdfBuffer) === "pdf", "real PDF signature detected");
+  // Regression test — a real bug caught in production: many real-world
+  // PDFs (scanner output, third-party re-saves, a leading BOM) have a few
+  // junk bytes before "%PDF-" even though it's conventionally at byte 0.
+  // An earlier version of detectDocType required an exact byte-0 match and
+  // rejected these as invalid uploads.
+  const pdfWithLeadingJunk = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("%PDF-1.7\n%real content")]);
+  assert(detectDocType(pdfWithLeadingJunk) === "pdf", "a real PDF with a few leading junk bytes (BOM/scanner artifact) before %PDF- is still detected");
   assert(detectDocType(xlsxBuffer) === "xlsx", "real xlsx buffer detected as xlsx (contains xl/workbook.xml)");
   assert(detectDocType(docxBuffer) === "docx", "real docx buffer detected as docx (contains word/document.xml)");
   const fakeHtml = Buffer.from("<html><body><script>alert(1)</script></body></html>");

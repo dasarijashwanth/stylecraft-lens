@@ -72,6 +72,35 @@
   --topbar-height: 60px;
 }
 
+/* Light mode — overrides only the tokens that actually need to differ.
+   Everything NOT redeclared here (accent/brand-pink/gooey/semantic/status
+   colors) cascades straight from the base :root block above and is
+   deliberately reused unchanged in both themes — those are either
+   brand-fixed hues or already-alpha-tinted values that read correctly on
+   both a near-black and a near-white background. Elevation direction
+   flips on purpose: surface-1/2/3 get progressively LIGHTER in dark mode
+   (base -> nested -> hover/emphasis) but progressively more GRAY here, to
+   preserve the same visual hierarchy under an inverted background — see
+   the real usage in components/layout/Sidebar.tsx/Shell.tsx/Topbar.tsx. */
+:root[data-theme="light"] {
+  --bg:              #F7F8FA;
+  --surface-1:       #FFFFFF;
+  --surface-2:       #F3F4F6;
+  --surface-3:       #E9EAEE;
+
+  --border:          rgba(0, 0, 0, 0.08);
+  --border-strong:   rgba(0, 0, 0, 0.14);
+
+  --text-primary:    #18181B;
+  --text-secondary:  #4B5563;
+  --text-muted:      #71717A;
+
+  /* The dark theme's --accent-text (#A5B4FC) is a light indigo meant for
+     text on a near-black background — unreadable on white, needs its own
+     darker value here. */
+  --accent-text:     #4F46E5;
+}
+
 body {
   background-color: var(--bg);
   color: var(--text-primary);
