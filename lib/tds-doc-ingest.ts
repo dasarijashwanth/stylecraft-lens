@@ -2,17 +2,21 @@
 // Uploaded TDS Ingestion — shared processing pipeline used by both upload
 // paths (the signed-URL finalize route, and the direct-multipart route
 // used only in local dev without Supabase configured): validate magic
-// bytes, extract content, extract structured facts, persist the versioned
-// doc + facts, carry forward any previously user-confirmed corrections so
-// a replacement upload never silently drops a human's override.
+// bytes, extract content, persist the versioned doc, carry forward any
+// previously user-confirmed corrections so a replacement upload never
+// silently drops a human's override. Structured fact extraction
+// (extractStructuredFacts) is DELIBERATELY a separate function
+// (deriveFactsForDoc, below) called from its OWN route/request — see that
+// function's own header comment for why.
 import { detectDocType } from "./file-magic-bytes";
-import { extractSourceDocContent, SourceDocFormat } from "./tds-doc-extract";
+import { extractSourceDocContent, SourceDocFormat, ExtractedDocContent } from "./tds-doc-extract";
 import { extractStructuredFacts } from "./tds-doc-facts";
 import {
   createNewVersion,
   updateExtractionResult,
   setLocalFileBytes,
   listVersionsForProjectDocType,
+  getSourceDocById,
   SourceDocType,
   UploadedSourceDocRow,
 } from "./db/uploaded-source-docs";
@@ -22,30 +26,29 @@ import { isSupabaseConfigured } from "./supabase";
 export const MAX_SOURCE_DOC_SIZE_BYTES = 20 * 1024 * 1024;
 export const ALLOWED_SOURCE_DOC_TYPES: SourceDocType[] = ["tds", "spec_sheet", "sales_kit", "other"];
 
-// The finalize route this feeds has `export const maxDuration = 60` (Vercel
-// Hobby's hard cap) — a scanned/image-based PDF's OCR vision fallback alone
-// can take up to ~57s worst-case (a 45s first attempt + a 10s retry, see
-// lib/openai.ts's createResponseWithRetry), and extractStructuredFacts adds
-// its own up-to-30s AI call on top of that. Confirmed live: this combination
-// exceeded the platform's hard timeout, which returns a plain HTML error
-// page instead of JSON — the browser's `res.json()` then crashes with
-// "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON" instead of a
-// legible error, for EVERY upload that happened to need OCR. Bounding both
-// AI-heavy steps to a shared wall-clock budget (same withDeadline/Promise.race
-// idiom already used in lib/analysisEngine.ts and lib/indie-brand-lineup.ts)
-// guarantees this function always returns within Vercel's window — a slow
-// extraction degrades to "extraction failed"/zero facts (the document is
-// still saved and viewable) instead of the whole request dying mid-flight.
+// Both the finalize route and the facts-derivation route this feeds have
+// `export const maxDuration = 60` (Vercel Hobby's hard cap). A scanned/
+// image-based PDF's OCR vision fallback alone can take up to ~57s
+// worst-case (a 45s first attempt + a 10s retry, see lib/openai.ts's
+// createResponseWithRetry) — CONFIRMED LIVE, this happened repeatedly in
+// production even after two earlier attempts to share one budget between
+// content-extraction AND fact-extraction in a single request: OCR alone can
+// already consume nearly the entire 60s window, so ANY further AI work
+// (extractStructuredFacts's own up-to-30s call) stacked in the SAME request
+// still risked the platform's hard kill — which returns a plain HTML error
+// page instead of JSON, and the browser's `res.json()` then crashes with
+// "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON" / "Server
+// took too long to respond" instead of a legible error.
 //
-// Measured from the ROUTE's own start (input.routeStartTime), not from
-// whenever this function happens to be called — the first version of this
-// fix measured only from this function's own entry, which left the
-// finalize route's Storage download (which can itself take real time for
-// a large file) uncounted; a slow download plus a still-generous 42s
-// ingestion budget could together still creep past the 60s ceiling. Same
-// "one shared clock from the true start" discipline as
-// lib/analysisEngine.ts's RAINFOREST_STEP_DEADLINE_MS.
-export const INGEST_DEADLINE_MS = 42_000;
+// The real fix is architectural, not a tighter shared clock: content
+// extraction (ingestSourceDocUpload, this file) and fact extraction
+// (deriveFactsForDoc, below) are now two SEPARATE requests, each with its
+// own full deadline, so they never compound within one 60s window — the
+// same "one phase per request" discipline this codebase already uses for
+// the analysis and GTM generation pipelines (lib/analysisEngine.ts,
+// lib/project-generation-engine.ts), applied here for the same reason.
+export const CONTENT_EXTRACTION_DEADLINE_MS = 50_000;
+export const FACTS_DERIVATION_DEADLINE_MS = 50_000;
 
 // Exported for direct verification (scripts/verify-tds-doc-ingestion.ts) —
 // the real AI providers aren't reachable offline, so there's no way to make
@@ -89,8 +92,12 @@ export interface IngestSourceDocResult {
   carriedForwardCount: number;
 }
 
-// Validates + processes an already-uploaded/received file buffer. Throws
-// an Error with a `.status` (400) for a validation failure — callers
+// Validates + processes an already-uploaded/received file buffer: magic
+// bytes, content extraction (including OCR for a scanned PDF), saves the
+// new document version, carries forward prior user-confirmed facts.
+// Deliberately does NOT call extractStructuredFacts — see deriveFactsForDoc
+// below and this file's header comment for why that's a separate request.
+// Throws an Error with a `.status` (400) for a validation failure — callers
 // surface `err.message`/`err.status` directly, same convention as every
 // other upload route in this codebase.
 export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promise<IngestSourceDocResult> {
@@ -134,29 +141,13 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
   }
 
   const routeStartTime = input.routeStartTime ?? Date.now();
-  const extractionBudget = Math.max(0, INGEST_DEADLINE_MS - (Date.now() - routeStartTime));
+  const extractionBudget = Math.max(0, CONTENT_EXTRACTION_DEADLINE_MS - (Date.now() - routeStartTime));
   const content = await withDeadline(
     extractSourceDocContent(input.buffer, expectedFormat),
     extractionBudget,
     { fullText: "", locations: [], extractionStatus: "failed" as const, extractionMethod: "failed" as const }
   );
   await updateExtractionResult(document.id, content.fullText, content.extractionStatus);
-
-  let factsFound = 0;
-  let sampleFacts: { field_id: string; value: string; source_location: string | null }[] = [];
-  const factsBudgetLeft = Math.max(0, INGEST_DEADLINE_MS - (Date.now() - routeStartTime));
-  if (content.extractionStatus === "complete" && factsBudgetLeft > 0) {
-    const candidates = await withDeadline(extractStructuredFacts(content, input.productName), factsBudgetLeft, []);
-    if (candidates.length > 0) {
-      await upsertFacts(
-        document.id,
-        input.projectId,
-        candidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location }))
-      );
-    }
-    factsFound = candidates.length;
-    sampleFacts = candidates.slice(0, 5).map(c => ({ field_id: c.field_id, value: c.value, source_location: c.source_location ?? null }));
-  }
 
   let carriedForwardCount = 0;
   if (priorActive) {
@@ -167,5 +158,54 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
     }
   }
 
-  return { document, factsFound, sampleFacts, carriedForwardCount };
+  // factsFound/sampleFacts are always 0/[] from THIS call now — the actual
+  // facts arrive from the caller's own follow-up call to deriveFactsForDoc
+  // (see lib/upload-source-doc-client.ts, which calls both in sequence and
+  // merges the result so nothing downstream of the client needed to change).
+  return { document, factsFound: 0, sampleFacts: [], carriedForwardCount };
+}
+
+export interface DeriveFactsResult {
+  factsFound: number;
+  sampleFacts: { field_id: string; value: string; source_location: string | null }[];
+}
+
+// Structured fact extraction (extractStructuredFacts's own AI call, up to
+// ~30s) — split out of ingestSourceDocUpload into its OWN request/route
+// (app/api/projects/[id]/source-docs/[docId]/facts's POST handler) so it
+// never has to share a single 60s Vercel window with content extraction's
+// own OCR vision call (which alone can take up to ~57s worst-case). Reads
+// the already-persisted full_text from the document row — no re-download,
+// no re-extraction. Best-effort: a failure here never invalidates the
+// upload itself (the document + its extracted text are already saved by
+// ingestSourceDocUpload); the caller just gets factsFound: 0.
+//
+// Trade-off accepted for this fix: `locations` (page/sheet attribution for
+// each fact) isn't persisted on uploaded_source_docs, so facts derived here
+// carry no source_location — a minor quality nuance (no "found on p.3"
+// label in the review UI), not a functional regression. Can be restored
+// later with a `locations JSONB` column if wanted.
+export async function deriveFactsForDoc(documentId: string, projectId: string, productName: string, routeStartTime?: number): Promise<DeriveFactsResult> {
+  const doc = await getSourceDocById(documentId);
+  if (!doc || doc.extraction_status !== "complete" || !doc.full_text) {
+    return { factsFound: 0, sampleFacts: [] };
+  }
+
+  const content: ExtractedDocContent = { fullText: doc.full_text, locations: [], extractionStatus: "complete", extractionMethod: "text-layer" };
+  const start = routeStartTime ?? Date.now();
+  const budget = Math.max(0, FACTS_DERIVATION_DEADLINE_MS - (Date.now() - start));
+  if (budget <= 0) return { factsFound: 0, sampleFacts: [] };
+
+  const candidates = await withDeadline(extractStructuredFacts(content, productName), budget, []);
+  if (candidates.length > 0) {
+    await upsertFacts(
+      documentId,
+      projectId,
+      candidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location }))
+    );
+  }
+  return {
+    factsFound: candidates.length,
+    sampleFacts: candidates.slice(0, 5).map(c => ({ field_id: c.field_id, value: c.value, source_location: c.source_location ?? null })),
+  };
 }

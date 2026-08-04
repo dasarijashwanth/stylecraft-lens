@@ -33,6 +33,24 @@ async function fetchJson(url: string, init?: RequestInit) {
   return data;
 }
 
+// Fact extraction is now a SEPARATE request from the upload/finalize call
+// (see lib/tds-doc-ingest.ts's deriveFactsForDoc header comment) — content
+// extraction's own OCR vision call can alone take up to ~57s worst-case, so
+// stacking a second AI call (structured fact extraction) in the SAME
+// request risked exceeding Vercel's 60s hard cap. Called automatically
+// right after a successful upload so the RETURNED shape/behavior for every
+// caller of uploadProjectSourceDoc is unchanged — best-effort: if this call
+// fails/times out, the document itself is still saved and viewable, it
+// just comes back with factsFound: 0 rather than the whole upload failing.
+async function deriveFacts(projectId: string, documentId: string): Promise<{ factsFound: number; sampleFacts: { field_id: string; value: string; source_location: string | null }[] }> {
+  try {
+    return await fetchJson(`/api/projects/${projectId}/source-docs/${documentId}/facts`, { method: "POST" });
+  } catch (err) {
+    console.warn("Fact extraction failed (document itself is already saved):", err);
+    return { factsFound: 0, sampleFacts: [] };
+  }
+}
+
 export async function uploadProjectSourceDoc(projectId: string, docType: string, file: File): Promise<UploadSourceDocResult> {
   const urlData = await fetchJson(`/api/projects/${projectId}/source-docs/upload-url`, {
     method: "POST",
@@ -40,21 +58,25 @@ export async function uploadProjectSourceDoc(projectId: string, docType: string,
     body: JSON.stringify({ fileName: file.name }),
   });
 
+  let uploadResult: UploadSourceDocResult;
   if (urlData.mode === "signed") {
     const { createSupabaseBrowserClient } = await import("@/lib/supabase-browser");
     const supabase = createSupabaseBrowserClient();
     const { error: uploadError } = await supabase.storage.from("project-source-docs").uploadToSignedUrl(urlData.path, urlData.token, file);
     if (uploadError) throw new Error(uploadError.message || "Upload to storage failed");
 
-    return fetchJson(`/api/projects/${projectId}/source-docs/finalize`, {
+    uploadResult = await fetchJson(`/api/projects/${projectId}/source-docs/finalize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: urlData.path, name: file.name, fileName: file.name, docType }),
     });
+  } else {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("docType", docType);
+    uploadResult = await fetchJson(`/api/projects/${projectId}/source-docs`, { method: "POST", body: formData });
   }
 
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("docType", docType);
-  return fetchJson(`/api/projects/${projectId}/source-docs`, { method: "POST", body: formData });
+  const { factsFound, sampleFacts } = await deriveFacts(projectId, uploadResult.document.id);
+  return { ...uploadResult, factsFound, sampleFacts };
 }

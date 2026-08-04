@@ -125,23 +125,46 @@ async function main() {
   })();
   assert(detectDocType(bareZip) === null, "a plain zip with neither xlsx nor docx's defining part is rejected");
 
-  // ---- Section 5b: ingest wall-clock deadline (lib/tds-doc-ingest.ts) ----
-  // Regression test — a real bug caught in production: the finalize route's
-  // maxDuration=60 (Vercel Hobby's hard cap) could be exceeded by a scanned
-  // PDF's OCR fallback + structured-fact extraction combined, which killed
-  // the whole function and returned a raw HTML error page instead of JSON
-  // (the browser then crashed trying to JSON.parse it). withDeadline is the
-  // fix's actual mechanism — can't exercise the real slow AI call offline,
-  // so this verifies the mechanism directly.
-  console.log("\n[5b] withDeadline — the mechanism guaranteeing ingestSourceDocUpload never blows past Vercel's cap");
-  const { withDeadline, INGEST_DEADLINE_MS } = await import("../lib/tds-doc-ingest");
+  // ---- Section 5b: wall-clock deadlines + the content/facts split (lib/tds-doc-ingest.ts) ----
+  // Regression test — a real bug caught in production, TWICE: the finalize
+  // route's maxDuration=60 (Vercel Hobby's hard cap) could be exceeded by a
+  // scanned PDF's OCR fallback (up to ~57s alone) plus structured-fact
+  // extraction (up to ~30s more) sharing one request, which killed the
+  // whole function and returned a raw HTML error page instead of JSON (the
+  // browser then crashed trying to JSON.parse it, or saw "Server took too
+  // long to respond"). The real fix: content extraction and fact
+  // extraction are now two SEPARATE functions/routes, each with its own
+  // full deadline, so they never compound in one request. withDeadline is
+  // the shared mechanism both rely on — can't exercise a real slow AI call
+  // offline, so this verifies the mechanism + the split directly.
+  console.log("\n[5b] withDeadline + the content/facts split — never compounds two AI-heavy steps in one request");
+  const { withDeadline, CONTENT_EXTRACTION_DEADLINE_MS, FACTS_DERIVATION_DEADLINE_MS, deriveFactsForDoc } = await import("../lib/tds-doc-ingest");
   const fastResult = await withDeadline(Promise.resolve("real result"), 5000, "fallback");
   assert(fastResult === "real result", "a promise that resolves well within the deadline returns its real value");
 
   const slowPromise = new Promise<string>(resolve => setTimeout(() => resolve("too slow"), 200));
   const timedOutResult = await withDeadline(slowPromise, 20, "fallback (extraction failed)");
   assert(timedOutResult === "fallback (extraction failed)", "a promise still running past the deadline resolves to the fallback instead of hanging the caller");
-  assert(INGEST_DEADLINE_MS < 60_000 && INGEST_DEADLINE_MS >= 30_000, `the shared deadline (${INGEST_DEADLINE_MS}ms) leaves real headroom under Vercel's 60s cap while still allowing a realistic AI call to finish`);
+  assert(CONTENT_EXTRACTION_DEADLINE_MS < 60_000 && CONTENT_EXTRACTION_DEADLINE_MS >= 30_000, `content extraction's OWN full deadline (${CONTENT_EXTRACTION_DEADLINE_MS}ms) leaves real headroom under Vercel's 60s cap`);
+  assert(FACTS_DERIVATION_DEADLINE_MS < 60_000 && FACTS_DERIVATION_DEADLINE_MS >= 30_000, `fact derivation's OWN full deadline (${FACTS_DERIVATION_DEADLINE_MS}ms), in its OWN request, never has to share a budget with content extraction's OCR call anymore`);
+
+  console.log("\n[5c] deriveFactsForDoc — reads already-persisted full_text, never re-downloads/re-extracts");
+  // Own project id (distinct docType scope from Section 8/9 below) — createNewVersion
+  // auto-increments version/deactivation WITHIN (projectId, docType), so sharing
+  // PROJECT_ID + "tds" here would shift Section 8's own version-number assertions.
+  const FACTS_TEST_PROJECT_ID = "proj_tds_ingest_facts_test";
+  const factsDoc = await createNewVersion({ projectId: FACTS_TEST_PROJECT_ID, docType: "tds", filePath: "p_facts", fileName: "facts-test.pdf", fileSizeBytes: 50, mimeType: "application/pdf" });
+  await updateExtractionResult(factsDoc.id, "Motor Type: Brushless. RPM: 7200.", "complete");
+  const derived = await deriveFactsForDoc(factsDoc.id, FACTS_TEST_PROJECT_ID, "Test Product");
+  assert(Array.isArray(derived.sampleFacts) && derived.factsFound === derived.sampleFacts.length || derived.factsFound >= derived.sampleFacts.length, "deriveFactsForDoc returns a consistent {factsFound, sampleFacts} shape");
+  assert(derived.factsFound === 0, "with no OpenAI/Gemini key configured, deriveFactsForDoc gracefully returns 0 facts rather than inventing content (matches extractStructuredFacts's own established no-key behavior)");
+
+  const pendingDoc = await createNewVersion({ projectId: FACTS_TEST_PROJECT_ID, docType: "spec_sheet", filePath: "p_pending", fileName: "pending-test.pdf", fileSizeBytes: 50, mimeType: "application/pdf" });
+  const derivedPending = await deriveFactsForDoc(pendingDoc.id, FACTS_TEST_PROJECT_ID, "Test Product");
+  assert(derivedPending.factsFound === 0 && derivedPending.sampleFacts.length === 0, "a document whose content extraction hasn't completed yet (still 'pending') is skipped gracefully, never crashes");
+
+  const zeroBudgetResult = await deriveFactsForDoc(factsDoc.id, FACTS_TEST_PROJECT_ID, "Test Product", Date.now() - 999_999);
+  assert(zeroBudgetResult.factsFound === 0, "a routeStartTime already past the deadline skips the AI call entirely instead of attempting it with a negative/zero budget");
 
   // ---- Section 6: fill-ladder override (lib/gtm-uploaded-tds.ts) ----
   console.log("\n[6] applyUploadedTdsFacts — verbatim override, project_record is the only thing that outranks it");
