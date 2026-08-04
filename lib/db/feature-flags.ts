@@ -24,6 +24,7 @@ const ENV_DEFAULTS: Record<string, string | undefined> = {
   tds_enabled: process.env.TDS_ENABLED,
   buyer_sentiment_enabled: process.env.BUYER_SENTIMENT_ENABLED,
   news_updates_enabled: process.env.NEWS_UPDATES_ENABLED,
+  deck_generation_enabled: process.env.DECK_GENERATION_ENABLED,
 };
 
 // Per-flag fallback used ONLY when no DB row exists for this flag at all
@@ -37,6 +38,11 @@ const DEFAULT_ENABLED: Record<string, boolean> = {
   tds_enabled: true,
   buyer_sentiment_enabled: false,
   news_updates_enabled: false,
+  // Deck generation was taking long enough in the auto-pipeline's own
+  // "deck" phase to repeatedly stall/time out — defaulting to disabled so
+  // project setup completes at Product FAQs instead of hanging on this
+  // step every time; re-enable once the underlying slowness is fixed.
+  deck_generation_enabled: false,
 };
 
 function fallbackEnabled(flagName: string): boolean {

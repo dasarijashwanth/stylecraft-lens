@@ -38,8 +38,15 @@ async function main() {
   const { createDeckTemplate, setActiveDeckTemplate } = await import("../lib/db/deck-templates");
   const { parseDeckTemplate } = await import("../lib/deck-template-parser");
   const { buildDefaultPlaceholderMap } = await import("../lib/deck-field-registry");
+  const { setFeatureFlag } = await import("../lib/db/feature-flags");
 
   const projectInput = { name: "Test Project", industry: "haircare-styling", targetMarket: "pro", productName: "Rival Clipper Pro" };
+
+  // deck_generation_enabled defaults to false (lib/db/feature-flags.ts) —
+  // tests [1]-[3] below are specifically exercising the REAL deck-generation
+  // code path, so the flag needs to be explicitly on for them; test [4]
+  // covers the flag OFF (default) behavior separately.
+  await setFeatureFlag("deck_generation_enabled", true);
 
   console.log("\n[1] gtm -> deck transition with NO active template — degrades gracefully, never fails the step");
   const projectA = await createProject(USER_ID, ORG_ID, projectInput);
@@ -105,6 +112,19 @@ async function main() {
   const deckC = await getLatestProjectDeck(projectC.id);
   assert(deckC?.status === "failed", `the deck row itself is correctly marked "failed" (got "${deckC?.status}")`);
   assert(!!deckC?.error_message, `the deck row carries a real error message ("${deckC?.error_message}")`);
+
+  console.log("\n[4] gtm -> deck transition with deck_generation_enabled OFF — skipped entirely, pipeline still completes");
+  await setFeatureFlag("deck_generation_enabled", false);
+  const projectD = await createProject(USER_ID, ORG_ID, projectInput);
+  await startGenerationState(projectD.id);
+  await updateGenerationState(projectD.id, { phase: "deck", status: "running" });
+
+  const resultD = await runProjectGenerationStep(projectD.id, ORG_ID, USER_ID);
+  assert(resultD.state.phase === "deck" && resultD.state.status === "complete", `step still completes at phase "deck" (got phase="${resultD.state.phase}" status="${resultD.state.status}")`);
+  assert(resultD.phaseCompleted === "deck", `phaseCompleted still reports "deck" (got "${resultD.phaseCompleted}")`);
+
+  const deckD = await getLatestProjectDeck(projectD.id);
+  assert(deckD === null, "no project_decks row was created at all — generateProjectDeck never ran while the flag was off (even with a real active template still configured from test [2])");
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

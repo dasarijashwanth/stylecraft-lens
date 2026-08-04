@@ -1660,3 +1660,13 @@ CREATE POLICY "Allow all operations for extracted_facts" ON extracted_facts FOR 
 -- values" (document_fields.source_detail, gtm_workbook_templates.sheet_summary).
 -- Shape: {"tds": {"id": "...", "version": 2}, "spec_sheet": {"id": "...", "version": 1}}
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_doc_versions JSONB;
+
+-- 45. FEATURE FLAG: DECK GENERATION — deck generation was repeatedly
+-- stalling/timing out as the auto-pipeline's last phase (lib/project-generation-engine.ts's
+-- "deck" phase); this flag defaults it off so project setup completes right
+-- after Product FAQs instead of hanging here. A missing row already falls
+-- back to disabled (lib/db/feature-flags.ts's DEFAULT_ENABLED), so this
+-- seed isn't load-bearing for the fix itself — it exists so the row shows
+-- up in the admin Features page to be re-enabled later, same as every
+-- other flag in Section 20/23.
+INSERT INTO feature_flags (flag_name, enabled) VALUES ('deck_generation_enabled', false) ON CONFLICT (flag_name) DO NOTHING;

@@ -15,3 +15,7 @@ export async function isBuyerSentimentEnabled(): Promise<boolean> {
 export async function isNewsUpdatesEnabled(): Promise<boolean> {
   return getFeatureFlag("news_updates_enabled");
 }
+
+export async function isDeckGenerationEnabled(): Promise<boolean> {
+  return getFeatureFlag("deck_generation_enabled");
+}

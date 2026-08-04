@@ -23,7 +23,7 @@ import { getProjectReports } from "./db/reports";
 import { getActiveDeckTemplate } from "./db/deck-templates";
 import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
-import { isTdsEnabled } from "./feature-flags";
+import { isTdsEnabled, isDeckGenerationEnabled } from "./feature-flags";
 import { listToolTypes } from "./db/tool-types";
 import { generateProductFaqs } from "./gtm-product-faqs";
 import { finalizeFieldAnswers } from "./field-finalize";
@@ -268,6 +268,19 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     }
 
     if (state.phase === "deck") {
+      // Deck generation was taking long enough to repeatedly stall/time out
+      // in production (lib/feature-flags.ts's isDeckGenerationEnabled,
+      // defaults to disabled) — same "flag exists, work is skipped" idiom
+      // as the "snapshot" phase's isTdsEnabled() check above. Project setup
+      // completes right after Product FAQs instead of hanging here; the
+      // deck can still be generated manually later from the Project Deck
+      // tab's own generate/retry action once the underlying slowness is fixed.
+      if (!(await isDeckGenerationEnabled())) {
+        logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "deck", outcome: "ok", errorMessage: "Deck generation disabled via feature flag", elapsedMs: Date.now() - stepStart });
+        await updateGenerationState(projectId, { phase: "deck", status: "complete" });
+        return { state: { ...state, phase: "deck", status: "complete" }, phaseCompleted: "deck" };
+      }
+
       // Deck generation deliberately never fails the overall pipeline — TDS
       // and GTM are the required artifacts and already succeeded; the deck
       // is a bonus layer on top. A missing active template, or any real

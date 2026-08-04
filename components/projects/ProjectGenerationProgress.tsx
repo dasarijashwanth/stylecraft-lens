@@ -13,25 +13,37 @@ import { CheckCircle, Loader2, AlertCircle } from "lucide-react";
 // because pipeline/continue always re-reads the current phase and only
 // ever advances it by one.
 
-const PHASE_LABELS_WITH_TDS = [
-  "Capturing live product data",
-  "Generating Technical Data Sheet",
-  "Generating Go-To-Market sheet",
-  "Generating Product FAQs",
-  "Generating Project Deck",
-];
+// Both TDS and Deck generation are feature-flag-gated (lib/feature-flags.ts)
+// — their phase SLOTS always exist server-side (lib/project-generation-engine.ts
+// skips the actual work but still transitions through phase:"tds"/"deck"),
+// so a disabled step is just collapsed out of what's SHOWN here rather than
+// removed from the underlying state machine.
+function buildPhaseConfig(tdsEnabled: boolean, deckEnabled: boolean): { labels: string[]; index: Record<string, number> } {
+  const labels: string[] = ["Capturing live product data"];
+  const index: Record<string, number> = { pending: 0, snapshot: 1 };
 
-// TDS disabled (lib/feature-flags.ts) — the "tds" phase slot still exists
-// server-side (lib/project-generation-engine.ts skips its work but still
-// writes phase:"tds", see that file's own comment), so PHASE_INDEX below
-// still needs a "tds" entry — it's just collapsed out of what's SHOWN,
-// remapped onto the same visible steps.
-const PHASE_LABELS_NO_TDS = [
-  "Capturing live product data",
-  "Generating Go-To-Market sheet",
-  "Generating Product FAQs",
-  "Generating Project Deck",
-];
+  if (tdsEnabled) {
+    labels.push("Generating Technical Data Sheet");
+    index.tds = labels.length - 1;
+  } else {
+    index.tds = 1; // collapses onto "Capturing live product data" — no dedicated row
+  }
+
+  labels.push("Generating Go-To-Market sheet");
+  index.gtm = labels.length - 1;
+
+  labels.push("Generating Product FAQs");
+  index.faqs = labels.length - 1;
+
+  if (deckEnabled) {
+    labels.push("Generating Project Deck");
+    index.deck = labels.length - 1;
+  } else {
+    index.deck = labels.length - 1; // collapses onto "Generating Product FAQs" — no dedicated row
+  }
+
+  return { labels, index };
+}
 
 interface PhaseState {
   status: "waiting" | "running" | "complete" | "error";
@@ -42,6 +54,7 @@ interface PhaseState {
 interface Props {
   projectId: string;
   tdsEnabled: boolean;
+  deckEnabled?: boolean;
   onDone: () => void;
 }
 
@@ -79,12 +92,8 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-const PHASE_INDEX_WITH_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 2, gtm: 3, faqs: 4, deck: 5 };
-const PHASE_INDEX_NO_TDS: Record<string, number> = { pending: 0, snapshot: 1, tds: 1, gtm: 2, faqs: 3, deck: 4 };
-
-export function ProjectGenerationProgress({ projectId, tdsEnabled, onDone }: Props) {
-  const PHASE_LABELS = tdsEnabled ? PHASE_LABELS_WITH_TDS : PHASE_LABELS_NO_TDS;
-  const PHASE_INDEX = tdsEnabled ? PHASE_INDEX_WITH_TDS : PHASE_INDEX_NO_TDS;
+export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled = true, onDone }: Props) {
+  const { labels: PHASE_LABELS, index: PHASE_INDEX } = buildPhaseConfig(tdsEnabled, deckEnabled);
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" }))
   );

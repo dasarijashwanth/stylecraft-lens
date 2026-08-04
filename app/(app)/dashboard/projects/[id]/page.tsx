@@ -67,6 +67,11 @@ export default function ProjectDetailPage() {
   // the real flag value is still loading — a false default would incorrectly
   // hide it for that first frame instead.
   const [tdsEnabled, setTdsEnabled] = useState(true);
+  // Deck generation defaults to disabled at the flag layer itself (unlike
+  // tdsEnabled above) — default this to false so the progress stepper
+  // doesn't show a "Generating Project Deck" row that then disappears once
+  // the real (likely-disabled) flag value loads a moment later.
+  const [deckEnabled, setDeckEnabled] = useState(false);
   const { open: openContactSupport } = useContactSupport();
 
   // Fetched once here and threaded into downloadReportPDF/downloadTabPDF
@@ -127,7 +132,10 @@ export default function ProjectDetailPage() {
   useEffect(() => {
     fetch("/api/features")
       .then(r => r.json())
-      .then(data => { if (typeof data.tds_enabled === "boolean") setTdsEnabled(data.tds_enabled); })
+      .then(data => {
+        if (typeof data.tds_enabled === "boolean") setTdsEnabled(data.tds_enabled);
+        if (typeof data.deck_generation_enabled === "boolean") setDeckEnabled(data.deck_generation_enabled);
+      })
       .catch(() => {});
   }, []);
 
@@ -397,7 +405,7 @@ export default function ProjectDetailPage() {
               Retry button) on every page load, not just live in the same
               session where it failed. */}
           {pipelineState && pipelineState.status !== "complete" && (
-            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
+            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
           <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
