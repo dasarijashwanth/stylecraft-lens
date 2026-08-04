@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
-import { isTdsEnabled, isBuyerSentimentEnabled, isNewsUpdatesEnabled, isDeckGenerationEnabled } from "@/lib/feature-flags";
+import { isTdsEnabled, isBuyerSentimentEnabled, isNewsUpdatesEnabled, isDeckGenerationEnabled, isMarketingDirectionGenerationEnabled } from "@/lib/feature-flags";
 
 // Read-only, no admin gate — every dashboard page needs this to decide
 // whether to render TDS UI. Authenticated (not public) only because
@@ -9,13 +9,14 @@ import { isTdsEnabled, isBuyerSentimentEnabled, isNewsUpdatesEnabled, isDeckGene
 export async function GET() {
   try {
     await getAuthSession();
-    const [tds_enabled, buyer_sentiment_enabled, news_updates_enabled, deck_generation_enabled] = await Promise.all([
+    const [tds_enabled, buyer_sentiment_enabled, news_updates_enabled, deck_generation_enabled, marketing_direction_generation_enabled] = await Promise.all([
       isTdsEnabled(),
       isBuyerSentimentEnabled(),
       isNewsUpdatesEnabled(),
       isDeckGenerationEnabled(),
+      isMarketingDirectionGenerationEnabled(),
     ]);
-    return NextResponse.json({ tds_enabled, buyer_sentiment_enabled, news_updates_enabled, deck_generation_enabled });
+    return NextResponse.json({ tds_enabled, buyer_sentiment_enabled, news_updates_enabled, deck_generation_enabled, marketing_direction_generation_enabled });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || "Failed to load feature flags" }, { status: err.status || 500 });
   }

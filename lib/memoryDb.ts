@@ -515,6 +515,11 @@ export interface MockCompetitorMatchingConfig {
   updatedAt: Date;
 }
 
+export interface MockMarketingDefaults {
+  languages: string;
+  updatedAt: Date;
+}
+
 export interface MockFaq {
   id: string;
   category: string;
@@ -687,6 +692,13 @@ class MemoryDatabase {
   // kernels (lib/db/collections.ts), not an empty admin table.
   collections: MockCollection[] = [];
   competitorMatchingConfig: MockCompetitorMatchingConfig = { motorWeight: 0.45, priceWeight: 0.35, featureWeight: 0.2, updatedAt: new Date() };
+  // GTM workbook export work — Marketing Direction's "Languages" field org
+  // default (Settings-editable, same singleton-row precedent as
+  // competitorMatchingConfig above).
+  marketingDefaults: MockMarketingDefaults = {
+    languages: "English (primary). Spanish (secondary, for retail/DTC market reach). French Canadian",
+    updatedAt: new Date(),
+  };
   // Replaces competitorMatchingConfig above — per-tool-type weight profiles.
   // Same always-seeded precedent as motorFamilies/toolTypes.
   scoringProfiles: MockScoringProfile[] = [];

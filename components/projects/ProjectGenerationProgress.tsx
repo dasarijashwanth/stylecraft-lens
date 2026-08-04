@@ -18,7 +18,7 @@ import { CheckCircle, Loader2, AlertCircle } from "lucide-react";
 // skips the actual work but still transitions through phase:"tds"/"deck"),
 // so a disabled step is just collapsed out of what's SHOWN here rather than
 // removed from the underlying state machine.
-function buildPhaseConfig(tdsEnabled: boolean, deckEnabled: boolean): { labels: string[]; index: Record<string, number> } {
+function buildPhaseConfig(tdsEnabled: boolean, deckEnabled: boolean, marketingDirectionEnabled: boolean = true): { labels: string[]; index: Record<string, number> } {
   const labels: string[] = ["Capturing live product data"];
   const index: Record<string, number> = { pending: 0, snapshot: 1 };
 
@@ -34,6 +34,13 @@ function buildPhaseConfig(tdsEnabled: boolean, deckEnabled: boolean): { labels: 
 
   labels.push("Generating Product FAQs");
   index.faqs = labels.length - 1;
+
+  if (marketingDirectionEnabled) {
+    labels.push("Generating Marketing Direction");
+    index.marketing_direction = labels.length - 1;
+  } else {
+    index.marketing_direction = labels.length - 1; // collapses onto "Generating Product FAQs" — no dedicated row
+  }
 
   if (deckEnabled) {
     labels.push("Generating Project Deck");
@@ -55,6 +62,7 @@ interface Props {
   projectId: string;
   tdsEnabled: boolean;
   deckEnabled?: boolean;
+  marketingDirectionEnabled?: boolean;
   onDone: () => void;
 }
 
@@ -92,8 +100,8 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled = true, onDone }: Props) {
-  const { labels: PHASE_LABELS, index: PHASE_INDEX } = buildPhaseConfig(tdsEnabled, deckEnabled);
+export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled = true, marketingDirectionEnabled = true, onDone }: Props) {
+  const { labels: PHASE_LABELS, index: PHASE_INDEX } = buildPhaseConfig(tdsEnabled, deckEnabled, marketingDirectionEnabled);
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" }))
   );

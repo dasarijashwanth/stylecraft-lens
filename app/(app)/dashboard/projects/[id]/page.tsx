@@ -72,6 +72,10 @@ export default function ProjectDetailPage() {
   // doesn't show a "Generating Project Deck" row that then disappears once
   // the real (likely-disabled) flag value loads a moment later.
   const [deckEnabled, setDeckEnabled] = useState(false);
+  // Marketing Direction generation defaults to enabled at the flag layer
+  // (unlike deckEnabled above) — default this to true so the progress
+  // stepper shows its row from the first frame instead of it popping in.
+  const [marketingDirectionEnabled, setMarketingDirectionEnabled] = useState(true);
   const { open: openContactSupport } = useContactSupport();
 
   // Fetched once here and threaded into downloadReportPDF/downloadTabPDF
@@ -135,6 +139,7 @@ export default function ProjectDetailPage() {
       .then(data => {
         if (typeof data.tds_enabled === "boolean") setTdsEnabled(data.tds_enabled);
         if (typeof data.deck_generation_enabled === "boolean") setDeckEnabled(data.deck_generation_enabled);
+        if (typeof data.marketing_direction_generation_enabled === "boolean") setMarketingDirectionEnabled(data.marketing_direction_generation_enabled);
       })
       .catch(() => {});
   }, []);
@@ -405,7 +410,7 @@ export default function ProjectDetailPage() {
               Retry button) on every page load, not just live in the same
               session where it failed. */}
           {pipelineState && pipelineState.status !== "complete" && (
-            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
+            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} marketingDirectionEnabled={marketingDirectionEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
           <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
@@ -1914,7 +1919,7 @@ function ProductKnowledgeSection({
                       )}
                       <div className="flex items-center gap-2">
                         <select
-                          value={entry?.owner || "Product Marketing"}
+                          value={entry?.owner || f.owner || "Product Marketing"}
                           onChange={e => handleOwnerChange(f.id, e.target.value)}
                           title="Owner"
                           className="px-1.5 py-1 border border-border rounded-md bg-surface-1 text-text-secondary text-[9px] outline-none focus:border-accent"

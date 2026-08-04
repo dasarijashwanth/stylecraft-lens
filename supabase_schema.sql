@@ -1670,3 +1670,28 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_doc_versions JSONB;
 -- up in the admin Features page to be re-enabled later, same as every
 -- other flag in Section 20/23.
 INSERT INTO feature_flags (flag_name, enabled) VALUES ('deck_generation_enabled', false) ON CONFLICT (flag_name) DO NOTHING;
+
+-- 46. FEATURE FLAG: MARKETING DIRECTION GENERATION — new pipeline phase
+-- (lib/project-generation-engine.ts's "marketing_direction" phase, runs
+-- after "faqs" and before "deck") generating the GTM workbook's 4th filled
+-- tab. Defaults ON (unlike Section 45's deck flag) — the feature's own spec
+-- requires it to auto-generate — but exists as an admin-page kill-switch
+-- (lib/db/feature-flags.ts's DEFAULT_ENABLED already returns true even with
+-- no row, so this seed isn't load-bearing; it exists so the row is visible
+-- to disable later, same as every other flag in this file).
+INSERT INTO feature_flags (flag_name, enabled) VALUES ('marketing_direction_generation_enabled', true) ON CONFLICT (flag_name) DO NOTHING;
+
+-- 47. MARKETING DEFAULTS — org-wide singleton config for the Marketing
+-- Direction section's "Languages" field (GTM workbook export work). Same
+-- singleton-row shape as Section 14's competitor_matching_config (a single
+-- id=1 row), not the versioned brand_voice_guides pattern — overkill for one
+-- string. Read/write via lib/db/marketing-defaults.ts; the admin page at
+-- /dashboard/admin/marketing-defaults edits it directly.
+CREATE TABLE IF NOT EXISTS marketing_defaults (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    languages TEXT NOT NULL DEFAULT 'English (primary). Spanish (secondary, for retail/DTC market reach). French Canadian',
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE marketing_defaults ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for marketing_defaults" ON marketing_defaults FOR ALL USING (true) WITH CHECK (true);
+INSERT INTO marketing_defaults (id) VALUES (1) ON CONFLICT (id) DO NOTHING;

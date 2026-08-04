@@ -25,6 +25,7 @@ const ENV_DEFAULTS: Record<string, string | undefined> = {
   buyer_sentiment_enabled: process.env.BUYER_SENTIMENT_ENABLED,
   news_updates_enabled: process.env.NEWS_UPDATES_ENABLED,
   deck_generation_enabled: process.env.DECK_GENERATION_ENABLED,
+  marketing_direction_generation_enabled: process.env.MARKETING_DIRECTION_GENERATION_ENABLED,
 };
 
 // Per-flag fallback used ONLY when no DB row exists for this flag at all
@@ -43,6 +44,13 @@ const DEFAULT_ENABLED: Record<string, boolean> = {
   // project setup completes at Product FAQs instead of hanging on this
   // step every time; re-enable once the underlying slowness is fixed.
   deck_generation_enabled: false,
+  // Marketing Direction is a new pipeline phase with several more AI calls
+  // (grouped narrative generation + voice-guard/copy-similarity retries) —
+  // defaults ON (unlike deck) since the spec requires it to auto-generate,
+  // but exists as a flag so it can be killed instantly from the admin
+  // Features page (no deploy) if it turns out to stall production the way
+  // deck/GTM generation once did.
+  marketing_direction_generation_enabled: true,
 };
 
 function fallbackEnabled(flagName: string): boolean {

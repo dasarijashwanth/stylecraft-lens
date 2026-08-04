@@ -23,14 +23,18 @@ import { getProjectReports } from "./db/reports";
 import { getActiveDeckTemplate } from "./db/deck-templates";
 import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
-import { isTdsEnabled, isDeckGenerationEnabled } from "./feature-flags";
+import { isTdsEnabled, isDeckGenerationEnabled, isMarketingDirectionGenerationEnabled } from "./feature-flags";
 import { listToolTypes } from "./db/tool-types";
 import { generateProductFaqs } from "./gtm-product-faqs";
 import { finalizeFieldAnswers } from "./field-finalize";
+import { generateMarketingDirection } from "./gtm-marketing-direction";
+import { listCatalogProducts } from "./db/catalog-products";
+import { matchCatalogProductByName } from "./our-product-position";
+import { getMarketingDefaults } from "./db/marketing-defaults";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
-  phaseCompleted: "snapshot" | "tds" | "gtm" | "faqs" | "deck" | null;
+  phaseCompleted: "snapshot" | "tds" | "gtm" | "faqs" | "marketing_direction" | "deck" | null;
 }
 
 export async function runProjectGenerationStep(projectId: string, orgId: string, userId: string): Promise<GenerationStepResult> {
@@ -262,9 +266,87 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "faqs", outcome: "error", errorMessage: err.message || "FAQ generation failed", elapsedMs: Date.now() - stepStart });
       }
 
-      await updateGenerationState(projectId, { phase: "deck", status: "running" });
+      await updateGenerationState(projectId, { phase: "marketing_direction", status: "running" });
       logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "gtm->faqs", outcome: "ok", elapsedMs: Date.now() - stepStart });
-      return { state: { ...state, phase: "deck", status: "running" }, phaseCompleted: "faqs" };
+      return { state: { ...state, phase: "marketing_direction", status: "running" }, phaseCompleted: "faqs" };
+    }
+
+    if (state.phase === "marketing_direction") {
+      // Marketing Direction — GTM workbook export work, 4th filled tab.
+      // Strictly after "faqs": its own input list includes Our
+      // Differentiators/Selling Position/Rep Talking Points, which the faqs
+      // phase just saved into this SAME "gtm" document. Best-effort, same
+      // precedent as the faqs branch above — a generation hiccup here must
+      // never fail the rest of project setup (each field has its own in-app
+      // regenerate button for manual retry).
+      if (!(await isMarketingDirectionGenerationEnabled())) {
+        logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "marketing_direction", outcome: "ok", errorMessage: "Marketing Direction generation disabled via feature flag", elapsedMs: Date.now() - stepStart });
+      } else {
+        try {
+          const document = await getOrCreateDocument(projectId, "gtm");
+          const gtmDocFields = await getDocumentFields(document.id);
+          const gtmFieldsFlat = flattenDocumentFields(gtmDocFields);
+
+          const [salesKit, tds, reports, catalogProducts, marketingDefaults] = await Promise.all([
+            getLatestOutput(projectId, "sales_kit"),
+            getTdsFieldsForProject(projectId),
+            getProjectReports(projectId, userId),
+            listCatalogProducts(),
+            getMarketingDefaults(),
+          ]);
+          const latestReport = reports?.[0];
+          const sources: GtmSources = {
+            project: {
+              productName: project.productName,
+              description: project.description,
+              category: project.category,
+              toolType: project.toolType,
+              motorFamily: (project as any).motorFamily,
+              motorBrandedName: (project as any).motorBrandedName,
+              motorTech: project.motorTech,
+              keyDiff: project.keyDiff,
+              pricePoint: project.pricePoint,
+              companyContext: project.companyContext,
+              targetMarket: project.targetMarket,
+              productUrl: project.productUrl,
+              asin: project.asin,
+            },
+            salesKit,
+            tds,
+            activeReport: latestReport
+              ? { competitive_analysis: latestReport.competitive_analysis, pricing_analysis: latestReport.pricing_analysis, content_form: latestReport.content_form }
+              : null,
+          };
+
+          const matchedCatalogProduct = matchCatalogProductByName(project.productName, catalogProducts);
+          const marketingDirectionSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Marketing Direction");
+          const mdBrand = await resolveBrandForProduct(project.productName);
+          const mdVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(mdBrand));
+          const mdIsPreLaunch = !project.productUrl && !project.asin;
+          const mdUploadedTdsContext = await getUploadedTdsContext(projectId);
+          const mdTdsGroundingBlock = buildTdsGroundingBlock(mdUploadedTdsContext, mdIsPreLaunch);
+
+          const marketingDirectionFields = await generateMarketingDirection(
+            sources,
+            gtmFieldsFlat,
+            matchedCatalogProduct?.collection ?? null,
+            catalogProducts,
+            matchedCatalogProduct?.id ?? null,
+            marketingDefaults.languages,
+            mdVoiceBlock,
+            mdTdsGroundingBlock
+          );
+          const finalized = finalizeFieldAnswers(marketingDirectionFields, marketingDirectionSchema, 1);
+          await saveDocumentFields(document.id, marketingDirectionSchema, finalized, userId);
+          logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "marketing_direction", outcome: "ok", elapsedMs: Date.now() - stepStart });
+        } catch (err: any) {
+          logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "marketing_direction", outcome: "error", errorMessage: err.message || "Marketing Direction generation failed", elapsedMs: Date.now() - stepStart });
+        }
+      }
+
+      await updateGenerationState(projectId, { phase: "deck", status: "running" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "faqs->marketing_direction", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      return { state: { ...state, phase: "deck", status: "running" }, phaseCompleted: "marketing_direction" };
     }
 
     if (state.phase === "deck") {

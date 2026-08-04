@@ -64,7 +64,16 @@ type Step =
   // case for Product Knowledge/BOX ONLY's "Item | Answer" rows).
   | { kind: "field"; label: string; fieldId: string; writeNotes?: boolean; rowOffset?: number }
   | { kind: "group"; label: string; fieldIdPrefix: string; total: number; offset: 0 | 1 }
-  | { kind: "combinedRow"; label: string; fieldIds: string[] };
+  | { kind: "combinedRow"; label: string; fieldIds: string[] }
+  // Marketing Direction's "CHANNEL STRATEGY/CONTENT DELIVERABLES" row (merged
+  // A15:D15) is a pure section-header label with NO corresponding field —
+  // the first template label in this codebase with zero schema entry.
+  // findRowByLabel's forward-only cursor search would naturally skip past an
+  // unlisted label on its own, but an explicit step keeps the array
+  // self-documenting and turns a future template regression (header row
+  // deleted/renamed) into a visible `unmapped` warning instead of silent
+  // drift, matching this module's own "never hardcode a row number" rule.
+  | { kind: "skipRow"; label: string };
 
 // ---- Product Knowledge (Item=A, Owner=B, Answer=C, Notes=D) ----
 const PRODUCT_KNOWLEDGE_STEPS: Step[] = [
@@ -183,6 +192,40 @@ const FAQ_LABELED_STEPS: Step[] = [
   { kind: "field", label: "3:", fieldId: "rep_talking_point_3" },
 ];
 
+// ---- Marketing Direction (Item=A, Owner=B, Answer=C, Notes=D) — a fixed
+// 25-row layout (1 header + 24 content rows), confirmed against both the
+// pristine template and a real filled exemplar. Row 15 (the section header)
+// is a "skipRow" — see the Step union above.
+const MARKETING_DIRECTION_STEPS: Step[] = [
+  { kind: "field", label: "Previous Product Reference", fieldId: "marketing_previous_product_reference" },
+  { kind: "field", label: "Primary Goal", fieldId: "marketing_primary_goal" },
+  { kind: "field", label: "Success KPIs", fieldId: "marketing_success_kpis" },
+  { kind: "field", label: "Marketing Launch Timing", fieldId: "marketing_launch_timing" },
+  { kind: "field", label: "Core Audience", fieldId: "marketing_core_audience" },
+  { kind: "field", label: "Secondary Audience", fieldId: "marketing_secondary_audience" },
+  { kind: "field", label: "Consumer Barrier", fieldId: "marketing_consumer_barrier" },
+  { kind: "field", label: "Messaging Direction", fieldId: "marketing_messaging_direction" },
+  { kind: "field", label: "Product Name Origin", fieldId: "marketing_product_name_origin" },
+  { kind: "field", label: "Visual direction", fieldId: "marketing_visual_direction" },
+  { kind: "field", label: "Content ideas or territories", fieldId: "marketing_content_ideas" },
+  { kind: "field", label: "Languages", fieldId: "marketing_languages" },
+  // Real template uses curly apostrophes ("Do’s / Don’ts"), transcribed
+  // verbatim so the label search matches (same discipline as Product FAQ's
+  // "Our Differrentiators"/"Intial Quantities ordered" typos).
+  { kind: "field", label: "Do’s / Don’ts", fieldId: "marketing_dos_donts" },
+  { kind: "skipRow", label: "CHANNEL STRATEGY/CONTENT DELIVERABLES" },
+  { kind: "field", label: "Web Coverage", fieldId: "marketing_web_coverage" },
+  { kind: "field", label: "Where should we be advertising?", fieldId: "marketing_ad_channels" },
+  { kind: "field", label: "Print Material?", fieldId: "marketing_print_material" },
+  { kind: "field", label: "Trade Show Launch", fieldId: "marketing_trade_show_launch" },
+  { kind: "field", label: "Educator Sampling", fieldId: "marketing_educator_sampling" },
+  { kind: "field", label: "Influencer Sampling", fieldId: "marketing_influencer_sampling" },
+  { kind: "field", label: "Stylecraft Sales Team", fieldId: "marketing_stylecraft_sales_team" },
+  { kind: "field", label: "External Sales Rep Sampling", fieldId: "marketing_external_sales_rep_sampling" },
+  { kind: "field", label: "Key Accounts Sampling", fieldId: "marketing_key_accounts_sampling" },
+  { kind: "field", label: "Promo", fieldId: "marketing_promo" },
+];
+
 function applyFieldStep(
   workbook: OpenGtmWorkbook,
   sheet: string,
@@ -247,7 +290,7 @@ function applySteps(
         xml = writeCell(xml, `${valueColumn}${rowNum}`, answer).xml;
       }
       cursor = anchorRow + step.offset + step.total - 1;
-    } else {
+    } else if (step.kind === "combinedRow") {
       const row = findRowByLabel(xml, workbook.sharedStrings, labelColumn, step.label, cursor);
       if (row == null) {
         unmapped.push({ sheet, label: step.label });
@@ -256,6 +299,16 @@ function applySteps(
       cursor = row;
       const combined = step.fieldIds.map(id => answerOf(fields, id)).filter(v => v && v.toUpperCase() !== "N/A").join("\n");
       xml = writeCell(xml, `${valueColumn}${row}`, combined).xml;
+    } else {
+      // skipRow — advance the cursor past a schema-less label (e.g.
+      // Marketing Direction's merged section-header row) without writing
+      // anything.
+      const row = findRowByLabel(xml, workbook.sharedStrings, labelColumn, step.label, cursor);
+      if (row == null) {
+        unmapped.push({ sheet, label: step.label });
+        continue;
+      }
+      cursor = row;
     }
   }
 
@@ -295,6 +348,8 @@ export function renderGtmWorkbook(templateBuffer: Buffer, input: GtmWorkbookMapp
 
   const boxFields = supplyBoxOnlyFields(input);
   applySteps(workbook, "BOX ONLY", "A", "C", null, BOX_ONLY_STEPS, boxFields, repairs, unmapped);
+
+  applySteps(workbook, "Marketing Direction", "A", "C", "D", MARKETING_DIRECTION_STEPS, input.fields, repairs, unmapped);
 
   // Product FAQ needs its 3 existing Q:/A:/blank triads grown to 10 BEFORE
   // any label search runs (row numbers below the growth point shift).

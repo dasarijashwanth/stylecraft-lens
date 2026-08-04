@@ -19,3 +19,7 @@ export async function isNewsUpdatesEnabled(): Promise<boolean> {
 export async function isDeckGenerationEnabled(): Promise<boolean> {
   return getFeatureFlag("deck_generation_enabled");
 }
+
+export async function isMarketingDirectionGenerationEnabled(): Promise<boolean> {
+  return getFeatureFlag("marketing_direction_generation_enabled");
+}

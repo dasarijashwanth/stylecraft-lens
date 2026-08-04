@@ -75,6 +75,23 @@ const WRITTEN_FIELD_IDS = new Set([
   // down), rather than listing all 20 ids by hand here.
   // Box Only section
   "box_main_statement",
+  // Marketing Direction section (GTM workbook export work, 4th filled tab)
+  "marketing_primary_goal",
+  "marketing_success_kpis",
+  "marketing_launch_timing",
+  "marketing_core_audience",
+  "marketing_secondary_audience",
+  "marketing_consumer_barrier",
+  "marketing_messaging_direction",
+  "marketing_product_name_origin",
+  "marketing_visual_direction",
+  "marketing_content_ideas",
+  "marketing_languages",
+  "marketing_dos_donts",
+  "marketing_web_coverage",
+  "marketing_ad_channels",
+  "marketing_print_material",
+  "marketing_trade_show_launch",
 ]);
 for (let i = 1; i <= 10; i++) {
   WRITTEN_FIELD_IDS.add(`faq_question_${i}`);
@@ -100,6 +117,15 @@ export const INTERNAL_FIELD_IDS = new Set([
   "dealer_gross_margin_pct",
   "retail_gross_margin_pct",
   "initial_quantities_ordered",
+  // Marketing Direction section's sampling/promo rows — internal-decision
+  // quantities (per spec: a recommended POSTURE like "Send to all educators"
+  // may be proposed, but a genuine numeric count is never AI-invented).
+  "marketing_educator_sampling",
+  "marketing_influencer_sampling",
+  "marketing_stylecraft_sales_team",
+  "marketing_external_sales_rep_sampling",
+  "marketing_key_accounts_sampling",
+  "marketing_promo",
 ]);
 
 const INTERNAL_FIELD_OWNERS: Record<string, string> = {
@@ -114,6 +140,12 @@ const INTERNAL_FIELD_OWNERS: Record<string, string> = {
   dealer_gross_margin_pct: "Sales",
   retail_gross_margin_pct: "Sales",
   initial_quantities_ordered: "Sales",
+  marketing_educator_sampling: "Marketing",
+  marketing_influencer_sampling: "Marketing",
+  marketing_stylecraft_sales_team: "Marketing",
+  marketing_external_sales_rep_sampling: "Marketing",
+  marketing_key_accounts_sampling: "Marketing",
+  marketing_promo: "Marketing",
 };
 
 interface FieldExtra {
@@ -122,11 +154,17 @@ interface FieldExtra {
   options?: string[];
   group?: { id: string; index: number; total: number };
   legacyOptional?: boolean;
+  // Default team owner for non-internal fields — Marketing Direction's
+  // written fields all default to "Marketing" (the workbook template's own
+  // hard-coded Owner column for that tab), shown in the in-app Owner
+  // dropdown the same way internal-kind fields already show their owner.
+  owner?: string;
 }
 
 function field(id: string, section: string, question: string, extra?: FieldExtra): GtmField {
   const kind: GtmFieldKind = WRITTEN_FIELD_IDS.has(id) ? "written" : INTERNAL_FIELD_IDS.has(id) ? "internal" : "grounded";
-  return { id, section, question, kind, ...(kind === "internal" ? { owner: INTERNAL_FIELD_OWNERS[id] } : {}), ...extra };
+  const owner = extra?.owner ?? (kind === "internal" ? INTERNAL_FIELD_OWNERS[id] : undefined);
+  return { id, section, question, kind, ...(owner ? { owner } : {}), ...extra };
 }
 
 // Builds one repeatable-row group — N field entries sharing an id prefix,
@@ -282,6 +320,40 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   // "Included:" row (102) and BOX ONLY's "Includes" row. Derived, not
   // written by AI — see lib/gtm-derive.ts's deriveIncludedSummary.
   field("included_summary", "Included in Box", "Included:"),
+
+  // Marketing Direction — generated automatically after Product FAQ resolves
+  // (new "marketing_direction" pipeline phase, lib/gtm-marketing-direction.ts),
+  // matching the official GTM workbook template's "Marketing Direction" tab.
+  // The template's own Owner column is hard-coded "Marketing" for every row
+  // here; `owner: "Marketing"` below is the in-app UI's own default (the
+  // export never reads it — see lib/gtm-workbook-data-mapper.ts). The
+  // template's row-15 section header ("CHANNEL STRATEGY/CONTENT
+  // DELIVERABLES") has no corresponding field here by design — it's a pure
+  // label with no Answer/Notes cell, handled entirely by the exporter's
+  // "skipRow" step.
+  field("marketing_previous_product_reference", "Marketing Direction", "Previous Product Reference", { owner: "Marketing" }),
+  field("marketing_primary_goal", "Marketing Direction", "Primary Goal (ex: Drive trial, awareness, revenue, retailer sell-in)", { owner: "Marketing" }),
+  field("marketing_success_kpis", "Marketing Direction", "Success KPIs (ex: revenue, ROAS, traffic, engagement, new users)", { owner: "Marketing" }),
+  field("marketing_launch_timing", "Marketing Direction", "Marketing Launch Timing (when should marketing kick off?)", { owner: "Marketing" }),
+  field("marketing_core_audience", "Marketing Direction", "Core Audience (description of who we think this product should be advertised to - more than Pro or Retail)", { owner: "Marketing" }),
+  field("marketing_secondary_audience", "Marketing Direction", "Secondary Audience (if applicable)", { owner: "Marketing" }),
+  field("marketing_consumer_barrier", "Marketing Direction", "Consumer Barrier (what do we need our marketing to solve for or what question do we need to answer?)", { owner: "Marketing" }),
+  field("marketing_messaging_direction", "Marketing Direction", "Messaging Direction (tone, messaging ideas or inspo)", { owner: "Marketing" }),
+  field("marketing_product_name_origin", "Marketing Direction", "Product Name Origin", { owner: "Marketing" }),
+  field("marketing_visual_direction", "Marketing Direction", "Visual direction (in-salon, lifestyle, product-focused, etc.)", { owner: "Marketing" }),
+  field("marketing_content_ideas", "Marketing Direction", "Content ideas or territories (just direction not mandatory)", { owner: "Marketing" }),
+  field("marketing_languages", "Marketing Direction", "Languages", { owner: "Marketing" }),
+  field("marketing_dos_donts", "Marketing Direction", "Do's / Don'ts", { owner: "Marketing" }),
+  field("marketing_web_coverage", "Marketing Direction", "Web Coverage", { owner: "Marketing" }),
+  field("marketing_ad_channels", "Marketing Direction", "Where should we be advertising? (based on priority and budget)", { owner: "Marketing" }),
+  field("marketing_print_material", "Marketing Direction", "Print Material?", { owner: "Marketing" }),
+  field("marketing_trade_show_launch", "Marketing Direction", "Trade Show Launch", { owner: "Marketing" }),
+  field("marketing_educator_sampling", "Marketing Direction", "Educator Sampling"),
+  field("marketing_influencer_sampling", "Marketing Direction", "Influencer Sampling"),
+  field("marketing_stylecraft_sales_team", "Marketing Direction", "Stylecraft Sales Team"),
+  field("marketing_external_sales_rep_sampling", "Marketing Direction", "External Sales Rep Sampling"),
+  field("marketing_key_accounts_sampling", "Marketing Direction", "Key Accounts Sampling"),
+  field("marketing_promo", "Marketing Direction", "Promo"),
 
   // Product FAQ — generated automatically after GTM's own fields resolve
   // (new "faqs" pipeline phase, lib/gtm-product-faqs.ts), matching the

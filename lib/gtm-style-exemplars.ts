@@ -108,6 +108,42 @@ export const GTM_STYLE_EXEMPLARS: GtmExemplar[] = [
       up_sell:
         "360 Jeezy Clipper, any shaver with overstock or underperforming to complete the full set of clipper, trimmer and shaver. Clipper and trimmer grips and any accessories.",
       approved_pricing: "$259.95 / $269.95",
+      // Marketing Direction section (GTM workbook export work, 4th filled
+      // tab) — real excerpts from this SAME product's own filled Marketing
+      // Direction sheet, colocated here rather than in a parallel exemplar
+      // module (see lib/gtm-marketing-direction.ts's header comment for why).
+      // Two fields from the real sheet (Content Ideas/Territories, Where
+      // Should We Be Advertising) are deliberately OMITTED — the only source
+      // text available for them was itself mid-sentence fragments, and
+      // fabricating a completion would violate this corpus's own "never
+      // invent, only real approved copy" rule.
+      marketing_primary_goal:
+        "Drive awareness, revenue, and retailer sell-in for the SC x 360 Jeezy Trimmer (SC423B); establish this as the go-to precision trimmer co-designed with one of the industry's most recognized barbers. Leveraging 360 Jeezy's presence and credibility to reinforce StyleCraft's position as the leading professional barbering brand.",
+      marketing_success_kpis:
+        "Revenue (sell-through at launch), ROAS on paid social/paid search, DTC traffic, engagement rate on barber community content, Amazon/Walmart sell-through, influencer earned media value from pro barber network. Initial sell-in and did we sell out?",
+      marketing_launch_timing:
+        "Marketing should kick off 2-4 weeks before in-market date; teaser content and influencer seeding with pro barbers should begin 4-6 weeks out. Embargo Strategy: Sample barbers early and instruct them NOT TO TALK ABOUT IT for the first X days. Build curiosity and buzz. 'What is that trimmer?' Then have all seeded barbers post and talk about it simultaneously on the reveal date.",
+      marketing_core_audience:
+        "Professional barbers and master barbers who follow respected figures in the barbering community. 360 Jeezy's audience. Barbers, barber students, and grooming enthusiasts who trust peer-to-peer recommendations from working pros. 25-45 male-skewing audience with deep investment in the craft.",
+      marketing_secondary_audience:
+        "Advanced home groomers and grooming enthusiasts who aspire to pro-level results; barber school students looking to invest in their first professional-grade trimmer; fans of barber culture content on social media; and stylists who want a precision trimmer that performs at a professional level and aligns with their personal brand behind the chair.",
+      marketing_consumer_barrier:
+        "Why is this trimmer worth the premium price? What does 360 Jeezy's co-sign actually mean for the product? Marketing must answer: this tool was designed with one of the industry's most recognized barbers, delivering ultra-quiet performance, low vibration, longer lasting battery efficiency with up to 3.5 hours of run-time, and the same great power.",
+      marketing_messaging_direction:
+        "Authentic, craft-first, community-rooted. Tone should feel like it comes from inside the barbershop. Respected, skilled, no-hype. Let 360 Jeezy speak to the tool from a barber's POV. Focus on the new IN3 motor and new customizable features. Reference: how barbers talk to each other about tools they trust. Avoid: celebrity hype tone, overly polished/corporate language, anything that feels inauthentic to the barber community.",
+      marketing_product_name_origin:
+        "Named in collaboration with 360 Jeezy, a professional barber known within the barbering community. The name and colorway (black, gold, red) reflect his personal aesthetic and professional identity. This is the trimmer companion to the SC x 360 Jeezy Clipper. A complete pro lineup built with his input.",
+      marketing_visual_direction:
+        "Primary: clean product-focused hero shots on dark backdrop highlighting gold blade, red grips, and full metal body. Secondary: in-barbershop action shots. 360 Jeezy using the trimmer on a real client, showing clean lines and precision. Lifestyle: behind-the-chair, craft-focused. Mood: professional, sharp, barbershop authentic. Avoid: overly staged/editorial looks disconnected from the shop.",
+      marketing_languages: "English (primary). Spanish (secondary, for retail/DTC market reach). French Canadian",
+      marketing_dos_donts:
+        "DO: Let 360 Jeezy lead the story as a credible working barber; highlight IN3 motor tech and Gold X-Pro Wide blade performance; show real barbershop environments and real clients; use red/black/gold palette consistently; speak to pro barbers peer-to-peer. DON'T: Frame this as a celebrity/rapper collab; use language disconnected from barber culture; oversell as a consumer/retail product (pro-first); mix up clipper and trimmer messaging; use competitor brand names.",
+      marketing_web_coverage:
+        "Full PDP refresh on brand.com and Amazon for SC423B. Add to SC x 360 Jeezy product family page alongside the SC x 360 Jeezy Clipper. Cross-reference on clipper PDP as \"Also available: SC x 360 Jeezy Trimmer.\" Update category pages and buying guide where 360 Jeezy collab is featured.",
+      marketing_print_material:
+        "Spec sheet / sell sheet for sales team and external reps. Flyer for trade show and barber education events. Counter card or shelf talker for key retail/POS accounts. In-box co-branded 360 Jeezy barber collab insert card.",
+      marketing_trade_show_launch:
+        "Yes, if aligned with launch timing. Booth featuring SC423B alongside SC x 360 Jeezy Clipper as the complete pro collab lineup. 360 Jeezy appearance/demo opportunity if available.",
     },
   },
 ];

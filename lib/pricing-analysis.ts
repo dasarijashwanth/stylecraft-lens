@@ -103,6 +103,23 @@ export function resolveTargetPrice(
   return picked ? { value: picked.answer, source: picked.source } : null;
 }
 
+// Whether the target price sits above/below/at the category median (2%
+// deadband each side to avoid a near-tie reading as a hard direction) —
+// extracted from buildPricePositioningSentence below so other callers (e.g.
+// lib/gtm-marketing-direction.ts's Consumer Barrier premium-vs-value framing)
+// can key off the SAME deterministic relation rather than re-deriving or
+// guessing it from scratch.
+export function derivePriceRelation(targetPriceRaw: number | null, rows: PricingBenchmarkRow[]): "above" | "below" | "at" | null {
+  const priced = rows.map(r => r.price_raw).filter((p): p is number => p != null);
+  if (targetPriceRaw == null || priced.length === 0) return null;
+
+  const sorted = [...priced].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+
+  return targetPriceRaw > median * 1.02 ? "above" : targetPriceRaw < median * 0.98 ? "below" : "at";
+}
+
 // "Target price $X sits {below/at/above} the category median of $M across N
 // compared competitors (range $min–$max)." Every number here comes from the
 // same rows the benchmarks table renders — never a separate, uncited figure
@@ -120,7 +137,7 @@ export function buildPricePositioningSentence(
   const min = sorted[0];
   const max = sorted[sorted.length - 1];
 
-  const relation = targetPriceRaw > median * 1.02 ? "above" : targetPriceRaw < median * 0.98 ? "below" : "at";
+  const relation = derivePriceRelation(targetPriceRaw, rows);
   const fmt = (n: number) => `$${n.toFixed(2)}`;
 
   return `Target price ${fmt(targetPriceRaw)} sits ${relation} the category median of ${fmt(median)} across ${priced.length} compared competitor${priced.length === 1 ? "" : "s"} (range ${fmt(min)}–${fmt(max)}).`;

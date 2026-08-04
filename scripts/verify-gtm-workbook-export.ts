@@ -114,6 +114,30 @@ function buildSyntheticFields(): Record<string, { answer: string; notes?: string
     dealer_gross_margin_pct: a("Awaiting internal input"),
     retail_gross_margin_pct: a("Awaiting internal input"),
     initial_quantities_ordered: a("Awaiting internal input"),
+    // Marketing Direction (GTM workbook export work, 4th filled tab)
+    marketing_previous_product_reference: a("Anime Clipper"),
+    marketing_primary_goal: a("Drive awareness and retailer sell-in for the Anime Trimmer."),
+    marketing_success_kpis: a("Revenue, ROAS, DTC traffic, sell-through."),
+    marketing_launch_timing: a("Kick off 2-4 weeks before in-market date with a teaser reveal."),
+    marketing_core_audience: a("Barbers and stylists who want zero-gap precision lining."),
+    marketing_secondary_audience: a("Advanced home groomers."),
+    marketing_consumer_barrier: a("Why trust this over an established name at this price."),
+    marketing_messaging_direction: a("Confident, craft-first, no-hype."),
+    marketing_product_name_origin: a("Named for its precise, anime-sharp lines."),
+    marketing_visual_direction: a("Primary: dark backdrop hero shots. Avoid: overly staged looks."),
+    marketing_content_ideas: a("1. Zero-gap precision demo.\n2. Quiet-operation comparison."),
+    marketing_languages: a("English (primary). Spanish (secondary). French Canadian"),
+    marketing_dos_donts: a("DO: highlight IN2 motor. DON'T: mix up clipper and trimmer messaging."),
+    marketing_web_coverage: a("Full PDP refresh on brand.com and Amazon for SC999X."),
+    marketing_ad_channels: a("P1 Launch: Paid Social. P2 Sustain: Paid Search."),
+    marketing_print_material: a("Spec sheet for sales team and trade show flyer."),
+    marketing_trade_show_launch: a("Yes — booth alongside the Anime Clipper."),
+    marketing_educator_sampling: a("Send to all educators"),
+    marketing_influencer_sampling: a("Awaiting internal input"),
+    marketing_stylecraft_sales_team: a("All"),
+    marketing_external_sales_rep_sampling: a("All"),
+    marketing_key_accounts_sampling: a("All"),
+    marketing_promo: a("Potentially promo with the Anime Clipper."),
   };
   for (let i = 1; i <= 10; i++) fields[`features_full_list_${i}`] = a(i <= 4 ? `ZERO-GAP PRECISION FEATURE ${i}` : "");
   for (let i = 1; i <= 5; i++) fields[`cross_sell_${i}`] = a(i <= 2 ? `Cross sell product ${i}` : "");
@@ -180,6 +204,15 @@ async function main() {
   assert(readCellText(box, outWorkbook.sharedStrings, "C20") === "012345678905", "BOX ONLY UPC resolves from the catalog match");
   assert(readCellText(box, outWorkbook.sharedStrings, "C14") === "ICON 1", "BOX ONLY Icons reuse the same feature_icons_N answers as Product Knowledge");
 
+  const md = outWorkbook.getSheetXml("Marketing Direction");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C2") === "Anime Clipper", "Marketing Direction: Previous Product Reference lands on row 2");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C9") === "Confident, craft-first, no-hype.", "Marketing Direction: Messaging Direction lands on row 9");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C13") === "English (primary). Spanish (secondary). French Canadian", "Marketing Direction: Languages lands on row 13");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C15") === "", "Marketing Direction: the schema-less section-header row (15) is skipped, never written to");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C16") === "Full PDP refresh on brand.com and Amazon for SC999X.", "Marketing Direction: Web Coverage correctly lands AFTER the skipped header row, at row 16");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C20") === "Send to all educators", "Marketing Direction: Educator Sampling lands on row 20");
+  assert(readCellText(md, outWorkbook.sharedStrings, "C25") === "Potentially promo with the Anime Clipper.", "Marketing Direction: Promo (last row) lands on row 25");
+
   const qRows = findAllRowsByLabel(faq, outWorkbook.sharedStrings, "A", "Q:");
   const aRows = findAllRowsByLabel(faq, outWorkbook.sharedStrings, "A", "A:");
   assert(qRows.length === 10 && aRows.length === 10, `exactly 10 Q:/A: pairs exist after row insertion (got ${qRows.length} Q, ${aRows.length} A)`);
@@ -188,12 +221,14 @@ async function main() {
   const differentiatorsRow = findRowByLabel(faq, outWorkbook.sharedStrings, "A", "Our Differrentiators");
   assert(!!differentiatorsRow && readCellText(faq, outWorkbook.sharedStrings, `B${differentiatorsRow + 1}`).includes("Quieter than category average"), "Our Differentiators lands on the row below its own header label");
 
-  // The other 9 tabs + shared parts must be byte-for-byte identical to the
-  // original template — the strongest possible form of "untouched".
+  // The other 8 tabs (sheet6 "Marketing Direction" is now a 4th filled
+  // target, no longer untouched) + shared parts must be byte-for-byte
+  // identical to the original template — the strongest possible form of
+  // "untouched".
   const origZip = new PizZip(templateBuffer);
   const outZip = new PizZip(result.buffer);
   const untouchedParts = [
-    "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet6.xml",
+    "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml",
     "xl/worksheets/sheet7.xml", "xl/worksheets/sheet8.xml", "xl/worksheets/sheet9.xml",
     "xl/worksheets/sheet10.xml", "xl/worksheets/sheet11.xml", "xl/worksheets/sheet12.xml",
     "xl/styles.xml", "xl/sharedStrings.xml", "xl/theme/theme1.xml",
@@ -203,7 +238,13 @@ async function main() {
     const outBytes = outZip.file(p)?.asUint8Array();
     return origBytes && outBytes && Buffer.compare(Buffer.from(origBytes), Buffer.from(outBytes)) === 0;
   });
-  assert(allUntouchedIdentical, "all 9 non-target sheets + styles/sharedStrings/theme are byte-for-byte identical to the original template");
+  assert(allUntouchedIdentical, "all 8 non-target sheets + styles/sharedStrings/theme are byte-for-byte identical to the original template");
+
+  const sheet6Changed = Buffer.compare(
+    Buffer.from(origZip.file("xl/worksheets/sheet6.xml")!.asUint8Array()),
+    Buffer.from(outZip.file("xl/worksheets/sheet6.xml")!.asUint8Array())
+  ) !== 0;
+  assert(sheet6Changed, "Marketing Direction (sheet6.xml) DID change — confirms it's now actually being filled, not silently skipped");
 
   // ---- Section 2: FAQ grounding (the AI call itself needs a live key —
   // not exercised offline; this verifies the deterministic guard around it) ----

@@ -7,9 +7,12 @@ import { memoryDb } from "@/lib/memoryDb";
 
 // "faqs" (10 auto-generated Product FAQs, lib/gtm-product-faqs.ts) runs
 // after "gtm" so it can ground itself in GTM's fully-resolved fields
-// (features/motor/blades/guards/charging/care/warranty), and before "deck"
-// since decks may reference FAQ content in the future.
-export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "faqs" | "deck";
+// (features/motor/blades/guards/charging/care/warranty). "marketing_direction"
+// (lib/gtm-marketing-direction.ts) runs after "faqs" — its own input list
+// includes FAQ's Our Differentiators/Selling Position/Rep Talking Points —
+// and before "deck" since decks may reference FAQ/Marketing Direction
+// content in the future.
+export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "faqs" | "marketing_direction" | "deck";
 export type GenerationStatus = "pending" | "running" | "complete" | "failed";
 
 export interface GenerationStateRow {
