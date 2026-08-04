@@ -503,14 +503,27 @@ export async function generateAllFields(productName: string, sources: GtmSources
   });
 
   // Tier 6.5 — Features (full list) 3-source merge + Expert Tip generated
-  // from the now-resolved Features. Runs after Tier 6 (manufacturer/lineup/
-  // performance already settled) so Expert Tip's grounding has a real,
-  // resolved feature list to reference — see lib/gtm-features-and-tip.ts.
+  // from the now-resolved Features, collection-kernel name adaptation,
+  // Core Consumer "Both" note, and Box Only derivation. Runs after Tier 6
+  // (manufacturer/lineup/performance already settled) so Expert Tip's
+  // grounding has a real, resolved feature list to reference — see
+  // lib/gtm-features-and-tip.ts. These 4 calls are genuinely independent —
+  // each reads only fields already resolved by Tier ≤6 (never another Tier
+  // 6.5 call's own output) and writes to its own disjoint field set
+  // (features_full_list_*/expert_tip vs. product_name_origin/name_story_tie
+  // vs. core_consumer's notes vs. box_main_statement/box_feature_*) — so
+  // they run concurrently instead of sequentially. Confirmed live: running
+  // them one-at-a-time (each its own multi-second AI call, some with their
+  // own internal retry) was stacking into 15-30+ extra seconds on top of
+  // the main AI call, a major contributor to GTM generation routinely
+  // running long/timing out.
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
-  await applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock);
-  await applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock, tdsGroundingBlock);
-  await applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock);
-  await applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock);
+  await Promise.all([
+    applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock),
+    applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock, tdsGroundingBlock),
+    applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
+    applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
+  ]);
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
@@ -616,10 +629,16 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     hairTypeSourceText: buildHairTypeSourceText(sources),
     ...tier6Extra,
   });
-  await applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock, tdsGroundingBlock);
-  await applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection, voiceBlock, tdsGroundingBlock);
-  await applyCoreConsumerBothNote(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock);
-  await applyBoxOnlyDerivation(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock);
+  // Same independence as generateAllFields' Tier 6.5 block above — at most
+  // one of these 4 ever does real work for a single regenerated field
+  // (each guards on its own distinct field id(s)), but running them
+  // concurrently is still strictly no worse and keeps both call sites consistent.
+  await Promise.all([
+    applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock, tdsGroundingBlock),
+    applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection, voiceBlock, tdsGroundingBlock),
+    applyCoreConsumerBothNote(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock),
+    applyBoxOnlyDerivation(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock),
+  ]);
   applyCategoryDefaults(guarded, [schemaField], sources.project.category);
 
   if (schemaField.kind === "written") {

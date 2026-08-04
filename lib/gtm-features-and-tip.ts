@@ -280,17 +280,23 @@ export async function applyCollectionKernelAdaptation(
   const kernelRow = await findCollectionByName(collection);
   if (!kernelRow || !kernelRow.narrative_kernel) return;
 
-  for (const fieldId of COLLECTION_KERNEL_FIELD_IDS) {
-    if (!schema.some(f => f.id === fieldId) || !isUnresolved(fields, fieldId)) continue;
-    const text = await adaptCollectionKernelField(fieldId, productName, kernelRow.name, kernelRow, voiceBlock, tdsGroundingBlock);
-    if (text) {
-      fields[fieldId] = {
-        answer: text,
-        source: "derived",
-        sourceDetail: { label: `Adapted from ${kernelRow.name} collection kernel`, collectionKernelAdapted: true },
-      };
-    }
-  }
+  // product_name_origin and name_story_tie are independent adaptations of
+  // the SAME kernel onto two different fields — no shared state between
+  // them, so they run concurrently instead of one-after-another (each is
+  // its own multi-second AI call).
+  const fieldIdsToFill = COLLECTION_KERNEL_FIELD_IDS.filter(fieldId => schema.some(f => f.id === fieldId) && isUnresolved(fields, fieldId));
+  await Promise.all(
+    fieldIdsToFill.map(async fieldId => {
+      const text = await adaptCollectionKernelField(fieldId, productName, kernelRow.name, kernelRow, voiceBlock, tdsGroundingBlock);
+      if (text) {
+        fields[fieldId] = {
+          answer: text,
+          source: "derived",
+          sourceDetail: { label: `Adapted from ${kernelRow.name} collection kernel`, collectionKernelAdapted: true },
+        };
+      }
+    })
+  );
 }
 
 // GTM style-corpus work, Part D — Core Consumer "Both" reason/direction.
