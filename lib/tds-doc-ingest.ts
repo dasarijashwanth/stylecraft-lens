@@ -22,6 +22,31 @@ import { isSupabaseConfigured } from "./supabase";
 export const MAX_SOURCE_DOC_SIZE_BYTES = 20 * 1024 * 1024;
 export const ALLOWED_SOURCE_DOC_TYPES: SourceDocType[] = ["tds", "spec_sheet", "sales_kit", "other"];
 
+// The finalize route this feeds has `export const maxDuration = 60` (Vercel
+// Hobby's hard cap) — a scanned/image-based PDF's OCR vision fallback alone
+// can take up to ~57s worst-case (a 45s first attempt + a 10s retry, see
+// lib/openai.ts's createResponseWithRetry), and extractStructuredFacts adds
+// its own up-to-30s AI call on top of that. Confirmed live: this combination
+// exceeded the platform's hard timeout, which returns a plain HTML error
+// page instead of JSON — the browser's `res.json()` then crashes with
+// "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON" instead of a
+// legible error, for EVERY upload that happened to need OCR. Bounding both
+// AI-heavy steps to a shared wall-clock budget (same withDeadline/Promise.race
+// idiom already used in lib/analysisEngine.ts and lib/indie-brand-lineup.ts)
+// guarantees this function always returns within Vercel's window — a slow
+// extraction degrades to "extraction failed"/zero facts (the document is
+// still saved and viewable) instead of the whole request dying mid-flight.
+export const INGEST_DEADLINE_MS = 42_000;
+
+// Exported for direct verification (scripts/verify-tds-doc-ingestion.ts) —
+// the real AI providers aren't reachable offline, so there's no way to make
+// extractSourceDocContent itself actually run long in a test environment;
+// testing this mechanism directly is the only way to cover the fix.
+export async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  const timeout = new Promise<T>(resolve => setTimeout(() => resolve(fallback), Math.max(0, ms)));
+  return Promise.race([promise, timeout]);
+}
+
 function inferFormatFromFileName(fileName: string): SourceDocFormat | null {
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".pdf")) return "pdf";
@@ -63,6 +88,14 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
   }
   const detected = detectDocType(input.buffer);
   if (detected === null || detected !== expectedFormat) {
+    // Diagnostic only (never blocks/changes the rejection) — this exact
+    // check has already needed widening once in production (the PDF sniff
+    // window was too small for a real, unmodified file); logging the
+    // leading bytes means a future edge case is debuggable from server
+    // logs instead of requiring the file itself to be reproduced.
+    console.warn(
+      `[tds-doc-ingest] rejected "${input.fileName}" — expected ${expectedFormat}, detected ${detected ?? "null"}. First 32 bytes (hex): ${input.buffer.subarray(0, 32).toString("hex")}`
+    );
     throw Object.assign(new Error("File content doesn't match its extension — a real PDF/XLSX/DOCX is required"), { status: 400 });
   }
 
@@ -84,13 +117,19 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
     await setLocalFileBytes(document.id, input.buffer);
   }
 
-  const content = await extractSourceDocContent(input.buffer, expectedFormat);
+  const ingestStartTime = Date.now();
+  const content = await withDeadline(
+    extractSourceDocContent(input.buffer, expectedFormat),
+    INGEST_DEADLINE_MS,
+    { fullText: "", locations: [], extractionStatus: "failed" as const, extractionMethod: "failed" as const }
+  );
   await updateExtractionResult(document.id, content.fullText, content.extractionStatus);
 
   let factsFound = 0;
   let sampleFacts: { field_id: string; value: string; source_location: string | null }[] = [];
-  if (content.extractionStatus === "complete") {
-    const candidates = await extractStructuredFacts(content, input.productName);
+  const factsBudgetLeft = INGEST_DEADLINE_MS - (Date.now() - ingestStartTime);
+  if (content.extractionStatus === "complete" && factsBudgetLeft > 0) {
+    const candidates = await withDeadline(extractStructuredFacts(content, input.productName), factsBudgetLeft, []);
     if (candidates.length > 0) {
       await upsertFacts(
         document.id,

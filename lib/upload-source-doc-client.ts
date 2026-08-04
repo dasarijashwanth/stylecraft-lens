@@ -11,9 +11,24 @@ export interface UploadSourceDocResult {
   carriedForwardCount: number;
 }
 
+// A hard Vercel function kill (the route ran past its own maxDuration) or
+// any other infra-level failure returns a plain-text/HTML platform error
+// page, not this route's own JSON — a raw res.json() call crashes on that
+// with a confusing "Unexpected token '<', \"<!DOCTYPE \"... is not valid
+// JSON" surfaced straight to the user (confirmed live: every TDS upload
+// that needed the OCR fallback hit exactly this). Read the body as text
+// first and parse it ourselves so a non-JSON response degrades to an
+// honest, readable message instead — same pattern as
+// components/analyze/ProgressPanel.tsx's fetchJson().
 async function fetchJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
-  const data = await res.json();
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(res.ok ? "Unexpected response from server" : "Server took too long to respond — try a smaller file or try again");
+  }
   if (!res.ok) throw new Error(data.error || `Request to ${url} failed`);
   return data;
 }

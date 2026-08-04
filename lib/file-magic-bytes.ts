@@ -47,13 +47,18 @@ function zipContainsPath(buffer: Buffer, path: string): boolean {
   return buffer.includes(Buffer.from(path, "ascii"));
 }
 
-// Real-world PDFs frequently have a few leading bytes before "%PDF-" (a
-// UTF-8 BOM, or junk prepended by a scanner/third-party re-save tool) even
-// though byte 0 is what the spec recommends — every real PDF reader
-// (pdfjs, poppler, Acrobat itself) tolerates this and scans for the marker
-// within roughly the first 1KB rather than requiring it at offset 0.
-// Requiring an exact byte-0 match rejected genuine PDFs outright.
-const PDF_SNIFF_WINDOW_BYTES = 1024;
+// Real-world PDFs frequently have leading bytes before "%PDF-" (a UTF-8
+// BOM, or junk prepended by a scanner/third-party re-save tool) even though
+// byte 0 is what the spec recommends — every real PDF reader (pdfjs,
+// poppler, Acrobat itself) tolerates this. A 1KB sniff window (this file's
+// first fix for this exact class of bug) still rejected real, unmodified
+// PDFs in production — some scan-to-PDF/print-driver tools prepend an
+// embedded thumbnail preview or a large XMP metadata packet that can run
+// well past 1KB before the actual header. Widened to 64KB (a `buffer.
+// includes()` scan over that is still effectively free, and a tiny
+// fraction of MAX_SOURCE_DOC_SIZE_BYTES's 20MB cap) rather than guessing
+// at another still-too-small fixed number.
+const PDF_SNIFF_WINDOW_BYTES = 65536;
 const PDF_MARKER = Buffer.from("%PDF-", "ascii");
 
 export function detectDocType(buffer: Buffer): DetectedDocType {

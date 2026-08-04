@@ -104,6 +104,16 @@ async function main() {
   // rejected these as invalid uploads.
   const pdfWithLeadingJunk = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("%PDF-1.7\n%real content")]);
   assert(detectDocType(pdfWithLeadingJunk) === "pdf", "a real PDF with a few leading junk bytes (BOM/scanner artifact) before %PDF- is still detected");
+  // Regression test #2 — a REAL upload was still rejected in production
+  // even after the fix above: some scan-to-PDF/print-driver tools prepend
+  // an embedded thumbnail preview or a large XMP metadata packet that runs
+  // well past a 1KB sniff window before the actual "%PDF-" header. Widened
+  // to 64KB; this fixture's ~40KB preamble sits past the OLD 1KB window
+  // but comfortably within the new one.
+  const pdfWithLargePreamble = Buffer.concat([Buffer.alloc(40_000, 0x00), Buffer.from("%PDF-1.6\n%real content")]);
+  assert(detectDocType(pdfWithLargePreamble) === "pdf", "a real PDF with a ~40KB preamble (past the old 1KB window) is still detected after widening to 64KB");
+  const pdfWithPreambleBeyondWindow = Buffer.concat([Buffer.alloc(70_000, 0x00), Buffer.from("%PDF-1.6\n%real content")]);
+  assert(detectDocType(pdfWithPreambleBeyondWindow) === null, "a preamble genuinely beyond the 64KB window is still rejected — the check isn't a no-op");
   assert(detectDocType(xlsxBuffer) === "xlsx", "real xlsx buffer detected as xlsx (contains xl/workbook.xml)");
   assert(detectDocType(docxBuffer) === "docx", "real docx buffer detected as docx (contains word/document.xml)");
   const fakeHtml = Buffer.from("<html><body><script>alert(1)</script></body></html>");
@@ -114,6 +124,24 @@ async function main() {
     return z.generate({ type: "nodebuffer" }) as Buffer;
   })();
   assert(detectDocType(bareZip) === null, "a plain zip with neither xlsx nor docx's defining part is rejected");
+
+  // ---- Section 5b: ingest wall-clock deadline (lib/tds-doc-ingest.ts) ----
+  // Regression test — a real bug caught in production: the finalize route's
+  // maxDuration=60 (Vercel Hobby's hard cap) could be exceeded by a scanned
+  // PDF's OCR fallback + structured-fact extraction combined, which killed
+  // the whole function and returned a raw HTML error page instead of JSON
+  // (the browser then crashed trying to JSON.parse it). withDeadline is the
+  // fix's actual mechanism — can't exercise the real slow AI call offline,
+  // so this verifies the mechanism directly.
+  console.log("\n[5b] withDeadline — the mechanism guaranteeing ingestSourceDocUpload never blows past Vercel's cap");
+  const { withDeadline, INGEST_DEADLINE_MS } = await import("../lib/tds-doc-ingest");
+  const fastResult = await withDeadline(Promise.resolve("real result"), 5000, "fallback");
+  assert(fastResult === "real result", "a promise that resolves well within the deadline returns its real value");
+
+  const slowPromise = new Promise<string>(resolve => setTimeout(() => resolve("too slow"), 200));
+  const timedOutResult = await withDeadline(slowPromise, 20, "fallback (extraction failed)");
+  assert(timedOutResult === "fallback (extraction failed)", "a promise still running past the deadline resolves to the fallback instead of hanging the caller");
+  assert(INGEST_DEADLINE_MS < 60_000 && INGEST_DEADLINE_MS >= 30_000, `the shared deadline (${INGEST_DEADLINE_MS}ms) leaves real headroom under Vercel's 60s cap while still allowing a realistic AI call to finish`);
 
   // ---- Section 6: fill-ladder override (lib/gtm-uploaded-tds.ts) ----
   console.log("\n[6] applyUploadedTdsFacts — verbatim override, project_record is the only thing that outranks it");

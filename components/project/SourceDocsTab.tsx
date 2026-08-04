@@ -37,9 +37,18 @@ const DOC_TYPES: { key: SourceDocRow["doc_type"]; label: string; hint: string }[
   { key: "other", label: "Other", hint: "Any other reference document worth grounding generation in." },
 ];
 
+// Same defensive parsing as lib/upload-source-doc-client.ts's own
+// fetchJson — a raw res.json() crashes with a cryptic "Unexpected token
+// '<'" when the server returns an HTML error/platform page instead of JSON.
 async function fetchJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
-  const data = await res.json();
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(res.ok ? "Unexpected response from server" : "Server took too long to respond — try again");
+  }
   if (!res.ok) throw new Error(data.error || `Request to ${url} failed`);
   return data;
 }
