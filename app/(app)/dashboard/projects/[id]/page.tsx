@@ -46,6 +46,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
+import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTIONS, ROYALTY_PCT_BY_TYPE, type Country, type ProductType, type RoyaltyType } from "@/lib/tariff-multipliers";
+import { computePriceStack } from "@/lib/price-stack";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck" | "sources";
 type ReportTab = Exclude<Tab, "project-deck" | "sources">;
@@ -814,32 +816,277 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// TARIFF & LANDED-COST CALCULATOR — internal multiplier table (lib/tariff-
+// multipliers.ts) + instant, deterministic price-stack math (lib/price-
+// stack.ts), zero network calls. Persisted as a `tariff_price_stack` object
+// nested inside the SAME pricing_analysis JSONB blob the rest of this tab
+// already round-trips through — only the raw inputs are saved (country/
+// product type/royalty type/FOB/other/overrides); the multiplier and full
+// price stack are always re-derived live from those inputs (both here in
+// edit mode and in the read-only view below), so there's never a stale
+// cached number to fall out of sync with its own inputs.
+// ────────────────────────────────────────────────────────────────────────────
+interface TariffPriceStackData {
+  country?: Country;
+  product_type?: ProductType;
+  royalty_type?: RoyaltyType;
+  fob_cost?: number;
+  other_costs?: number;
+  royalty_pct_override?: number;
+  salon_price_override?: number;
+  retail_price_override?: number;
+  retail_touched?: boolean;
+}
+
+function gmBandClass(band: "green" | "amber" | "neutral"): string {
+  return band === "green" ? "text-success" : band === "amber" ? "text-warning" : "text-text-muted";
+}
+
+function fmtUsd(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+function TariffPriceStackEditor({ value, onChange }: { value: TariffPriceStackData; onChange: (v: TariffPriceStackData) => void }) {
+  const { country, product_type: productType, royalty_type: royaltyType } = value;
+  const fobCost = value.fob_cost ?? 0;
+  const otherCosts = value.other_costs ?? 0;
+  const defaultRoyaltyPct = royaltyType ? ROYALTY_PCT_BY_TYPE[royaltyType] : 0;
+  const royaltyPct = value.royalty_pct_override ?? defaultRoyaltyPct;
+
+  const multiplierResult = country && productType && royaltyType ? getMultiplier(country, productType, royaltyType) : null;
+  const stack = multiplierResult?.multiplier != null
+    ? computePriceStack({
+        fobCost, multiplier: multiplierResult.multiplier, royaltyPct, otherCosts,
+        salonPriceOverride: value.salon_price_override ?? null,
+        retailPriceOverride: value.retail_price_override ?? null,
+      })
+    : null;
+
+  function update(patch: Partial<TariffPriceStackData>) {
+    onChange({ ...value, ...patch });
+  }
+
+  function handleSalonChange(raw: string) {
+    const num = parseFloat(raw);
+    // Editing Salon reseeds Retail's own SUGGESTION only if the user hasn't
+    // manually touched Retail yet — an existing manual Retail edit is never
+    // clobbered by an upstream Salon change.
+    update({ salon_price_override: isNaN(num) ? undefined : num, ...(value.retail_touched ? {} : { retail_price_override: undefined }) });
+  }
+
+  function handleRetailChange(raw: string) {
+    const num = parseFloat(raw);
+    update({ retail_price_override: isNaN(num) ? undefined : num, retail_touched: true });
+  }
+
+  return (
+    <div className="space-y-4">
+      <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Tariff & Landed Cost Calculator</h4>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-text-secondary">Country of Origin</label>
+          <select
+            value={country || ""}
+            onChange={e => update({ country: (e.target.value || undefined) as Country | undefined })}
+            className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+          >
+            <option value="">Select…</option>
+            {COUNTRY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-text-secondary">Product Type</label>
+          <select
+            value={productType || ""}
+            onChange={e => update({ product_type: (e.target.value || undefined) as ProductType | undefined })}
+            className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+          >
+            <option value="">Select…</option>
+            {PRODUCT_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-text-secondary">Royalty Type</label>
+          <select
+            value={royaltyType || ""}
+            onChange={e => update({ royalty_type: (e.target.value || undefined) as RoyaltyType | undefined })}
+            className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+          >
+            <option value="">Select…</option>
+            {ROYALTY_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {country && productType && royaltyType && (
+        multiplierResult?.multiplier != null ? (
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-accent/10 border border-accent/25 rounded-lg">
+            <span className="text-[10px] text-text-muted uppercase font-bold">Multiplier</span>
+            <span className="text-sm font-black text-accent">{multiplierResult.multiplier.toFixed(2)}×</span>
+          </div>
+        ) : (
+          <div className="px-3 py-1.5 bg-danger-bg border border-danger/25 rounded-lg text-[11px] text-danger font-semibold">
+            {multiplierResult?.error}
+          </div>
+        )
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-text-secondary">FOB Cost ($)</label>
+          <input
+            type="number" step="0.01"
+            value={value.fob_cost ?? ""}
+            onChange={e => update({ fob_cost: e.target.value === "" ? undefined : parseFloat(e.target.value) })}
+            className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-text-secondary">Other Costs ($)</label>
+          <input
+            type="number" step="0.01"
+            value={value.other_costs ?? ""}
+            onChange={e => update({ other_costs: e.target.value === "" ? undefined : parseFloat(e.target.value) })}
+            className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-text-secondary">Royalty %{royaltyType ? ` (default ${(defaultRoyaltyPct * 100).toFixed(0)}%)` : ""}</label>
+          <input
+            type="number" step="0.1"
+            value={value.royalty_pct_override != null ? value.royalty_pct_override * 100 : (royaltyType ? defaultRoyaltyPct * 100 : "")}
+            onChange={e => update({ royalty_pct_override: e.target.value === "" ? undefined : parseFloat(e.target.value) / 100 })}
+            className="w-full px-2.5 py-1.5 border border-border rounded-lg bg-surface-1 text-text-primary text-[11px] outline-none focus:border-accent"
+          />
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => toast.success("Price stack recalculated")}
+        disabled={!stack}
+        className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+      >
+        Calculate
+      </button>
+
+      {stack && (
+        <div className="space-y-3 pt-3 border-t border-border/60">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
+            <div className="p-2.5 bg-surface-3/30 rounded-lg">
+              <div className="text-text-muted uppercase text-[9px] font-bold">Landed Cost</div>
+              <div className="font-bold text-text-primary">{fmtUsd(stack.landedCost)}</div>
+            </div>
+            <div className="p-2.5 bg-surface-3/30 rounded-lg">
+              <div className="text-text-muted uppercase text-[9px] font-bold">Adjusted Landed</div>
+              <div className="font-bold text-text-primary">{fmtUsd(stack.adjustedLanded)}</div>
+            </div>
+            <div className="p-2.5 bg-surface-3/30 rounded-lg space-y-0.5">
+              <div className="text-text-muted uppercase text-[9px] font-bold">Salon Price</div>
+              <input
+                type="number" step="0.01"
+                value={value.salon_price_override ?? stack.salonPrice.toFixed(2)}
+                onChange={e => handleSalonChange(e.target.value)}
+                className="w-full bg-transparent font-bold text-text-primary outline-none border-b border-border/40 focus:border-accent"
+              />
+              <div className={`text-[10px] font-bold ${gmBandClass(stack.gmSalonBand)}`}>{stack.gmSalonPct != null ? `${(stack.gmSalonPct * 100).toFixed(1)}% GM` : "—"}</div>
+            </div>
+            <div className="p-2.5 bg-surface-3/30 rounded-lg space-y-0.5">
+              <div className="text-text-muted uppercase text-[9px] font-bold">Dealer Price</div>
+              <div className="font-bold text-text-primary">{fmtUsd(stack.dealerPrice)}</div>
+              <div className={`text-[10px] font-bold ${gmBandClass(stack.gmDealerBand)}`}>{stack.gmDealerPct != null ? `${(stack.gmDealerPct * 100).toFixed(1)}% GM` : "—"}</div>
+            </div>
+          </div>
+
+          <div className="p-3 bg-accent/10 border border-accent/25 rounded-xl flex items-center justify-between">
+            <div>
+              <div className="text-[9px] text-text-muted uppercase font-bold">Target Retail Price</div>
+              <input
+                type="number" step="0.01"
+                value={value.retail_price_override ?? stack.retailPrice.toFixed(2)}
+                onChange={e => handleRetailChange(e.target.value)}
+                className="bg-transparent text-lg font-black text-accent outline-none border-b border-accent/30 focus:border-accent w-32"
+              />
+            </div>
+            <div className={`text-[11px] font-bold ${gmBandClass(stack.gmRetailBand)}`}>{stack.gmRetailPct != null ? `${(stack.gmRetailPct * 100).toFixed(1)}% GM` : "—"}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Read-only rendering of a saved tariff_price_stack — re-derives the
+// multiplier/full stack live from the saved raw inputs (same reasoning as
+// the editor above: never a stale cached number).
+function TariffPriceStackSummary({ tps }: { tps: TariffPriceStackData }) {
+  if (!tps.country || !tps.product_type || !tps.royalty_type) return null;
+  const mult = getMultiplier(tps.country, tps.product_type, tps.royalty_type);
+  if (mult.multiplier == null) {
+    return (
+      <MagicBentoCard className="p-4">
+        <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Tariff &amp; Landed Cost</span>
+        <p className="text-[11px] text-danger mt-1">{mult.error}</p>
+      </MagicBentoCard>
+    );
+  }
+  const royaltyPct = tps.royalty_pct_override ?? ROYALTY_PCT_BY_TYPE[tps.royalty_type];
+  const stack = computePriceStack({
+    fobCost: tps.fob_cost || 0, multiplier: mult.multiplier, royaltyPct, otherCosts: tps.other_costs || 0,
+    salonPriceOverride: tps.salon_price_override ?? null, retailPriceOverride: tps.retail_price_override ?? null,
+  });
+  return (
+    <MagicBentoCard className="p-4 flex items-center justify-between gap-4">
+      <div className="space-y-0.5">
+        <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Tariff &amp; Landed Cost</span>
+        <p className="text-[11px] text-text-secondary">
+          Multiplier <strong className="text-accent">{mult.multiplier.toFixed(2)}×</strong> · Landed {fmtUsd(stack.landedCost)} · Adjusted Landed {fmtUsd(stack.adjustedLanded)}
+        </p>
+      </div>
+      <div className="text-right shrink-0">
+        <div className="text-[9px] text-text-muted uppercase font-bold">Target Retail Price</div>
+        <div className={`text-lg font-black ${gmBandClass(stack.gmRetailBand)}`}>{fmtUsd(stack.retailPrice)}</div>
+      </div>
+    </MagicBentoCard>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // PRICING TAB VIEW & EDIT
 // ────────────────────────────────────────────────────────────────────────────
 function PricingTab({ data, editing, localData, setLocalData }: any) {
   if (editing) {
     return (
-      <MagicBentoCard className="p-5 space-y-4 text-xs">
-        <div className="space-y-1">
-          <label className="font-semibold text-text-primary">Pricing Index / Headline Positioning</label>
-          <input
-            type="text"
-            value={localData?.price_positioning || ""}
-            onChange={e => setLocalData({ ...localData, price_positioning: e.target.value })}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+      <div className="space-y-4">
+        <MagicBentoCard className="p-5 space-y-4 text-xs">
+          <div className="space-y-1">
+            <label className="font-semibold text-text-primary">Pricing Index / Headline Positioning</label>
+            <input
+              type="text"
+              value={localData?.price_positioning || ""}
+              onChange={e => setLocalData({ ...localData, price_positioning: e.target.value })}
+              className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="font-semibold text-text-primary">Pricing Strategy Notes</label>
+            <textarea
+              rows={5}
+              value={localData?.notes || ""}
+              onChange={e => setLocalData({ ...localData, notes: e.target.value })}
+              className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
+              placeholder="Type strategic pricing notes here..."
+            />
+          </div>
+        </MagicBentoCard>
+
+        <MagicBentoCard className="p-5 text-xs">
+          <TariffPriceStackEditor
+            value={localData?.tariff_price_stack || {}}
+            onChange={v => setLocalData({ ...localData, tariff_price_stack: v })}
           />
-        </div>
-        <div className="space-y-1">
-          <label className="font-semibold text-text-primary">Pricing Strategy Notes</label>
-          <textarea
-            rows={5}
-            value={localData?.notes || ""}
-            onChange={e => setLocalData({ ...localData, notes: e.target.value })}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
-            placeholder="Type strategic pricing notes here..."
-          />
-        </div>
-      </MagicBentoCard>
+        </MagicBentoCard>
+      </div>
     );
   }
 
@@ -851,6 +1098,8 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
         <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Price Positioning Headline</span>
         <p className="text-sm font-bold text-text-primary mt-1">{data.price_positioning || "No pricing headline recorded."}</p>
       </MagicBentoCard>
+
+      {data.tariff_price_stack && <TariffPriceStackSummary tps={data.tariff_price_stack} />}
 
       <MagicBentoCard className="p-4 space-y-2">
         <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Competitor Price Index</h4>
