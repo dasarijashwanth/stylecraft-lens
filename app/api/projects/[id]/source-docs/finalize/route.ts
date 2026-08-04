@@ -17,6 +17,12 @@ const SOURCE_DOC_PATH_RE = /^[a-zA-Z0-9_-]+\/\d+-[a-zA-Z0-9._-]+$/;
 // downloads them back server-side to validate, extract, and register the
 // document.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  // Captured before auth/download/anything else — lib/tds-doc-ingest.ts's
+  // shared wall-clock deadline is measured from here, not from whenever
+  // ingestSourceDocUpload happens to start, so a slow Storage download for
+  // a large file is correctly counted against the same budget instead of
+  // being invisible overhead that could push the total past Vercel's 60s cap.
+  const routeStartTime = Date.now();
   try {
     const session = await getAuthSession();
     const project = await getProject(params.id, session.orgId);
@@ -43,6 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       mimeType: data.type || "application/octet-stream",
       productName: project.productName,
       uploadedBy: session.email,
+      routeStartTime,
     });
 
     return NextResponse.json({

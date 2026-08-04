@@ -26,6 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 // body-size limit there) — see .../upload-url + .../finalize for the
 // signed-URL flow real deployments use instead.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const routeStartTime = Date.now();
   try {
     const session = await getAuthSession();
     const project = await getProject(params.id, session.orgId);
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       mimeType: file.type || "application/octet-stream",
       productName: project.productName,
       uploadedBy: session.email,
+      routeStartTime,
     });
 
     return NextResponse.json({

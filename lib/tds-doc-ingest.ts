@@ -36,6 +36,15 @@ export const ALLOWED_SOURCE_DOC_TYPES: SourceDocType[] = ["tds", "spec_sheet", "
 // guarantees this function always returns within Vercel's window — a slow
 // extraction degrades to "extraction failed"/zero facts (the document is
 // still saved and viewable) instead of the whole request dying mid-flight.
+//
+// Measured from the ROUTE's own start (input.routeStartTime), not from
+// whenever this function happens to be called — the first version of this
+// fix measured only from this function's own entry, which left the
+// finalize route's Storage download (which can itself take real time for
+// a large file) uncounted; a slow download plus a still-generous 42s
+// ingestion budget could together still creep past the 60s ceiling. Same
+// "one shared clock from the true start" discipline as
+// lib/analysisEngine.ts's RAINFOREST_STEP_DEADLINE_MS.
 export const INGEST_DEADLINE_MS = 42_000;
 
 // Exported for direct verification (scripts/verify-tds-doc-ingestion.ts) —
@@ -64,6 +73,13 @@ export interface IngestSourceDocInput {
   mimeType: string;
   productName: string;
   uploadedBy?: string | null;
+  // Captured at the very top of the calling route handler, BEFORE the
+  // Storage download — lets the shared deadline below account for time
+  // already spent on the download/auth/DB lookups that happen before this
+  // function is even called, not just this function's own internal work.
+  // Defaults to "now" (effectively un-budgeted) only for callers that
+  // genuinely have no earlier reference point.
+  routeStartTime?: number;
 }
 
 export interface IngestSourceDocResult {
@@ -117,17 +133,18 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
     await setLocalFileBytes(document.id, input.buffer);
   }
 
-  const ingestStartTime = Date.now();
+  const routeStartTime = input.routeStartTime ?? Date.now();
+  const extractionBudget = Math.max(0, INGEST_DEADLINE_MS - (Date.now() - routeStartTime));
   const content = await withDeadline(
     extractSourceDocContent(input.buffer, expectedFormat),
-    INGEST_DEADLINE_MS,
+    extractionBudget,
     { fullText: "", locations: [], extractionStatus: "failed" as const, extractionMethod: "failed" as const }
   );
   await updateExtractionResult(document.id, content.fullText, content.extractionStatus);
 
   let factsFound = 0;
   let sampleFacts: { field_id: string; value: string; source_location: string | null }[] = [];
-  const factsBudgetLeft = INGEST_DEADLINE_MS - (Date.now() - ingestStartTime);
+  const factsBudgetLeft = Math.max(0, INGEST_DEADLINE_MS - (Date.now() - routeStartTime));
   if (content.extractionStatus === "complete" && factsBudgetLeft > 0) {
     const candidates = await withDeadline(extractStructuredFacts(content, input.productName), factsBudgetLeft, []);
     if (candidates.length > 0) {
