@@ -277,6 +277,7 @@ export interface MockUploadedSourceDoc {
   isActive: boolean;
   fullText: string | null;
   extractionStatus: string; // pending | complete | failed
+  factsExtractionStatus?: string; // not_attempted | complete | failed
   uploadedBy: string | null;
   uploadedAt: Date;
   updatedAt: Date;

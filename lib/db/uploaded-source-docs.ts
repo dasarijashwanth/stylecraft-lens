@@ -25,6 +25,12 @@ export interface UploadedSourceDocRow {
   is_active: boolean;
   full_text: string | null;
   extraction_status: "pending" | "complete" | "failed";
+  // Tracks the SEPARATE structured-facts-derivation step (lib/tds-doc-
+  // facts.ts's extractStructuredFacts), distinct from extraction_status
+  // above (content extraction). "not_attempted" is the default/pre-this-
+  // column value — deliberately distinct from "failed" so old rows don't
+  // retroactively show an error they never had.
+  facts_extraction_status: "not_attempted" | "complete" | "failed";
   uploaded_by: string | null;
   uploaded_at: string;
   updated_at: string;
@@ -43,6 +49,7 @@ function mockToRow(d: MockUploadedSourceDoc): UploadedSourceDocRow {
     is_active: d.isActive,
     full_text: d.fullText,
     extraction_status: d.extractionStatus as "pending" | "complete" | "failed",
+    facts_extraction_status: (d.factsExtractionStatus ?? "not_attempted") as "not_attempted" | "complete" | "failed",
     uploaded_by: d.uploadedBy,
     uploaded_at: d.uploadedAt.toISOString(),
     updated_at: d.updatedAt.toISOString(),
@@ -136,6 +143,7 @@ export async function createNewVersion(input: {
         version: nextVersion,
         is_active: true,
         extraction_status: "pending",
+        facts_extraction_status: "not_attempted",
         uploaded_by: input.uploadedBy ?? null,
       })
       .select()
@@ -165,6 +173,7 @@ export async function createNewVersion(input: {
     isActive: true,
     fullText: null,
     extractionStatus: "pending",
+    factsExtractionStatus: "not_attempted",
     uploadedBy: input.uploadedBy ?? null,
     uploadedAt: now,
     updatedAt: now,
@@ -195,6 +204,22 @@ export async function updateExtractionResult(id: string, fullText: string, statu
   if (row) {
     row.fullText = fullText;
     row.extractionStatus = status;
+    row.updatedAt = new Date();
+  }
+}
+
+export async function updateFactsExtractionStatus(id: string, status: "complete" | "failed"): Promise<void> {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin
+      .from("uploaded_source_docs")
+      .update({ facts_extraction_status: status, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) throw error;
+    return;
+  }
+  const row = memoryDb.uploadedSourceDocs.find(d => d.id === id);
+  if (row) {
+    row.factsExtractionStatus = status;
     row.updatedAt = new Date();
   }
 }

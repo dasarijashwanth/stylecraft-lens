@@ -55,8 +55,14 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ["var(--font-sans)", "Inter", "sans-serif"],
-        display: ["var(--font-display)", "DM Sans", "sans-serif"],
+        // 4-role brand system — see app/globals.css's own header comment on
+        // these tokens. `sans` is a back-compat alias (resolves to the same
+        // var as `ui`) so existing `font-sans` usages pick up Montserrat
+        // automatically; prefer `font-ui` in new code.
+        sans: ["var(--font-sans)", "Montserrat", "sans-serif"],
+        ui: ["var(--font-ui)", "Montserrat", "sans-serif"],
+        display: ["var(--font-display)", "Jost", "sans-serif"],
+        "body-doc": ["var(--font-body-doc)", "Roboto", "sans-serif"],
         mono: ["var(--font-mono)", "JetBrains Mono", "monospace"],
       },
       borderRadius: {

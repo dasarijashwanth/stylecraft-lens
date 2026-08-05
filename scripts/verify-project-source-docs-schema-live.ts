@@ -60,6 +60,17 @@ async function main() {
     console.log(`✓ documents.source_doc_versions column exists`);
   }
 
+  // Section 50 — tracks facts-derivation's OWN AI-call success/failure,
+  // separate from extraction_status (content extraction). Confirms the
+  // "silent empty vs. genuine error" fix's persisted signal actually exists.
+  const { error: factsStatusColError } = await supabase.from("uploaded_source_docs").select("facts_extraction_status").limit(1);
+  if (factsStatusColError) {
+    console.log(`✗ uploaded_source_docs.facts_extraction_status column: ${factsStatusColError.message}`);
+    ok = false;
+  } else {
+    console.log(`✓ uploaded_source_docs.facts_extraction_status column exists`);
+  }
+
   const { data: buckets, error: bucketErr } = await supabase.storage.listBuckets();
   if (bucketErr) {
     console.log(`✗ Could not list Storage buckets: ${bucketErr.message}`);

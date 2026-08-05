@@ -28,7 +28,9 @@ import {
   Undo2,
   AlertCircle,
   Mail,
-  BookmarkPlus
+  BookmarkPlus,
+  Star,
+  Minus
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
@@ -379,7 +381,7 @@ export default function ProjectDetailPage() {
               ) : activeTab === "project-deck" ? (
                 <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : activeTab === "content-form" ? (
-                <ContentFormSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
+                <ContentFormSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} pipelineErrorMessage={pipelineState?.error_message} />
               ) : selectedReport ? (
                 <ReportTabContent
                   report={selectedReport}
@@ -727,7 +729,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
           <ul className="space-y-2">
             {threats.map((t: any, i: number) => (
               <li key={i} className="flex gap-2">
-                <span className="text-danger font-bold mt-0.5">−</span>
+                <span className="text-danger font-bold mt-0.5"><Minus className="w-3 h-3" /></span>
                 <p className="text-text-secondary">
                   <strong className="text-text-primary">{t.competitor_name}:</strong> {t.threat_description}
                 </p>
@@ -744,7 +746,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
           <ul className="space-y-2">
             {opps.map((o: any, i: number) => (
               <li key={i} className="flex gap-2">
-                <span className="text-success font-bold mt-0.5">+</span>
+                <span className="text-success font-bold mt-0.5"><Plus className="w-3 h-3" /></span>
                 <p className="text-text-secondary">
                   <strong className="text-text-primary">{o.action}:</strong> {o.description}
                 </p>
@@ -768,7 +770,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               <div className="text-[10px] text-text-muted flex justify-between">
                 <span>Brand: {c.brand}</span>
                 <span className="text-text-secondary font-bold">{c.price || "—"}</span>
-                <span>★ {c.rating || "—"} ({c.review_count || "—"})</span>
+                <span className="inline-flex items-center gap-0.5"><Star className="w-2.5 h-2.5 fill-warning text-warning" /> {c.rating || "—"} ({c.review_count || "—"})</span>
               </div>
               {c.verified_by_rainforest === false && (
                 <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-warning-bg border border-warning/20 text-warning uppercase tracking-wider">
@@ -795,7 +797,7 @@ function CompetitiveAnalysisTab({ data, editing, localData, setLocalData }: any)
               <div className="text-[10px] text-text-muted flex justify-between">
                 <span>Brand: {c.brand}</span>
                 <span className="text-text-secondary font-bold">{c.price || "—"}</span>
-                <span>★ {c.rating || "—"} ({c.review_count || "—"})</span>
+                <span className="inline-flex items-center gap-0.5"><Star className="w-2.5 h-2.5 fill-warning text-warning" /> {c.rating || "—"} ({c.review_count || "—"})</span>
               </div>
               {c.verified_by_rainforest === false && (
                 <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-warning-bg border border-warning/20 text-warning uppercase tracking-wider">
@@ -1040,13 +1042,13 @@ function TariffPriceStackSummary({ tps }: { tps: TariffPriceStackData }) {
     <MagicBentoCard className="p-4 flex items-center justify-between gap-4">
       <div className="space-y-0.5">
         <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Tariff &amp; Landed Cost</span>
-        <p className="text-[11px] text-text-secondary">
+        <p className="text-[11px] text-text-secondary font-mono tabular-nums">
           Multiplier <strong className="text-accent">{mult.multiplier.toFixed(2)}×</strong> · Landed {fmtUsd(stack.landedCost)} · Adjusted Landed {fmtUsd(stack.adjustedLanded)}
         </p>
       </div>
       <div className="text-right shrink-0">
         <div className="text-[9px] text-text-muted uppercase font-bold">Target Retail Price</div>
-        <div className={`text-lg font-black ${gmBandClass(stack.gmRetailBand)}`}>{fmtUsd(stack.retailPrice)}</div>
+        <div className={`text-lg font-black font-mono tabular-nums ${gmBandClass(stack.gmRetailBand)}`}>{fmtUsd(stack.retailPrice)}</div>
       </div>
     </MagicBentoCard>
   );
@@ -1117,7 +1119,7 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
               {prices.map((p: any, i: number) => (
                 <tr key={i} className="border-b border-border hover:bg-surface-3/10 transition-colors">
                   <td className="p-3 font-semibold text-text-primary">{p.name}</td>
-                  <td className="p-3 font-mono text-accent font-bold">{p.price || "—"}</td>
+                  <td className="p-3 font-mono tabular-nums text-accent font-bold">{p.price || "—"}</td>
                   <td className="p-3">
                     <span className={`inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
                       p.tier === "large" ? "bg-indigo-950 text-indigo-300" : "bg-emerald-950 text-emerald-300"
@@ -1162,7 +1164,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
           rows={3}
           value={localData?.positioning || ""}
           onChange={e => setLocalData({ ...localData, positioning: e.target.value })}
-          className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
+          className="font-body-doc w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
         />
       </div>
       <div className="space-y-1">
@@ -1171,7 +1173,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
           rows={4}
           value={localData?.notes || ""}
           onChange={e => setLocalData({ ...localData, notes: e.target.value })}
-          className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
+          className="font-body-doc w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
           placeholder="Type strategic details..."
         />
       </div>
@@ -1199,7 +1201,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
             <MagicBentoSection className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <MagicBentoCard className="p-4 md:col-span-2">
                 <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Core Positioning Statement</span>
-                <p className="text-text-primary leading-relaxed mt-1 italic">{data.positioning || "No core positioning recorded."}</p>
+                <p className="font-body-doc text-text-primary leading-relaxed mt-1 italic">{data.positioning || "No core positioning recorded."}</p>
               </MagicBentoCard>
 
                 <MagicBentoCard className="p-4 space-y-2.5">
@@ -1710,7 +1712,8 @@ function ProductKnowledgeSection({
       const res = await fetch(`/api/documents/gtm/${documentId}/refill-from-sources`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      toast.success(data.changed > 0 ? `Updated ${data.changed} field(s) from your sources` : "No spec fields needed updating — nothing changed");
+      const retriedNote = data.factsRetried > 0 ? ` (retried extraction on ${data.factsRetried} source doc${data.factsRetried === 1 ? "" : "s"})` : "";
+      toast.success(data.changed > 0 ? `Updated ${data.changed} field(s) from your sources${retriedNote}` : `No spec fields needed updating — nothing changed${retriedNote}`);
       await loadDocument();
     } catch (err: any) {
       toast.error(err.message || "Failed to re-fill from sources");
@@ -1992,6 +1995,18 @@ function ProductKnowledgeSection({
               <span>Download XLSX</span>
             </a>
             {documentId && <SaveToDriveButton docType="gtm-xlsx" id={documentId} initialDriveUrl={xlsxDriveUrl} />}
+            {documentId && (
+              <button
+                type="button"
+                onClick={handleRefillFromSources}
+                disabled={refilling}
+                title="Retries extraction on any uploaded source doc that hasn't successfully produced facts yet, then re-syncs spec fields from all of them — never touches a field you've edited by hand"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {refilling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                <span>Fill blanks from sources</span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -2159,7 +2174,7 @@ function ProductKnowledgeSection({
                           value={entry?.answer || ""}
                           onChange={e => handleFieldChange(f.id, e.target.value)}
                           title={flagged ? flagReason(entry?.source_detail) : undefined}
-                          className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
+                          className={`font-body-doc w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
                             flagged ? "border-danger/40" : "border-border"
                           }`}
                         />
@@ -2228,8 +2243,8 @@ const CONTENT_FORM_GROUP_LABELS: Record<string, string> = {
 };
 
 function CharLimitTextarea({
-  value, limit, onChange, flagged,
-}: { value: string; limit: number; onChange: (v: string) => void; flagged?: boolean }) {
+  value, limit, onChange, flagged, className,
+}: { value: string; limit: number; onChange: (v: string) => void; flagged?: boolean; className?: string }) {
   const overLimit = value.length > limit;
   return (
     <div className="space-y-0.5">
@@ -2237,7 +2252,7 @@ function CharLimitTextarea({
         rows={2}
         value={value}
         onChange={e => onChange(e.target.value)}
-        className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
+        className={`${className || ""} w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
           overLimit || flagged ? "border-danger/40" : "border-border"
         }`}
       />
@@ -2249,8 +2264,8 @@ function CharLimitTextarea({
 }
 
 function ContentFormSection({
-  projectId, pipelineStatus, pipelinePhase,
-}: { projectId: string; pipelineStatus?: string; pipelinePhase?: string }) {
+  projectId, pipelineStatus, pipelinePhase, pipelineErrorMessage,
+}: { projectId: string; pipelineStatus?: string; pipelinePhase?: string; pipelineErrorMessage?: string | null }) {
   const isGlass = useGlassMode();
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
@@ -2424,6 +2439,13 @@ function ContentFormSection({
   const isContentFormPhaseRunning = pipelinePhase === "content_form" && pipelineStatus === "running";
   const isQueued = !hasDocument && !isContentFormPhaseRunning && (pipelineStatus === "pending" || pipelineStatus === "running");
   const pipelineFailed = !hasDocument && pipelineStatus === "failed";
+  // A document row exists (created up-front, see lib/project-generation-
+  // engine.ts's content_form phase) but generation itself threw before any
+  // fields got saved — distinct from "never queued at all." Gated on the
+  // engine's own message prefix so an unrelated phase's error never
+  // misattributes here.
+  const contentFormGenerationErrored =
+    completedCount === 0 && !!pipelineErrorMessage && pipelineErrorMessage.startsWith("Content Form generation had an error");
 
   function renderField(f: (typeof CONTENT_FORM_SCHEMA)[number]) {
     const entry = fields[f.id];
@@ -2466,14 +2488,14 @@ function ContentFormSection({
             </div>
           </div>
           {f.charLimit ? (
-            <CharLimitTextarea value={entry?.answer || ""} limit={f.charLimit} onChange={v => handleFieldChange(f.id, v)} flagged={flagged} />
+            <CharLimitTextarea value={entry?.answer || ""} limit={f.charLimit} onChange={v => handleFieldChange(f.id, v)} flagged={flagged} className="font-body-doc" />
           ) : (
             <textarea
               rows={2}
               value={entry?.answer || ""}
               onChange={e => handleFieldChange(f.id, e.target.value)}
               title={flagged ? flagReason(entry?.source_detail) : undefined}
-              className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${flagged ? "border-danger/40" : "border-border"}`}
+              className={`font-body-doc w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${flagged ? "border-danger/40" : "border-border"}`}
             />
           )}
           <div className="flex items-center gap-2">
@@ -2549,10 +2571,15 @@ function ContentFormSection({
             ? "Queued for automatic generation once Product Knowledge completes."
             : pipelineFailed
             ? "Automatic generation failed — use Retry above to resume."
-            : "This project hasn't been queued for Go-To-Market generation yet."}
+            : "This project's Content Form hasn't been generated yet — it runs automatically right after Go-To-Market, or can be backfilled for existing projects (see scripts/backfill-content-form-phase.ts)."}
         </p>
       ) : (
         <div className="divide-y divide-border/60">
+          {contentFormGenerationErrored && (
+            <div className="p-4 flex items-center justify-between gap-3 bg-danger-bg border-b border-danger/20">
+              <p className="text-[11px] text-danger">{pipelineErrorMessage}</p>
+            </div>
+          )}
           {CONTENT_FORM_SECTIONS.map(section => {
             const sectionFields = CONTENT_FORM_SCHEMA.filter(f => f.section === section);
             // Website Copy Block is special-cased as a 3x2 grid (3 short-copy

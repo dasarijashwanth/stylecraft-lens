@@ -34,8 +34,12 @@ export interface LogCallFields {
   docType?: string;
   fileSizeBytes?: number;
   referenceId?: string;
+  // document-field-resolve scope (per-field fill-ladder tier trace)
+  documentId?: string;
+  fieldId?: string;
+  source?: string;
 }
 
-export function logCall(scope: "rainforest" | "review-tier" | "generation-pipeline" | "openai" | "source-doc-upload", fields: LogCallFields): void {
+export function logCall(scope: "rainforest" | "review-tier" | "generation-pipeline" | "openai" | "source-doc-upload" | "document-field-resolve", fields: LogCallFields): void {
   console.warn(`[${scope}] ${JSON.stringify(fields)}`);
 }

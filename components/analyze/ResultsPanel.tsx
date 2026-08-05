@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CompetitorCard, EmptySlotCard } from "./CompetitorCard";
-import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download } from "lucide-react";
+import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download, Minus, Plus } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
@@ -477,7 +477,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           <ul className="threats-list grid grid-cols-1 gap-2 text-xs">
             {phase3.top_threats?.map((threat, i) => (
               <li key={i} className="threat-item flex items-start gap-2.5 leading-normal">
-                <span className="threat-bullet text-danger font-bold mt-0.5">−</span>
+                <span className="threat-bullet text-danger font-bold mt-0.5"><Minus className="w-3 h-3" /></span>
                 <p className="text-text-secondary">
                   <strong className="text-text-primary font-semibold">{threat.competitor_name}:</strong>{" "}
                   {threat.threat_description}
@@ -496,7 +496,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           <ul className="opps-list grid grid-cols-1 gap-2 text-xs">
             {phase3.top_opportunities?.map((opp, i) => (
               <li key={i} className="opp-item flex items-start gap-2.5 leading-normal">
-                <span className="opp-bullet text-success font-bold mt-0.5">+</span>
+                <span className="opp-bullet text-success font-bold mt-0.5"><Plus className="w-3 h-3" /></span>
                 <p className="text-text-secondary">
                   <strong className="text-text-primary font-semibold">{opp.action}:</strong>{" "}
                   {opp.description}
@@ -740,7 +740,7 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
     // available." Omitted entirely for a 'none'-criterion tool type.
     ...(criterionRow ? [criterionRow] : []),
     { label: "Amazon Price", getValue: (c) => c.price || null },
-    { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} ★` : null), getEmptyLabel: amazonOnlyEmptyLabel },
+    { label: "Star Rating", getValue: (c) => (c.rating ? `${c.rating} / 5` : null), getEmptyLabel: amazonOnlyEmptyLabel },
     { label: "Review Count", getValue: (c) => c.review_count || null, getEmptyLabel: amazonOnlyEmptyLabel },
     { label: "Monthly Sales", getValue: (c) => c.monthly_sales || null, getEmptyLabel: amazonOnlyEmptyLabel },
     { label: "Best Seller Rank", getValue: (c) => c.bsr_rank || null, getEmptyLabel: amazonOnlyEmptyLabel },

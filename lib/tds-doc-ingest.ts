@@ -14,6 +14,7 @@ import { extractStructuredFacts } from "./tds-doc-facts";
 import {
   createNewVersion,
   updateExtractionResult,
+  updateFactsExtractionStatus,
   setLocalFileBytes,
   listVersionsForProjectDocType,
   getSourceDocById,
@@ -224,6 +225,11 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
 export interface DeriveFactsResult {
   factsFound: number;
   sampleFacts: { field_id: string; value: string; source_location: string | null }[];
+  // True when the AI call itself failed/timed out (or ran out of time
+  // budget before even starting) — distinct from a successful call that
+  // legitimately found zero facts. See lib/tds-doc-facts.ts's
+  // StructuredFactsResult for the underlying distinction.
+  extractionError: boolean;
 }
 
 // Structured fact extraction (extractStructuredFacts's own AI call, up to
@@ -244,15 +250,25 @@ export interface DeriveFactsResult {
 export async function deriveFactsForDoc(documentId: string, projectId: string, productName: string, routeStartTime?: number): Promise<DeriveFactsResult> {
   const doc = await getSourceDocById(documentId);
   if (!doc || doc.extraction_status !== "complete" || !doc.full_text) {
-    return { factsFound: 0, sampleFacts: [] };
+    // Content extraction itself never completed — nothing to derive facts
+    // FROM, which is a different, already-surfaced failure (extraction_status
+    // on the doc itself), not a facts-derivation error in its own right.
+    return { factsFound: 0, sampleFacts: [], extractionError: false };
   }
 
   const content: ExtractedDocContent = { fullText: doc.full_text, locations: [], extractionStatus: "complete", extractionMethod: "text-layer" };
   const start = routeStartTime ?? Date.now();
   const budget = Math.max(0, FACTS_DERIVATION_DEADLINE_MS - (Date.now() - start));
-  if (budget <= 0) return { factsFound: 0, sampleFacts: [] };
+  if (budget <= 0) {
+    await updateFactsExtractionStatus(documentId, "failed");
+    return { factsFound: 0, sampleFacts: [], extractionError: true };
+  }
 
-  const candidates = await withDeadline(extractStructuredFacts(content, productName), budget, []);
+  const { candidates, aiCallFailed } = await withDeadline(
+    extractStructuredFacts(content, productName),
+    budget,
+    { candidates: [], aiCallFailed: true }
+  );
   if (candidates.length > 0) {
     await upsertFacts(
       documentId,
@@ -260,8 +276,10 @@ export async function deriveFactsForDoc(documentId: string, projectId: string, p
       candidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location }))
     );
   }
+  await updateFactsExtractionStatus(documentId, aiCallFailed ? "failed" : "complete");
   return {
     factsFound: candidates.length,
     sampleFacts: candidates.slice(0, 5).map(c => ({ field_id: c.field_id, value: c.value, source_location: c.source_location ?? null })),
+    extractionError: aiCallFailed,
   };
 }

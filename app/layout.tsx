@@ -3,6 +3,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "next-themes";
 import TargetCursor from "@/components/ui/TargetCursor";
 import { ThemedToaster } from "@/components/theme/ThemedToaster";
+import { fontVariables } from "@/lib/fonts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -28,7 +29,7 @@ export default function RootLayout({
 
   if (useClerk) {
     return (
-      <html lang="en" suppressHydrationWarning>
+      <html lang="en" suppressHydrationWarning className={fontVariables}>
         <ClerkProvider publishableKey={publishableKey}>
           <body className="bg-bg text-text-primary antialiased">
             {content}
@@ -39,7 +40,7 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className={fontVariables}>
       <body className="bg-bg text-text-primary antialiased">
         {content}
       </body>

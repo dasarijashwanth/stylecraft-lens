@@ -132,7 +132,13 @@ async function main() {
   // ---- Section 4: structured fact extraction — graceful no-key behavior ----
   console.log("\n[4] extractStructuredFacts — no OpenAI key configured in this environment");
   const facts = await extractStructuredFacts({ fullText: "Motor Type: Brushless. RPM: 7200.", locations: [], extractionStatus: "complete", extractionMethod: "text-layer" }, "Test Product");
-  assert(Array.isArray(facts) && facts.length === 0, "gracefully returns an empty array rather than inventing content");
+  assert(Array.isArray(facts.candidates) && facts.candidates.length === 0, "gracefully returns empty candidates rather than inventing content");
+  // No API key configured is, from callAiForJson's perspective, the same
+  // "the call could not complete" outcome a real network/timeout failure
+  // produces — correctly reported as aiCallFailed:true, not silently
+  // conflated with "the document genuinely has zero specs" (see
+  // lib/tds-doc-facts.ts's StructuredFactsResult).
+  assert(facts.aiCallFailed === true, "reports aiCallFailed:true (not a silent empty) when the AI call can't complete");
 
   // ---- Section 5: magic-byte security ----
   console.log("\n[5] detectDocType — real signatures vs. mislabeled/foreign content");
@@ -199,13 +205,20 @@ async function main() {
   const derived = await deriveFactsForDoc(factsDoc.id, FACTS_TEST_PROJECT_ID, "Test Product");
   assert(Array.isArray(derived.sampleFacts) && derived.factsFound === derived.sampleFacts.length || derived.factsFound >= derived.sampleFacts.length, "deriveFactsForDoc returns a consistent {factsFound, sampleFacts} shape");
   assert(derived.factsFound === 0, "with no OpenAI/Gemini key configured, deriveFactsForDoc gracefully returns 0 facts rather than inventing content (matches extractStructuredFacts's own established no-key behavior)");
+  assert(derived.extractionError === true, "no key configured correctly reports extractionError:true — a REAL bug, not a silent empty-facts result");
 
   const pendingDoc = await createNewVersion({ projectId: FACTS_TEST_PROJECT_ID, docType: "spec_sheet", filePath: "p_pending", fileName: "pending-test.pdf", fileSizeBytes: 50, mimeType: "application/pdf" });
   const derivedPending = await deriveFactsForDoc(pendingDoc.id, FACTS_TEST_PROJECT_ID, "Test Product");
   assert(derivedPending.factsFound === 0 && derivedPending.sampleFacts.length === 0, "a document whose content extraction hasn't completed yet (still 'pending') is skipped gracefully, never crashes");
+  assert(derivedPending.extractionError === false, "content extraction not being done yet is NOT itself a facts-derivation error — nothing was attempted");
 
   const zeroBudgetResult = await deriveFactsForDoc(factsDoc.id, FACTS_TEST_PROJECT_ID, "Test Product", Date.now() - 999_999);
   assert(zeroBudgetResult.factsFound === 0, "a routeStartTime already past the deadline skips the AI call entirely instead of attempting it with a negative/zero budget");
+  assert(zeroBudgetResult.extractionError === true, "running out of time budget before even attempting the call is correctly reported as an error, not a silent empty");
+
+  const { getSourceDocById: getFactsTestDoc } = await import("../lib/db/uploaded-source-docs");
+  const factsDocAfter = await getFactsTestDoc(factsDoc.id);
+  assert(factsDocAfter?.facts_extraction_status === "failed", "the failure is persisted on the doc row (facts_extraction_status), so it's visible on a later page load, not just in this one response");
 
   // ---- Section 5d: DOC/XLS/CSV support (Sources tab upload hardening) ----
   console.log("\n[5d] Legacy XLS — SheetJS's own XLSX.read auto-detects BIFF, extractXlsxContent already handles it");

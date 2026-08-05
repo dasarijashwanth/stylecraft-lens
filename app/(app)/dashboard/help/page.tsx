@@ -180,7 +180,7 @@ export default function HelpPage() {
         </button>
         {isOpen && (
           <div className="mt-2.5 pr-2">
-            <FaqMarkdown text={faq.answer} className="text-text-secondary leading-relaxed text-xs" />
+            <FaqMarkdown text={faq.answer} className="font-body-doc text-text-secondary leading-relaxed text-xs" />
             {aMatch && query.trim() && (
               <p className="mt-1 text-[10px] text-text-muted italic">Match: {highlight(faq.answer, aMatch)}</p>
             )}

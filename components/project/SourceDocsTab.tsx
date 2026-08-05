@@ -15,6 +15,7 @@ interface SourceDocRow {
   version: number;
   is_active: boolean;
   extraction_status: "pending" | "complete" | "failed";
+  facts_extraction_status: "not_attempted" | "complete" | "failed";
   uploaded_at: string;
 }
 
@@ -169,11 +170,13 @@ export function SourceDocsTab({ projectId }: Props) {
         setUploadState(prev => (prev[docType]?.status === "uploading" ? { ...prev, [docType]: { ...prev[docType], progress: fraction } } : prev));
       });
       const carried = result.carriedForwardCount > 0 ? ` (${result.carriedForwardCount} of your prior corrections carried forward)` : "";
-      toast.success(
-        result.factsFound > 0
-          ? `Uploaded — found ${result.factsFound} fact${result.factsFound === 1 ? "" : "s"}${carried}`
-          : `Uploaded${carried || " — no structured facts recognized yet, review below"}`
-      );
+      if (result.factsFound > 0) {
+        toast.success(`Uploaded — found ${result.factsFound} fact${result.factsFound === 1 ? "" : "s"}${carried}`);
+      } else if (result.extractionError) {
+        toast.error(`Uploaded, but fact extraction had an error${carried} — use Retry extraction below to try again.`);
+      } else {
+        toast.success(`Uploaded${carried || " — no structured facts recognized yet, review below"}`);
+      }
       setUploadState(prev => ({ ...prev, [docType]: IDLE_STATE }));
       await load();
       setExpandedDocId(result.document.id);
@@ -199,6 +202,35 @@ export function SourceDocsTab({ projectId }: Props) {
 
   function handleDismissError(docType: string) {
     setUploadState(prev => ({ ...prev, [docType]: IDLE_STATE }));
+  }
+
+  const [retryingFactsDocId, setRetryingFactsDocId] = useState<string | null>(null);
+
+  // Re-runs JUST facts derivation (lib/tds-doc-ingest.ts's deriveFactsForDoc,
+  // via the same /facts POST route the initial upload already calls) for an
+  // EXISTING document — no re-upload needed, since content extraction
+  // already succeeded and full_text is already persisted. The right fix for
+  // "extraction succeeded but the separate facts-derivation AI call
+  // errored," which a full re-upload can't distinguish from a transport
+  // retry.
+  async function handleRetryFacts(docId: string) {
+    setRetryingFactsDocId(docId);
+    try {
+      const data = await fetchJson(`/api/projects/${projectId}/source-docs/${docId}/facts`, { method: "POST" });
+      if (data.extractionError) {
+        toast.error("Extraction still had an error — try again in a moment, or check the file itself.");
+      } else if (data.factsFound > 0) {
+        toast.success(`Found ${data.factsFound} fact${data.factsFound === 1 ? "" : "s"}`);
+      } else {
+        toast.success("No structured facts recognized in this document.");
+      }
+      await load();
+      await loadFacts(docId);
+    } catch (err: any) {
+      toast.error(err.message || "Retry failed");
+    } finally {
+      setRetryingFactsDocId(null);
+    }
   }
 
   function handleDragOver(e: React.DragEvent, docType: string) {
@@ -362,7 +394,20 @@ export function SourceDocsTab({ projectId }: Props) {
 
                 {expandedDocId === active.id && (
                   <div className="p-3 space-y-1.5 bg-surface-1 border-t border-border/40">
-                    {(facts[active.id] || []).length === 0 ? (
+                    {active.facts_extraction_status === "failed" ? (
+                      <div className="flex items-center justify-between gap-3 p-2 rounded-lg bg-danger-bg border border-danger/20">
+                        <p className="text-danger">Extraction had an error — this document may still have real specs. Try again.</p>
+                        <button
+                          type="button"
+                          onClick={() => handleRetryFacts(active.id)}
+                          disabled={retryingFactsDocId === active.id}
+                          className="flex items-center gap-1 px-2 py-1 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger font-bold rounded-md transition-colors shrink-0 disabled:opacity-50"
+                        >
+                          <RotateCw className={`w-3 h-3 ${retryingFactsDocId === active.id ? "animate-spin" : ""}`} />
+                          Retry
+                        </button>
+                      </div>
+                    ) : (facts[active.id] || []).length === 0 ? (
                       <p className="text-text-muted italic">No structured facts recognized yet — you can add one below.</p>
                     ) : (
                       (facts[active.id] || []).map(f => (

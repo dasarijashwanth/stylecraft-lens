@@ -42,11 +42,21 @@ function findLocationForRawText(locations: ExtractedLocation[], rawText: string)
   return hit?.label;
 }
 
+export interface StructuredFactsResult {
+  candidates: ExtractedFactCandidate[];
+  // true only when the AI call itself failed/timed out/returned unparseable
+  // JSON (callAiForJson returned null) — distinct from a successful call
+  // that legitimately found zero facts. Callers use this to tell "extraction
+  // errored, retry" apart from "this document really has no specs," which
+  // were previously indistinguishable (both produced an empty array).
+  aiCallFailed: boolean;
+}
+
 export async function extractStructuredFacts(
   content: ExtractedDocContent,
   productName: string
-): Promise<ExtractedFactCandidate[]> {
-  if (!content.fullText.trim()) return [];
+): Promise<StructuredFactsResult> {
+  if (!content.fullText.trim()) return { candidates: [], aiCallFailed: false };
 
   // Internal-kind fields are genuine human decisions (approved pricing,
   // packaging sign-off) — never AI/document-extractable, so they're never
@@ -76,16 +86,29 @@ Return ONLY valid JSON: { "facts": [{ "field_id": "...", "value": "...", "raw_te
     { timeoutMs: 30_000 }
   );
 
-  const candidates = (raw?.facts || []).filter(
+  // callAiForJson (lib/ai-json-call.ts) returns null only when EVERY
+  // provider it tried (OpenAI, then Gemini) failed/timed out/returned
+  // unparseable JSON — a real call failure, not "the document has no
+  // specs." A successful call that just found nothing returns `{facts: []}`
+  // or `{}`, both non-null — those correctly fall through to aiCallFailed:
+  // false below.
+  if (raw === null) {
+    return { candidates: [], aiCallFailed: true };
+  }
+
+  const candidates = (raw.facts || []).filter(
     f => f && typeof f.field_id === "string" && typeof f.value === "string" && typeof f.raw_text === "string" && f.value.trim() && f.raw_text.trim()
   );
 
-  return candidates
-    .filter(f => validFieldIds.has(f.field_id) && quoteAppearsInText(f.raw_text, content.fullText))
-    .map(f => ({
-      field_id: f.field_id,
-      value: f.value.trim(),
-      raw_text: f.raw_text.trim(),
-      source_location: findLocationForRawText(content.locations, f.raw_text),
-    }));
+  return {
+    candidates: candidates
+      .filter(f => validFieldIds.has(f.field_id) && quoteAppearsInText(f.raw_text, content.fullText))
+      .map(f => ({
+        field_id: f.field_id,
+        value: f.value.trim(),
+        raw_text: f.raw_text.trim(),
+        source_location: findLocationForRawText(content.locations, f.raw_text),
+      })),
+    aiCallFailed: false,
+  };
 }

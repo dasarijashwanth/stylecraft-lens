@@ -9,6 +9,10 @@ export interface UploadSourceDocResult {
   factsFound: number;
   sampleFacts: { field_id: string; value: string; source_location: string | null }[];
   carriedForwardCount: number;
+  // True when facts derivation's AI call itself failed/timed out — distinct
+  // from a successful call that legitimately found zero facts. See
+  // lib/tds-doc-ingest.ts's DeriveFactsResult.
+  extractionError: boolean;
 }
 
 // A hard Vercel function kill (the route ran past its own maxDuration) or
@@ -42,12 +46,15 @@ async function fetchJson(url: string, init?: RequestInit) {
 // caller of uploadProjectSourceDoc is unchanged — best-effort: if this call
 // fails/times out, the document itself is still saved and viewable, it
 // just comes back with factsFound: 0 rather than the whole upload failing.
-async function deriveFacts(projectId: string, documentId: string): Promise<{ factsFound: number; sampleFacts: { field_id: string; value: string; source_location: string | null }[] }> {
+async function deriveFacts(projectId: string, documentId: string): Promise<{ factsFound: number; sampleFacts: { field_id: string; value: string; source_location: string | null }[]; extractionError: boolean }> {
   try {
     return await fetchJson(`/api/projects/${projectId}/source-docs/${documentId}/facts`, { method: "POST" });
   } catch (err) {
     console.warn("Fact extraction failed (document itself is already saved):", err);
-    return { factsFound: 0, sampleFacts: [] };
+    // A failed HTTP call (network drop, non-JSON response) is itself an
+    // extraction error, not a "genuinely empty" result — same distinction
+    // the server-side path makes for an AI-call failure.
+    return { factsFound: 0, sampleFacts: [], extractionError: true };
   }
 }
 
@@ -106,6 +113,6 @@ export async function uploadProjectSourceDoc(
     uploadResult = await fetchJson(`/api/projects/${projectId}/source-docs`, { method: "POST", body: formData });
   }
 
-  const { factsFound, sampleFacts } = await deriveFacts(projectId, uploadResult.document.id);
-  return { ...uploadResult, factsFound, sampleFacts };
+  const { factsFound, sampleFacts, extractionError } = await deriveFacts(projectId, uploadResult.document.id);
+  return { ...uploadResult, factsFound, sampleFacts, extractionError };
 }

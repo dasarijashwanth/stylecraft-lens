@@ -1,8 +1,25 @@
-import { StyleSheet, View, Text } from "@react-pdf/renderer";
+import { Font, StyleSheet, View, Text } from "@react-pdf/renderer";
 import { describeProvenanceTier } from "../provenance-format";
 import type { ProvenanceRow } from "../db/section-provenance";
 
 export const APP_NAME = "Stylecraft Lens";
+
+// Self-hosted (public/fonts/, downloaded once from Google's own official CDN
+// — Apache-licensed, freely redistributable) — gives long-form generated
+// document body text (GTM answers, positioning statements, FAQ answers,
+// Content Form previews) the same --font-body-doc role the live UI uses,
+// per the 4-role typography system (see app/globals.css). Headings/labels
+// elsewhere in this file deliberately stay on the base-14 Helvetica/Courier
+// fonts (see the SourceLine comment below) — only BODY_FONT_FAMILY-tagged
+// styles opt into Roboto.
+export const BODY_FONT_FAMILY = "Roboto";
+Font.register({
+  family: BODY_FONT_FAMILY,
+  fonts: [
+    { src: `${process.cwd()}/public/fonts/Roboto-Regular.woff`, fontWeight: 400 },
+    { src: `${process.cwd()}/public/fonts/Roboto-Bold.woff`, fontWeight: 700 },
+  ],
+});
 
 export const styles = StyleSheet.create({
   page: {
@@ -78,6 +95,7 @@ export const styles = StyleSheet.create({
     width: "65%",
     fontSize: 9,
     color: "#111111",
+    fontFamily: BODY_FONT_FAMILY,
   },
   sourceBadge: {
     fontSize: 7,
@@ -133,6 +151,7 @@ export const styles = StyleSheet.create({
     fontSize: 9,
     color: "#111111",
     paddingRight: 6,
+    fontFamily: BODY_FONT_FAMILY,
   },
   fourColNotes: {
     width: "22%",

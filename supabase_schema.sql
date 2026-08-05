@@ -1715,3 +1715,18 @@ INSERT INTO feature_flags (flag_name, enabled) VALUES ('content_form_generation_
 -- never clobbers an already-saved PDF link, and vice versa.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS xlsx_drive_url VARCHAR(500);
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS xlsx_drive_file_id VARCHAR(255);
+
+-- 50. UPLOADED SOURCE DOCS: FACTS EXTRACTION STATUS — Section 44's
+-- extraction_status tracks CONTENT extraction (raw text out of the file);
+-- this tracks the SEPARATE structured-facts-derivation step
+-- (lib/tds-doc-facts.ts's extractStructuredFacts, called from
+-- lib/tds-doc-ingest.ts's deriveFactsForDoc). Before this column existed,
+-- an AI-call failure during facts derivation (network blip, timeout,
+-- malformed response) was silently indistinguishable from "this document
+-- genuinely has zero extractable specs" — both produced factsFound: 0 with
+-- no way for a user to tell them apart days later when GTM fields are still
+-- blank. 'not_attempted' is the default for every row created before this
+-- column existed (and briefly, for a row whose facts call hasn't run yet) —
+-- deliberately distinct from 'failed' so old rows don't retroactively show
+-- an error banner they never actually had.
+ALTER TABLE uploaded_source_docs ADD COLUMN IF NOT EXISTS facts_extraction_status VARCHAR(20) NOT NULL DEFAULT 'not_attempted'; -- not_attempted | complete | failed

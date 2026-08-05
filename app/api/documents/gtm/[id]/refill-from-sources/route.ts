@@ -8,8 +8,11 @@ import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 import { deriveFieldsFromSources } from "@/lib/gtm-derive";
 import { getUploadedTdsContext, applyUploadedTdsFacts } from "@/lib/gtm-uploaded-tds";
 import type { GtmSources } from "@/lib/gtm-generate";
+import { listActiveDocsForProject } from "@/lib/db/uploaded-source-docs";
+import { listFactsForDoc } from "@/lib/db/extracted-facts";
+import { deriveFactsForDoc } from "@/lib/tds-doc-ingest";
 
-export const maxDuration = 30;
+export const maxDuration = 45;
 
 // Uploaded TDS Ingestion, Part 5 — re-runs the deterministic + uploaded-TDS
 // tiers for GROUNDED/spec fields only, writing only whatever actually
@@ -24,6 +27,7 @@ export const maxDuration = 30;
 const UNTOUCHABLE_SOURCES = new Set(["manual_edit", "project_record", "active_report"]);
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const routeStartTime = Date.now();
   try {
     const session = await getAuthSession();
     const document = await getDocumentById(params.id);
@@ -34,6 +38,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // project-scoped route in this codebase.
     const project = await getProject(document.project_id, session.orgId) as any;
     if (!project) return NextResponse.json({ error: "Document not found" }, { status: 404 });
+
+    // "Fill blanks from sources" — before re-reading extracted_facts (below),
+    // retry facts derivation for any active uploaded doc whose LAST attempt
+    // failed or was never attempted at all (facts_extraction_status !==
+    // "complete"). Otherwise a doc that hit a transient AI-call error at
+    // upload time stays silently stuck at 0 facts forever — this is the
+    // manual retry path for exactly that. All calls share routeStartTime so
+    // they collectively respect this route's own deadline (deriveFactsForDoc
+    // shrinks its own budget accordingly) instead of each independently
+    // risking up to FACTS_DERIVATION_DEADLINE_MS on its own.
+    const activeDocs = await listActiveDocsForProject(project.id);
+    const staleDocs = activeDocs.filter(d => d.extraction_status === "complete" && d.facts_extraction_status !== "complete");
+    for (const staleDoc of staleDocs) {
+      await deriveFactsForDoc(staleDoc.id, project.id, project.productName, routeStartTime);
+    }
 
     const fields = await getDocumentFields(document.id);
     const fieldsById = new Map(fields.map(f => [f.field_id, f]));
@@ -106,7 +125,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       await setDocumentSourceDocVersions(document.id, versions);
     }
 
-    return NextResponse.json({ checked, changed: changedFieldIds.length, changedFieldIds });
+    return NextResponse.json({ checked, changed: changedFieldIds.length, changedFieldIds, factsRetried: staleDocs.length });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || "Failed to re-fill from sources" }, { status: 500 });
   }

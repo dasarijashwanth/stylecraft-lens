@@ -212,6 +212,11 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
       if (!(await isContentFormGenerationEnabled())) {
         logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "content_form", outcome: "ok", errorMessage: "Content Form generation disabled via feature flag", elapsedMs: Date.now() - stepStart });
       } else {
+        // Created BEFORE the generation call (not after) so a document row
+        // always exists even if generateContentForm/an upstream fetch
+        // throws — otherwise a mid-step failure left ZERO row at all,
+        // indistinguishable in the UI from "never ran."
+        const contentFormDocument = await getOrCreateDocument(projectId, "content_form");
         try {
           const gtmDocument = await getOrCreateDocument(projectId, "gtm");
           const gtmDocFields = await getDocumentFields(gtmDocument.id);
@@ -256,11 +261,22 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
 
           const contentFormFields = await generateContentForm(sources, gtmFieldsFlat, matchedCatalogProduct, cfVoiceBlock, cfTdsGroundingBlock);
           const finalized = finalizeFieldAnswers(contentFormFields, CONTENT_FORM_SCHEMA, 1);
-          const contentFormDocument = await getOrCreateDocument(projectId, "content_form");
           await saveDocumentFields(contentFormDocument.id, CONTENT_FORM_SCHEMA, finalized, userId);
           logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "content_form", outcome: "ok", elapsedMs: Date.now() - stepStart });
         } catch (err: any) {
+          // Best-effort — a Content Form hiccup must never fail the rest of
+          // project setup (every field has its own in-app regenerate
+          // button), so the pipeline still advances below. But the failure
+          // itself must be VISIBLE, not just a server-only console.warn:
+          // recorded on generation_state.error_message (not overwritten by
+          // the phase transition immediately below, since updateGenerationState
+          // only touches errorMessage when explicitly passed) so
+          // ContentFormSection can read and surface it instead of showing a
+          // generic "hasn't been queued yet" message for a run that actually
+          // failed.
+          const message = `Content Form generation had an error: ${err.message || "unknown error"} — other documents were not affected; use Retry on this tab.`;
           logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "content_form", outcome: "error", errorMessage: err.message || "Content Form generation failed", elapsedMs: Date.now() - stepStart });
+          await updateGenerationState(projectId, { status: "running", errorMessage: message });
         }
       }
 

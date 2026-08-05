@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Caveat:wght@600;700&display=swap');
-
 :root {
   /* Base surfaces */
   --bg:              #09090B;
@@ -72,11 +70,28 @@
   --status-monitoring:  #F59E0B;
   --status-archived:    #71717A;
 
-  /* Typography */
-  --font-sans: 'Inter', -apple-system, sans-serif;
-  --font-display: 'DM Sans', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-  --font-script: 'Caveat', cursive;
+  /* Typography — 4-role brand system (Jost/Montserrat/Roboto/JetBrains Mono
+     substitute for licensed Novecento/Gotham/barber-body/data faces; the
+     token NAMES are the permanent contract so real licensed fonts can swap
+     in later by changing only lib/fonts.ts + these values, zero refactor).
+     Fonts themselves are loaded via next/font/google (lib/fonts.ts) and
+     exposed as --font-jost/--font-montserrat/--font-roboto/
+     --font-jetbrains-mono/--font-caveat CSS vars on <html> — these role
+     tokens just point at them. */
+  --font-display: var(--font-jost), sans-serif;
+  --font-ui: var(--font-montserrat), sans-serif;
+  --font-body-doc: var(--font-roboto), sans-serif;
+  --font-mono: var(--font-jetbrains-mono), monospace;
+  /* Reserved for a future licensed "Gothic-Joker" swap — no free match
+     exists today, so this aliases to display rather than sitting unused. */
+  --font-accent: var(--font-display);
+  /* Back-compat: the 5 existing `font-sans` Tailwind-class usages and the
+     body{} rule below both resolve through this alias, so they pick up
+     Montserrat automatically without per-file edits. */
+  --font-sans: var(--font-ui);
+  /* Wordmark's brush-script "Lens" accent only (components/ui/Logo.tsx) —
+     unrelated to the 4-role system above, left as-is. */
+  --font-script: var(--font-caveat), cursive;
 
   /* Radius */
   --radius-sm: 6px;

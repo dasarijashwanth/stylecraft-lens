@@ -563,11 +563,17 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
                   >
                     {b.brand}
                     {b.status === "found" && (
-                      <span>
-                        ✓{b.price ? ` ${b.price}` : ""}{b.motorMatched ? " · motor match" : ""}{b.source ? ` (${SOURCE_LABELS[b.source] || b.source})` : ""}
+                      <span className="inline-flex items-center gap-0.5">
+                        <CheckCircle className="w-2.5 h-2.5 shrink-0" />
+                        {b.price ? ` ${b.price}` : ""}{b.motorMatched ? " · motor match" : ""}{b.source ? ` (${SOURCE_LABELS[b.source] || b.source})` : ""}
                       </span>
                     )}
-                    {b.status === "not_found" && <span>✕{b.reason ? ` ${b.reason}` : ""}</span>}
+                    {b.status === "not_found" && (
+                      <span className="inline-flex items-center gap-0.5">
+                        <XCircle className="w-2.5 h-2.5 shrink-0" />
+                        {b.reason ? ` ${b.reason}` : ""}
+                      </span>
+                    )}
                     {b.status === "searching" && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
                   </span>
                 ))}

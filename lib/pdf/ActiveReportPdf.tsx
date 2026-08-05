@@ -52,7 +52,7 @@ function competitorSummary(c: any): string {
   else if (c.heat_tech_match_tier === "unverified") parts.push("Plate/Heat: Unverified");
   else if (c.heat_tech_type) parts.push(`Plate/Heat: ${c.heat_tech_type}`);
   if (c.price) parts.push(c.price);
-  if (c.rating) parts.push(`★${c.rating}${c.review_count ? ` (${c.review_count} reviews)` : ""}`);
+  if (c.rating) parts.push(`${c.rating}/5${c.review_count ? ` (${c.review_count} reviews)` : ""}`);
   else if (c.review_count) parts.push(`${c.review_count} reviews`);
   if (c.manufacturer) parts.push(`Mfr: ${c.manufacturer}`);
   if (c.model_number) parts.push(`Model: ${c.model_number}`);

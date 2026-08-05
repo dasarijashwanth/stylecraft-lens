@@ -6,6 +6,8 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockDocumentField } from "@/lib/memoryDb";
 import { isRealAnswer } from "@/lib/field-answer-state";
+import { stripEmoji } from "@/lib/emoji-strip";
+import { logCall } from "@/lib/obs";
 
 // Structural, not GTM-specific — lib/tds-field-schema.ts's TdsFieldAnswer
 // satisfies this shape too, so one storage layer serves both documents.
@@ -316,8 +318,13 @@ export async function saveDocumentFields(
   const upsertRows: any[] = [];
 
   for (const f of fieldsBySchema) {
-    const next = answers[f.id];
-    if (!next) continue;
+    const rawNext = answers[f.id];
+    if (!rawNext) continue;
+    // Emoji must never reach a saved document field — this is the one
+    // chokepoint every doc_type's field-save path (GTM/TDS/Content Form,
+    // AI-generated or human-edited) funnels through, so stripping here
+    // covers all of them without each generator needing its own check.
+    const next = { ...rawNext, answer: stripEmoji(rawNext.answer, { documentId, fieldId: f.id }) };
     const prior = existingById.get(f.id);
     // Regenerating/re-saving must never clobber a user-assigned Owner or
     // Notes — those are independent of the generated answer. First save
@@ -332,6 +339,26 @@ export async function saveDocumentFields(
 
     if (prior && prior.answer !== next.answer) {
       historyRows.push({ document_field_id: prior.id, answer: prior.answer, changed_by: updatedBy });
+    }
+
+    // Per-field tier-resolution trace — which source tier actually stuck for
+    // a field, logged only when the answer or its source tag genuinely
+    // changed (not on every idle re-save) so this stays a diagnostic
+    // breadcrumb, not log spam. The GTM/Content Form fill ladder has many
+    // tiers (AI -> derived floor -> uploaded-TDS override -> web fallback ->
+    // computed inference -> category default -> terminal state) with no
+    // existing trace of which one a field's FINAL value came from — this is
+    // that trace, server-log only, keyed by documentId+fieldId so it's
+    // greppable against a specific project's generation run.
+    if (!prior || prior.answer !== next.answer || prior.source !== next.source) {
+      logCall("document-field-resolve", {
+        op: "resolve",
+        documentId,
+        fieldId: f.id,
+        source: next.source,
+        outcome: "ok",
+        elapsedMs: 0,
+      });
     }
 
     if (isSupabaseConfigured) {

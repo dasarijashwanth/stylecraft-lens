@@ -1,5 +1,5 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
-import { styles, CoverHeader, PageFooter, SectionHeader, BulletList } from "./shared";
+import { styles, CoverHeader, PageFooter, SectionHeader, BulletList, BODY_FONT_FAMILY } from "./shared";
 
 const local = StyleSheet.create({
   elevator: {
@@ -8,6 +8,7 @@ const local = StyleSheet.create({
     backgroundColor: "#f9f9f9",
     borderLeft: "2pt solid #111111",
     padding: 10,
+    fontFamily: BODY_FONT_FAMILY,
   },
   featureCard: {
     border: "0.5pt solid #dddddd",
@@ -23,6 +24,7 @@ const local = StyleSheet.create({
   featureBenefit: {
     fontSize: 8.5,
     color: "#555555",
+    fontFamily: BODY_FONT_FAMILY,
   },
   objectionCard: {
     border: "0.5pt solid #dddddd",
@@ -41,6 +43,7 @@ const local = StyleSheet.create({
     color: "#166534",
     fontSize: 8.5,
     padding: 6,
+    fontFamily: BODY_FONT_FAMILY,
   },
   ctaBox: {
     backgroundColor: "#111111",

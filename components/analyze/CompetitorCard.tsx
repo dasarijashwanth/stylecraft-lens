@@ -349,8 +349,16 @@ function EvidenceQuote({ evidence }: { evidence: ReviewEvidence }) {
 function ListingStatsCaption({ stats }: { stats: ListingStats }) {
   if (stats.rating == null && stats.reviewsTotal == null) return null;
   return (
-    <p className="text-[10px] text-text-muted">
-      Based on the Amazon listing{stats.rating != null ? `: ${stats.rating.toFixed(1)}★` : ""}{stats.reviewsTotal != null ? ` across ${stats.reviewsTotal.toLocaleString()} ratings` : ""}.
+    <p className="text-[10px] text-text-muted inline-flex items-center flex-wrap gap-x-1">
+      <span>Based on the Amazon listing{stats.rating != null ? ":" : ""}</span>
+      {stats.rating != null && (
+        <span className="inline-flex items-center gap-0.5">
+          {stats.rating.toFixed(1)}
+          <Star className="w-2.5 h-2.5 fill-warning text-warning" />
+        </span>
+      )}
+      {stats.reviewsTotal != null && <span>across {stats.reviewsTotal.toLocaleString()} ratings.</span>}
+      {stats.reviewsTotal == null && stats.rating != null && <span>.</span>}
     </p>
   );
 }
@@ -922,7 +930,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
             if (pct == null) return null;
             return (
               <div key={key} className="flex items-center gap-1.5 text-[9px] text-text-muted">
-                <span className="w-6 shrink-0">{stars}★</span>
+                <span className="w-6 shrink-0 inline-flex items-center gap-0.5">{stars}<Star className="w-2.5 h-2.5 fill-warning text-warning" /></span>
                 <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden">
                   <div className="h-full bg-warning" style={{ width: `${pct}%` }} />
                 </div>
@@ -1127,10 +1135,18 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
                           {reviewAnalysis.data.recentSentiment.trend === "declining" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-danger/10 border border-danger/25 text-danger"><TrendingDown className="w-3 h-3" /> Declining</span>}
                           {reviewAnalysis.data.recentSentiment.trend === "stable" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-surface-3 border border-border text-text-muted"><Minus className="w-3 h-3" /> Stable</span>}
                           {reviewAnalysis.data.recentSentiment.trend === "unknown" && <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-surface-3 border border-border text-text-muted"><Minus className="w-3 h-3" /> Trend unclear</span>}
-                          <span className="text-[10px] text-text-muted">
-                            {reviewAnalysis.data.recentSentiment.reviewCount} reviews
-                            {reviewAnalysis.data.recentSentiment.avgRating != null && ` · avg ${reviewAnalysis.data.recentSentiment.avgRating.toFixed(1)}★`}
-                            {reviewAnalysis.data.recentSentiment.priorAvgRating != null && ` (was ${reviewAnalysis.data.recentSentiment.priorAvgRating.toFixed(1)}★)`}
+                          <span className="text-[10px] text-text-muted inline-flex items-center flex-wrap gap-x-1">
+                            <span>{reviewAnalysis.data.recentSentiment.reviewCount} reviews</span>
+                            {reviewAnalysis.data.recentSentiment.avgRating != null && (
+                              <span className="inline-flex items-center gap-0.5">
+                                · avg {reviewAnalysis.data.recentSentiment.avgRating.toFixed(1)}<Star className="w-2.5 h-2.5 fill-warning text-warning" />
+                              </span>
+                            )}
+                            {reviewAnalysis.data.recentSentiment.priorAvgRating != null && (
+                              <span className="inline-flex items-center gap-0.5">
+                                (was {reviewAnalysis.data.recentSentiment.priorAvgRating.toFixed(1)}<Star className="w-2.5 h-2.5 fill-warning text-warning" />)
+                              </span>
+                            )}
                           </span>
                         </div>
                         {reviewAnalysis.data.recentSentiment.dominantThemes.map((t, idx) => (
