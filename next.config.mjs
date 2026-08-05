@@ -26,9 +26,20 @@ const { version } = require("./package.json");
 // Amazon/scraped brand sites and Rainforest's own CDN, hosts that can't be
 // enumerated in advance — the same reasoning the task's own spec gives for
 // this exact directive.
+// Next.js dev-mode's React Fast Refresh runtime (node_modules/next/dist/compiled/
+// @next/react-refresh-utils) evaluates modules via eval() to support HMR — this
+// does not exist in a production build (`next build`/`next start` never load it).
+// Without 'unsafe-eval' here in dev, that eval() throws a CSP EvalError inside
+// webpack's module executor; depending on chunk ordering this can silently abort
+// execution partway through main-app.js, which can prevent unrelated client
+// components mounted later in that same chunk from ever running their effects
+// (confirmed: this exact mechanism was why components/scroll/BackgroundStage.tsx's
+// scroll-scrubbed depth rig appeared completely inert under `npm run dev` while
+// working correctly in a production build — not a bug in the animation code
+// itself). Production keeps the strict policy unchanged.
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https:",
   "font-src 'self' data:",
