@@ -4,11 +4,23 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 import { getAuthSession } from "@/lib/auth";
 import { renderDocumentPdf, DocType, DocumentNotFoundError } from "@/lib/pdf/render";
-import { getDocumentByProject, setDocumentDriveInfo } from "@/lib/db/documents";
+import { getDocumentByProject, getDocumentById, getDocumentFields, setDocumentDriveInfo, setDocumentXlsxDriveInfo } from "@/lib/db/documents";
 import { getProject } from "@/lib/db/projects";
 import { getLatestProjectDeck, getProjectDeckFileBuffer, setDeckDriveInfo } from "@/lib/db/project-decks";
+import { listCatalogProducts } from "@/lib/db/catalog-products";
+import { matchCatalogProductByName, resolveHeaderSku } from "@/lib/our-product-position";
+import { getActiveGtmWorkbookTemplate, getGtmWorkbookTemplateFileBuffer } from "@/lib/db/gtm-workbook-templates";
+import { renderGtmWorkbook, WorkbookFields } from "@/lib/gtm-workbook-data-mapper";
 
 const PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+// Same convention as app/api/documents/gtm/[id]/export-xlsx/route.ts's own
+// sanitizeFilename — duplicated here rather than shared/exported, matching
+// this codebase's own "keep small helpers local" precedent.
+function sanitizeFilename(value: string): string {
+  return value.replace(/[/\\:*?"<>|]/g, "").trim() || "Product";
+}
 
 export const maxDuration = 30;
 
@@ -85,7 +97,7 @@ async function persistDriveInfo(target: DriveTarget, driveUrl: string, driveFile
 export async function POST(req: NextRequest) {
   try {
     const session = await getAuthSession();
-    const { docType, id, replace } = await req.json() as { docType: DocType | "deck"; id: string; replace?: boolean };
+    const { docType, id, replace } = await req.json() as { docType: DocType | "deck" | "gtm-xlsx"; id: string; replace?: boolean };
 
     // Deck bytes are never rendered on demand — only via the pipeline's deck
     // phase or an explicit Regenerate action — so this just fetches the
@@ -115,6 +127,63 @@ export async function POST(req: NextRequest) {
 
       await setDeckDriveInfo(deck.id, webViewLink, fileId);
       return NextResponse.json({ fileId, webViewLink, replaced: !!(replace && deck.drive_file_id) });
+    }
+
+    // The GTM XLSX workbook (not the PDF) — `id` here is the GTM document's
+    // own id (the caller already has it on hand from ProductKnowledgeSection),
+    // not the project id every other docType branch below uses. Builds the
+    // same buffer app/api/documents/gtm/[id]/export-xlsx/route.ts does,
+    // duplicated inline rather than shared — same "keep small
+    // per-route assembly local" precedent as sanitizeFilename above.
+    if (docType === "gtm-xlsx") {
+      const document = await getDocumentById(id);
+      if (!document || document.doc_type !== "gtm") {
+        return NextResponse.json({ error: "GTM document not found" }, { status: 404 });
+      }
+      const project = await getProject(document.project_id, session.orgId);
+      if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
+      const template = await getActiveGtmWorkbookTemplate();
+      if (!template) {
+        return NextResponse.json({ error: "No active GTM workbook template configured — an admin needs to upload one first." }, { status: 400 });
+      }
+
+      const [docFields, catalogProducts, templateBuffer, contentFormDocument] = await Promise.all([
+        getDocumentFields(document.id),
+        listCatalogProducts(),
+        getGtmWorkbookTemplateFileBuffer(template),
+        getDocumentByProject(document.project_id, "content_form"),
+      ]);
+      const contentFormFields = contentFormDocument ? await getDocumentFields(contentFormDocument.id) : [];
+
+      const matched = matchCatalogProductByName(project.productName, catalogProducts);
+      const headerSku = resolveHeaderSku(project.productName, catalogProducts, (project as any).sku);
+
+      const fields: WorkbookFields = {};
+      for (const f of docFields) fields[f.field_id] = { answer: f.answer ?? "", notes: f.notes };
+      for (const f of contentFormFields) fields[f.field_id] = { answer: f.answer ?? "", notes: f.notes };
+
+      const result = renderGtmWorkbook(templateBuffer, {
+        fields,
+        headerSku,
+        collection: matched?.collection ?? null,
+        upc: matched?.upc ?? null,
+      });
+
+      const productLabel = sanitizeFilename(project.productName || project.name);
+      const fileName = `${productLabel}${headerSku ? ` - ${sanitizeFilename(headerSku)}` : ""} — Go to Market.xlsx`;
+
+      const { fileId, webViewLink } = await uploadToDrive({
+        content: result.buffer,
+        fileName,
+        mimeType: XLSX_MIME_TYPE,
+        projectName: project.name || project.productName || "Stylecraft Project",
+        outputType: "Go-To-Market",
+        existingFileId: replace ? document.xlsx_drive_file_id ?? null : null,
+      });
+
+      await setDocumentXlsxDriveInfo(document.id, webViewLink, fileId);
+      return NextResponse.json({ fileId, webViewLink, replaced: !!(replace && document.xlsx_drive_file_id) });
     }
 
     const { buffer, productName, projectName, fileName } = await renderDocumentPdf(docType, id, session);

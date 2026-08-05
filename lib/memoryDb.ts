@@ -143,6 +143,10 @@ export interface MockDocument {
   status: string;
   driveUrl?: string | null;
   driveFileId?: string | null;
+  // Separate from driveUrl/driveFileId above — see lib/db/documents.ts's
+  // DocumentRow.xlsx_drive_url comment for why they're kept apart.
+  xlsxDriveUrl?: string | null;
+  xlsxDriveFileId?: string | null;
   snapshotId?: string | null;
   // Brand Voice Guide work — which guide version was active at generation
   // time, see lib/db/documents.ts's setDocumentVoiceGuide.

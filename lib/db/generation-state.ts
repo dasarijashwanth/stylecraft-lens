@@ -5,14 +5,17 @@
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb } from "@/lib/memoryDb";
 
-// "faqs" (10 auto-generated Product FAQs, lib/gtm-product-faqs.ts) runs
-// after "gtm" so it can ground itself in GTM's fully-resolved fields
-// (features/motor/blades/guards/charging/care/warranty). "marketing_direction"
-// (lib/gtm-marketing-direction.ts) runs after "faqs" — its own input list
-// includes FAQ's Our Differentiators/Selling Position/Rep Talking Points —
-// and before "deck" since decks may reference FAQ/Marketing Direction
-// content in the future.
-export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "faqs" | "marketing_direction" | "deck";
+// "content_form" (lib/content-form-generate.ts, the 15-field Product Detail
+// Page content sheet) runs immediately after "gtm" — it only needs GTM's
+// fully-resolved fields as grounding, not FAQ/Marketing Direction output, so
+// it doesn't need to wait for either. "faqs" (10 auto-generated Product
+// FAQs, lib/gtm-product-faqs.ts) runs after that so it can ground itself in
+// GTM's fully-resolved fields (features/motor/blades/guards/charging/care/
+// warranty). "marketing_direction" (lib/gtm-marketing-direction.ts) runs
+// after "faqs" — its own input list includes FAQ's Our Differentiators/
+// Selling Position/Rep Talking Points — and before "deck" since decks may
+// reference FAQ/Marketing Direction content in the future.
+export type GenerationPhase = "pending" | "snapshot" | "tds" | "gtm" | "content_form" | "faqs" | "marketing_direction" | "deck";
 export type GenerationStatus = "pending" | "running" | "complete" | "failed";
 
 export interface GenerationStateRow {

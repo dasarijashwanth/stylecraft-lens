@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
-import { getDocumentById, getDocumentFields } from "@/lib/db/documents";
+import { getDocumentById, getDocumentFields, getDocumentByProject } from "@/lib/db/documents";
 import { listCatalogProducts } from "@/lib/db/catalog-products";
 import { matchCatalogProductByName, resolveHeaderSku } from "@/lib/our-product-position";
 import { getActiveGtmWorkbookTemplate, getGtmWorkbookTemplateFileBuffer } from "@/lib/db/gtm-workbook-templates";
@@ -38,17 +38,24 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ error: "No active GTM workbook template configured — an admin needs to upload one first." }, { status: 400 });
     }
 
-    const [docFields, catalogProducts, templateBuffer] = await Promise.all([
+    const [docFields, catalogProducts, templateBuffer, contentFormDocument] = await Promise.all([
       getDocumentFields(document.id),
       listCatalogProducts(),
       getGtmWorkbookTemplateFileBuffer(template),
+      getDocumentByProject(document.project_id, "content_form"),
     ]);
+    const contentFormFields = contentFormDocument ? await getDocumentFields(contentFormDocument.id) : [];
 
     const matched = matchCatalogProductByName(project.productName, catalogProducts);
     const headerSku = resolveHeaderSku(project.productName, catalogProducts, (project as any).sku);
 
     const fields: WorkbookFields = {};
     for (const f of docFields) fields[f.field_id] = { answer: f.answer ?? "", notes: f.notes };
+    // Content Form is a separate document (doc_type="content_form") — its
+    // field ids don't collide with GTM_FIELD_SCHEMA's own, so merging both
+    // into one map lets renderGtmWorkbook's Final Copy step list read them
+    // exactly like any GTM field, with no separate parameter needed.
+    for (const f of contentFormFields) fields[f.field_id] = { answer: f.answer ?? "", notes: f.notes };
 
     const result = renderGtmWorkbook(templateBuffer, {
       fields,

@@ -38,6 +38,7 @@ import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { SourceDocsTab } from "@/components/project/SourceDocsTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS, visibleGtmSchema } from "@/lib/gtm-field-schema";
+import { CONTENT_FORM_SCHEMA, CONTENT_FORM_SECTIONS } from "@/lib/content-form-field-schema";
 import { ComparisonChartPicker, type ComparisonChartSlot } from "@/components/analyze/ComparisonChartPicker";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
 import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillReport } from "@/lib/field-answer-state";
@@ -50,7 +51,10 @@ import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTI
 import { computePriceStack } from "@/lib/price-stack";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck" | "sources";
-type ReportTab = Exclude<Tab, "project-deck" | "sources">;
+// Content Form moved off the flat-JSONB report-driven model onto its own
+// field-granular document (doc_type="content_form", see ContentFormSection)
+// — same "doesn't depend on a linked report" reasoning as project-deck/sources.
+type ReportTab = Exclude<Tab, "project-deck" | "sources" | "content-form">;
 
 export default function ProjectDetailPage() {
   const router = useRouter();
@@ -78,6 +82,9 @@ export default function ProjectDetailPage() {
   // (unlike deckEnabled above) — default this to true so the progress
   // stepper shows its row from the first frame instead of it popping in.
   const [marketingDirectionEnabled, setMarketingDirectionEnabled] = useState(true);
+  // Content Form generation also defaults to enabled at the flag layer —
+  // same reasoning as marketingDirectionEnabled above.
+  const [contentFormEnabled, setContentFormEnabled] = useState(true);
   const { open: openContactSupport } = useContactSupport();
 
   // Fetched once here and threaded into downloadReportPDF/downloadTabPDF
@@ -142,6 +149,7 @@ export default function ProjectDetailPage() {
         if (typeof data.tds_enabled === "boolean") setTdsEnabled(data.tds_enabled);
         if (typeof data.deck_generation_enabled === "boolean") setDeckEnabled(data.deck_generation_enabled);
         if (typeof data.marketing_direction_generation_enabled === "boolean") setMarketingDirectionEnabled(data.marketing_direction_generation_enabled);
+        if (typeof data.content_form_generation_enabled === "boolean") setContentFormEnabled(data.content_form_generation_enabled);
       })
       .catch(() => {});
   }, []);
@@ -369,6 +377,8 @@ export default function ProjectDetailPage() {
                 <SourceDocsTab projectId={id} />
               ) : activeTab === "project-deck" ? (
                 <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
+              ) : activeTab === "content-form" ? (
+                <ContentFormSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : selectedReport ? (
                 <ReportTabContent
                   report={selectedReport}
@@ -412,7 +422,7 @@ export default function ProjectDetailPage() {
               Retry button) on every page load, not just live in the same
               session where it failed. */}
           {pipelineState && pipelineState.status !== "complete" && (
-            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} marketingDirectionEnabled={marketingDirectionEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
+            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} marketingDirectionEnabled={marketingDirectionEnabled} contentFormEnabled={contentFormEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
           <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
@@ -504,7 +514,6 @@ function ReportTabContent({
     "competitive-analysis": "competitive_analysis",
     "pricing":              "pricing_analysis",
     "go-to-market":         "go_to_market",
-    "content-form":         "content_form",
   }[activeTab];
 
   const tabData = report[dataKey] || {};
@@ -541,7 +550,6 @@ function ReportTabContent({
           {activeTab === "competitive-analysis" && <Globe className="w-4 h-4 text-accent" />}
           {activeTab === "pricing" && <DollarSign className="w-4 h-4 text-accent" />}
           {activeTab === "go-to-market" && <Sliders className="w-4 h-4 text-accent" />}
-          {activeTab === "content-form" && <Target className="w-4 h-4 text-accent" />}
           <span>{TAB_LABELS[activeTab]}</span>
         </h3>
         
@@ -611,14 +619,6 @@ function ReportTabContent({
           localData={localData}
           setLocalData={setLocalData}
           projectId={projectId}
-        />
-      )}
-      {activeTab === "content-form" && (
-        <ContentFormTab
-          data={tabData}
-          editing={editing}
-          localData={localData}
-          setLocalData={setLocalData}
         />
       )}
     </div>
@@ -1618,6 +1618,7 @@ function ProductKnowledgeSection({
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
   const [fillingAll, setFillingAll] = useState(false);
   const [fillProgress, setFillProgress] = useState<{ done: number; total: number } | null>(null);
+  const [xlsxDriveUrl, setXlsxDriveUrl] = useState<string | null>(null);
   const [skuDraft, setSkuDraft] = useState(projectSku || "");
   const [skuSaving, setSkuSaving] = useState(false);
   // Uploaded TDS Ingestion — which source-doc version(s) this document was
@@ -1671,6 +1672,7 @@ function ProductKnowledgeSection({
         setFields(map);
         setFillReport(data.document.fillReport ?? null);
         setSourceDocVersions(data.document.source_doc_versions ?? null);
+        setXlsxDriveUrl(data.document.xlsx_drive_url ?? null);
       }
       if (sourceDocsRes && sourceDocsRes.ok) {
         const sourceDocsData = await sourceDocsRes.json();
@@ -1979,12 +1981,13 @@ function ProductKnowledgeSection({
             </a>
             <a
               href={`/api/documents/gtm/${documentId}/export-xlsx`}
-              title="Official 12-tab GTM workbook — Product Knowledge, BOX ONLY, and Product FAQ filled; every other tab untouched"
+              title="Official 12-tab GTM workbook — Product Knowledge, BOX ONLY, Product FAQ, Marketing Direction, and Final Copy filled; every other tab untouched"
               className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download XLSX</span>
             </a>
+            {documentId && <SaveToDriveButton docType="gtm-xlsx" id={documentId} initialDriveUrl={xlsxDriveUrl} />}
           </div>
         )}
       </div>
@@ -2204,74 +2207,392 @@ function ProductKnowledgeSection({
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// CREATIVE BRIEF / CONTENT FORM TAB VIEW & EDIT
+// CONTENT FORM SECTION — field-granular Product Detail Page content sheet
+// (doc_type="content_form"), same autosave/history/badge model as GTM's own
+// ProductKnowledgeSection above (deliberately NOT a report-driven
+// Edit/Save-toggle tab like the old ContentFormTab it replaces — this is a
+// self-contained data-fetch/save component, mounted directly for the
+// "content-form" tab the same way ProjectDeckTab/SourceDocsTab bypass
+// ReportTabContent entirely, since it no longer depends on a linked report).
 // ────────────────────────────────────────────────────────────────────────────
-function ContentFormTab({ data, editing, localData, setLocalData }: any) {
-  if (editing) {
+const CONTENT_FORM_GROUP_LABELS: Record<string, string> = {
+  bullet_top3: "Bullet Points Top 3",
+  bullet_long: "Bullet Points Long Form",
+  bullet_condensed: "Bullet Points Condensed",
+  website_copy_short: "Website Copy Block — Short Version (Top 3)",
+  website_copy_long: "Website Copy Block — Long Version (Hot Spot)",
+};
+
+function CharLimitTextarea({
+  value, limit, onChange, flagged,
+}: { value: string; limit: number; onChange: (v: string) => void; flagged?: boolean }) {
+  const overLimit = value.length > limit;
+  return (
+    <div className="space-y-0.5">
+      <textarea
+        rows={2}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${
+          overLimit || flagged ? "border-danger/40" : "border-border"
+        }`}
+      />
+      <div className={`text-[9px] font-mono ${overLimit ? "text-danger font-bold" : "text-text-muted"}`}>
+        {value.length}/{limit} characters{overLimit ? " — exceeds limit, will not save" : ""}
+      </div>
+    </div>
+  );
+}
+
+function ContentFormSection({
+  projectId, pipelineStatus, pipelinePhase,
+}: { projectId: string; pipelineStatus?: string; pipelinePhase?: string }) {
+  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [fields, setFields] = useState<Record<string, FieldRow>>({});
+  const [fillReport, setFillReport] = useState<FillReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({});
+  const [fillingAll, setFillingAll] = useState(false);
+  const [fillProgress, setFillProgress] = useState<{ done: number; total: number } | null>(null);
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  async function loadDocument() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/documents/content-form?projectId=${projectId}`);
+      const data = await res.json();
+      if (data.document) {
+        setDocumentId(data.document.id);
+        const map: Record<string, FieldRow> = {};
+        for (const f of data.fields) map[f.field_id] = f;
+        setFields(map);
+        setFillReport(data.document.fillReport ?? null);
+      }
+    } catch (e) {}
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    loadDocument();
+    // Re-fetch when the auto-generation pipeline's status changes, same
+    // reasoning as ProductKnowledgeSection's own effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, pipelineStatus]);
+
+  const completedCount = CONTENT_FORM_SCHEMA.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
+
+  function handleFieldChange(fieldId: string, value: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], answer: value } }));
+    if (debounceTimers.current[fieldId]) clearTimeout(debounceTimers.current[fieldId]);
+    debounceTimers.current[fieldId] = setTimeout(() => saveField(fieldId, value), 800);
+  }
+
+  async function saveField(fieldId: string, value: string) {
+    if (!documentId) return;
+    const schemaField = CONTENT_FORM_SCHEMA.find(f => f.id === fieldId);
+    if (schemaField?.charLimit && value.length > schemaField.charLimit) {
+      // Never persists an over-limit answer — the char counter already
+      // warns the user; this is the save-time guard, matching the
+      // server-side check in the PATCH route itself (defense in depth).
+      return;
+    }
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/content-form/${documentId}/fields/${fieldId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "saved" }));
+      setTimeout(() => setFieldStatus(prev => (prev[fieldId] === "saved" ? { ...prev, [fieldId]: "idle" } : prev)), 1500);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to save field");
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  async function handleRegenerate(fieldId: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "regenerating" }));
+    try {
+      const res = await fetch(`/api/documents/content-form/${documentId}/fields/${fieldId}/regenerate`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Regeneration failed");
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      toast.success("Field regenerated");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to regenerate field");
+    } finally {
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  const FILL_REMAINING_CONCURRENCY = 3;
+
+  async function handleFillRemaining() {
+    if (!documentId || fillingAll) return;
+    const pendingIds = CONTENT_FORM_SCHEMA.filter(f => !isFieldComplete(fields[f.id]?.answer)).map(f => f.id);
+    if (pendingIds.length === 0) {
+      toast.success("Every field is already filled");
+      return;
+    }
+    setFillingAll(true);
+    setFillProgress({ done: 0, total: pendingIds.length });
+    let filledCount = 0;
+    const queue = [...pendingIds];
+    const worker = async () => {
+      while (queue.length > 0) {
+        const fieldId = queue.shift();
+        if (!fieldId) return;
+        setFieldStatus(prev => ({ ...prev, [fieldId]: "regenerating" }));
+        try {
+          const res = await fetch(`/api/documents/content-form/${documentId}/fields/${fieldId}/regenerate`, { method: "POST" });
+          const data = await res.json();
+          if (res.ok) {
+            setFields(prev => ({ ...prev, [fieldId]: data.field }));
+            if (isFieldComplete(data.field?.answer)) filledCount++;
+          }
+        } catch {
+        } finally {
+          setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+          setFillProgress(prev => (prev ? { ...prev, done: prev.done + 1 } : prev));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(FILL_REMAINING_CONCURRENCY, pendingIds.length) }, worker));
+    setFillingAll(false);
+    setFillProgress(null);
+    toast.success(filledCount > 0 ? `Filled ${filledCount} of ${pendingIds.length} remaining field${pendingIds.length === 1 ? "" : "s"}` : "No additional content generated for the remaining fields");
+  }
+
+  async function handleRevert(fieldId: string) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/content-form/${documentId}/fields/${fieldId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Nothing to revert to");
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      toast.success("Reverted to previous value");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to revert field");
+    } finally {
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  function handleOwnerChange(fieldId: string, owner: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], owner } }));
+    saveMeta(fieldId, { owner });
+  }
+
+  function handleNotesChange(fieldId: string, notes: string) {
+    setFields(prev => ({ ...prev, [fieldId]: { ...prev[fieldId], notes } }));
+    if (debounceTimers.current[`notes:${fieldId}`]) clearTimeout(debounceTimers.current[`notes:${fieldId}`]);
+    debounceTimers.current[`notes:${fieldId}`] = setTimeout(() => saveMeta(fieldId, { notes }), 800);
+  }
+
+  async function saveMeta(fieldId: string, meta: { owner?: string; notes?: string }) {
+    if (!documentId) return;
+    setFieldStatus(prev => ({ ...prev, [fieldId]: "saving" }));
+    try {
+      const res = await fetch(`/api/documents/content-form/${documentId}/fields/${fieldId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(meta),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFields(prev => ({ ...prev, [fieldId]: data.field }));
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "saved" }));
+      setTimeout(() => setFieldStatus(prev => (prev[fieldId] === "saved" ? { ...prev, [fieldId]: "idle" } : prev)), 1500);
+    } catch (e) {
+      toast.error("Failed to save");
+      setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
+    }
+  }
+
+  const hasDocument = !!documentId;
+  const isContentFormPhaseRunning = pipelinePhase === "content_form" && pipelineStatus === "running";
+  const isQueued = !hasDocument && !isContentFormPhaseRunning && (pipelineStatus === "pending" || pipelineStatus === "running");
+  const pipelineFailed = !hasDocument && pipelineStatus === "failed";
+
+  function renderField(f: (typeof CONTENT_FORM_SCHEMA)[number]) {
+    const entry = fields[f.id];
+    const complete = isFieldComplete(entry?.answer);
+    const status = fieldStatus[f.id] || "idle";
+    const flagged = !!entry?.flagged;
+    const chipClass = flagged
+      ? "bg-danger/10 border-danger/30 text-danger"
+      : complete
+      ? "bg-surface-3 border-border text-text-muted"
+      : "bg-warning/10 border-warning/25 text-warning";
+    const chipLabel = complete ? (SOURCE_LABELS[entry?.source || "none"] || "Filled") : "Pending";
     return (
-      <MagicBentoCard className="p-5 space-y-4 text-xs">
-        <div className="space-y-1">
-          <label className="font-semibold text-text-primary">Target Audience Personas</label>
-          <textarea
-            rows={3}
-            value={localData?.target_audience || ""}
-            onChange={e => setLocalData({ ...localData, target_audience: e.target.value })}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
-            placeholder="Type target audience detail..."
-          />
+      <Fragment key={f.id}>
+        {f.group?.index === 1 && (
+          <div className="md:col-span-2 pt-1">
+            <h5 className="text-[9px] font-bold text-text-muted uppercase tracking-wider">{CONTENT_FORM_GROUP_LABELS[f.group.id] || f.question}</h5>
+          </div>
+        )}
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-2">
+            <label className="font-semibold text-text-primary text-[11px] flex items-center gap-1">
+              {f.group ? `#${f.group.index}` : f.question}
+              {flagged && <AlertCircle className="w-3 h-3 text-danger shrink-0" aria-label={flagReason(entry?.source_detail)} />}
+            </label>
+            <div className="flex items-center gap-1 shrink-0">
+              <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${chipClass}`}>{chipLabel}</span>
+              <button
+                type="button"
+                title="Regenerate this field"
+                onClick={() => handleRegenerate(f.id)}
+                disabled={status === "regenerating"}
+                className="p-0.5 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 ${status === "regenerating" ? "animate-spin" : ""}`} />
+              </button>
+              <button type="button" title="Revert to previous value" onClick={() => handleRevert(f.id)} className="p-0.5 text-text-muted hover:text-text-primary transition-colors">
+                <Undo2 className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+          {f.charLimit ? (
+            <CharLimitTextarea value={entry?.answer || ""} limit={f.charLimit} onChange={v => handleFieldChange(f.id, v)} flagged={flagged} />
+          ) : (
+            <textarea
+              rows={2}
+              value={entry?.answer || ""}
+              onChange={e => handleFieldChange(f.id, e.target.value)}
+              title={flagged ? flagReason(entry?.source_detail) : undefined}
+              className={`w-full px-2.5 py-1.5 border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[11px] ${flagged ? "border-danger/40" : "border-border"}`}
+            />
+          )}
+          <div className="flex items-center gap-2">
+            <select
+              value={entry?.owner || f.owner || "Product Marketing"}
+              onChange={e => handleOwnerChange(f.id, e.target.value)}
+              title="Owner"
+              className="px-1.5 py-1 border border-border rounded-md bg-surface-1 text-text-secondary text-[9px] outline-none focus:border-accent"
+            >
+              {OWNER_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+            <input
+              type="text"
+              value={entry?.notes || ""}
+              onChange={e => handleNotesChange(f.id, e.target.value)}
+              placeholder="Notes…"
+              className="flex-1 px-1.5 py-1 border border-border rounded-md bg-surface-1 text-text-secondary placeholder-text-muted text-[9px] outline-none focus:border-accent"
+            />
+          </div>
+          <div className="h-3 text-[9px] text-text-muted">
+            {status === "saving" && "Saving…"}
+            {status === "saved" && "Saved ✓"}
+            {status === "regenerating" && "Regenerating…"}
+          </div>
         </div>
-        <div className="space-y-1">
-          <label className="font-semibold text-text-primary">Content Strategy Notes</label>
-          <textarea
-            rows={4}
-            value={localData?.notes || ""}
-            onChange={e => setLocalData({ ...localData, notes: e.target.value })}
-            className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y"
-            placeholder="Type custom creative specifications..."
-          />
-        </div>
-      </MagicBentoCard>
+      </Fragment>
     );
   }
 
-  const messages = data.key_messages || [];
-
   return (
-    <MagicBentoSection className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-      <MagicBentoCard className="p-4 space-y-1 md:col-span-2">
-        <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider block">Initiative / Product Name</span>
-        <span className="text-sm font-bold text-text-primary">{data.product_name || "Stylecraft Tool Launch"}</span>
-      </MagicBentoCard>
+    <div className="border border-border rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Content Form</span>
+          {hasDocument && (
+            <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
+              {completedCount}/{CONTENT_FORM_SCHEMA.length} fields completed
+            </span>
+          )}
+          {hasDocument && formatFillReport(fillReport) && (
+            <span className="text-[9px] text-text-muted" title="Fill breakdown by source tier">{formatFillReport(fillReport)}</span>
+          )}
+          {!hasDocument && isContentFormPhaseRunning && (
+            <span className="flex items-center gap-1.5 text-[10px] font-bold text-accent px-1.5 py-0.5 rounded bg-accent-bg border border-accent-border">
+              <Loader2 className="w-3 h-3 animate-spin" /> Generating…
+            </span>
+          )}
+          {!hasDocument && isQueued && <span className="text-[10px] font-bold text-text-muted px-1.5 py-0.5 rounded bg-surface-3 border border-border">Queued</span>}
+          {pipelineFailed && (
+            <span className="text-[10px] font-bold text-danger px-1.5 py-0.5 rounded bg-danger-bg border border-danger/25">Generation failed — see retry above</span>
+          )}
+        </div>
+        {hasDocument && completedCount < CONTENT_FORM_SCHEMA.length && (
+          <button
+            type="button"
+            onClick={handleFillRemaining}
+            disabled={fillingAll}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-60"
+          >
+            {fillingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            <span>{fillingAll && fillProgress ? `Filling ${fillProgress.done}/${fillProgress.total}…` : "Fill remaining fields"}</span>
+          </button>
+        )}
+      </div>
 
-        <MagicBentoCard className="p-4 space-y-2.5">
-          <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Core Creative Messages</h4>
-          <ul className="space-y-2.5">
-            {messages.map((m: any, i: number) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-accent font-bold mt-0.5">•</span>
-                <span className="text-text-secondary leading-normal font-medium">{m}</span>
-              </li>
-            ))}
-            {messages.length === 0 && (
-              <li className="text-text-muted italic">No key messages recorded.</li>
-            )}
-          </ul>
-        </MagicBentoCard>
-
-        <MagicBentoCard className="p-4 space-y-2.5">
-          <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Target Audience Profile</h4>
-          <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
-            {data.target_audience || "Define a target audience segment by clicking Edit."}
-          </p>
-        </MagicBentoCard>
-
-      <MagicBentoCard className="p-4 space-y-1.5 md:col-span-2">
-        <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Brief Notes</h4>
-        <p className="text-text-secondary leading-relaxed bg-surface-3/15 p-3 rounded-lg border border-border/40 whitespace-pre-wrap">
-          {data.notes || "Add custom brief details by clicking Edit."}
+      {loading ? (
+        <p className="p-4 text-text-muted text-[11px]">Loading…</p>
+      ) : !hasDocument ? (
+        <p className="p-4 text-text-muted text-[11px]">
+          {isContentFormPhaseRunning
+            ? "Generating Product Detail Page content now…"
+            : isQueued
+            ? "Queued for automatic generation once Product Knowledge completes."
+            : pipelineFailed
+            ? "Automatic generation failed — use Retry above to resume."
+            : "This project hasn't been queued for Go-To-Market generation yet."}
         </p>
-      </MagicBentoCard>
-    </MagicBentoSection>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {CONTENT_FORM_SECTIONS.map(section => {
+            const sectionFields = CONTENT_FORM_SCHEMA.filter(f => f.section === section);
+            // Website Copy Block is special-cased as a 3x2 grid (3 short-copy
+            // cells + 3 long-copy cells side-by-side) rather than the generic
+            // vertical group list, matching the real template's own layout.
+            const isWebsiteCopyBlock = section === "Website Copy Block";
+            return (
+              <div key={section} className="p-4 space-y-3">
+                <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{section}</h4>
+                {isWebsiteCopyBlock ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {[1, 2, 3].map(col => (
+                      <div key={col} className="space-y-3 p-2 border border-border/40 rounded-lg">
+                        {(["website_copy_short", "website_copy_long"] as const).map(prefix => {
+                          const f = sectionFields.find(x => x.id === `${prefix}_${col}`);
+                          if (!f) return null;
+                          const entry = fields[f.id];
+                          const status = fieldStatus[f.id] || "idle";
+                          return (
+                            <div key={f.id} className="space-y-1">
+                              <label className="font-semibold text-text-primary text-[10px]">{CONTENT_FORM_GROUP_LABELS[prefix]} — Cell {col}</label>
+                              <textarea
+                                rows={2}
+                                value={entry?.answer || ""}
+                                onChange={e => handleFieldChange(f.id, e.target.value)}
+                                className="w-full px-2 py-1 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent resize-y text-[10px]"
+                              />
+                              <div className="h-2.5 text-[8px] text-text-muted">{status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : ""}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                    {sectionFields.map(f => renderField(f))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

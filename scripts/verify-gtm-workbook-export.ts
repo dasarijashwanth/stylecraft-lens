@@ -149,6 +149,31 @@ function buildSyntheticFields(): Record<string, { answer: string; notes?: string
   return fields;
 }
 
+// Content Form (Final Copy sheet export work) — a separate document
+// (doc_type="content_form") merged into the same fields map the real
+// export-xlsx route builds, since field ids don't collide with
+// GTM_FIELD_SCHEMA's own.
+function buildContentFormSyntheticFields(): Record<string, { answer: string; notes?: string | null }> {
+  const fields: Record<string, { answer: string; notes?: string | null }> = {
+    sexy_tagline: a("Precision that whispers."),
+    techie_tagline: a("IN2 brushless motor, zero-gap blade geometry."),
+    romance_copy: a("Built for barbers who demand more from every line."),
+    keywords: a("cordless trimmer, zero-gap blade, brushless motor, barber trimmer"),
+    amazon_long_title: a("Anime Trimmer - Cordless Zero-Gap Trimmer with IN2 Brushless Motor"),
+    ecommerce_title: a("Anime Cordless Trimmer"),
+    website_title: a("Anime Trimmer with IN2 Brushless Motor"),
+    short_description: a("A quiet, zero-gap cordless trimmer built for all-day precision lining."),
+    suggested_use: a("Oil the blade, power on, and glide close to the skin for zero-gap lines."),
+    features_benefits: a("Zero-gap blade. Ultra-quiet IN2 motor. All-day runtime."),
+  };
+  for (let i = 1; i <= 6; i++) fields[`bullet_long_${i}`] = a(`ZERO-GAP PRECISION — bullet long ${i} detail sentence.`);
+  for (let i = 1; i <= 6; i++) fields[`bullet_condensed_${i}`] = a(`Zero-gap precision ${i}`);
+  for (let i = 1; i <= 3; i++) fields[`bullet_top3_${i}`] = a(`Top bullet ${i}`);
+  for (let i = 1; i <= 3; i++) fields[`website_copy_short_${i}`] = a(`Short web copy ${i}`);
+  for (let i = 1; i <= 3; i++) fields[`website_copy_long_${i}`] = a(`Long web copy ${i} — extended description.`);
+  return fields;
+}
+
 async function main() {
   if (!fs.existsSync(FIXTURE_PATH)) {
     console.error(`Missing fixture: ${FIXTURE_PATH} — copy the real official workbook there first.`);
@@ -175,7 +200,7 @@ async function main() {
   assert(summary.missingRequiredSheets.length === 0, "the real template has all 3 required sheets (Product Knowledge/BOX ONLY/Product FAQ)");
   assert(REQUIRED_GTM_WORKBOOK_SHEETS.every(s => summary.sheetNames.includes(s)), "sheet name resolution finds every required sheet");
 
-  const fields = buildSyntheticFields();
+  const fields = { ...buildSyntheticFields(), ...buildContentFormSyntheticFields() };
   const result = renderGtmWorkbook(templateBuffer, { fields, headerSku: "SC999X", collection: "Homie", upc: "012345678905" });
   assert(result.unmapped.length === 0, `every mapped field found its template row (0 unmapped, got ${result.unmapped.length}: ${JSON.stringify(result.unmapped)})`);
   assert(result.repairs.length === 3, `exactly 3 formula cells were repaired (BOX ONLY Warranty/Includes/Certifications), got ${result.repairs.length}`);
@@ -221,15 +246,41 @@ async function main() {
   const differentiatorsRow = findRowByLabel(faq, outWorkbook.sharedStrings, "A", "Our Differrentiators");
   assert(!!differentiatorsRow && readCellText(faq, outWorkbook.sharedStrings, `B${differentiatorsRow + 1}`).includes("Quieter than category average"), "Our Differentiators lands on the row below its own header label");
 
-  // The other 8 tabs (sheet6 "Marketing Direction" is now a 4th filled
-  // target, no longer untouched) + shared parts must be byte-for-byte
-  // identical to the original template — the strongest possible form of
-  // "untouched".
+  // Final Copy (Content Form export work, sheet7.xml) — labels/rows
+  // confirmed via a raw OOXML dump of this exact fixture. Ad Sheet Headline/
+  // Sub Header (Content Form item 13) has no matching row and is never
+  // written, by design — not asserted here since there's nothing to check.
+  const fc = outWorkbook.getSheetXml("Final Copy");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C6") === "Precision that whispers.", "Final Copy: Sexy Tagline lands on row 6");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C7") === "IN2 brushless motor, zero-gap blade geometry.", "Final Copy: Techie Tagline lands on row 7");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C9") === "Built for barbers who demand more from every line.", "Final Copy: Romance Copy lands on row 9");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C10") === "ZERO-GAP PRECISION — bullet long 1 detail sentence.", "Final Copy: Bullet Long #1 lands on the anchor row itself (10)");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C15") === "ZERO-GAP PRECISION — bullet long 6 detail sentence.", "Final Copy: Bullet Long #6 lands on row 15 (anchor + 5)");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C16") === "Zero-gap precision 1", "Final Copy: Bullet Condensed #1 lands on the anchor row itself (16)");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C21") === "Zero-gap precision 6", "Final Copy: Bullet Condensed #6 lands on row 21 (anchor + 5)");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C22") === "Top bullet 1", "Final Copy: Bullet Top 3 #1 lands on the anchor row itself (22)");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C24") === "Top bullet 3", "Final Copy: Bullet Top 3 #3 lands on row 24 (anchor + 2)");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C29") === "cordless trimmer, zero-gap blade, brushless motor, barber trimmer", "Final Copy: Keywords lands on row 29");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C34") === "Anime Trimmer - Cordless Zero-Gap Trimmer with IN2 Brushless Motor", "Final Copy: Amazon Long Title lands on row 34, despite the template's own curly-quote ’size’ label text");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C35") === "Anime Cordless Trimmer", "Final Copy: Ecommerce Title lands on row 35");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C36") === "Anime Trimmer with IN2 Brushless Motor", "Final Copy: Website Title lands on row 36");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C40") === "A quiet, zero-gap cordless trimmer built for all-day precision lining.", "Final Copy: Short Description lands on row 40");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C41") === "Oil the blade, power on, and glide close to the skin for zero-gap lines.", "Final Copy: Suggested Use lands on row 41");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C42") === "Zero-gap blade. Ultra-quiet IN2 motor. All-day runtime.", "Final Copy: Features & Benefits lands on row 42");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C46") === "", "Final Copy: Website Copy Short's own header row (46) is a pure label, never written to");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C47") === "Short web copy 1" && readCellText(fc, outWorkbook.sharedStrings, "C49") === "Short web copy 3", "Final Copy: Website Copy Short's 3 values land AFTER the header, at rows 47-49");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C50") === "", "Final Copy: Website Copy Long's own header row (50) is a pure label, never written to");
+  assert(readCellText(fc, outWorkbook.sharedStrings, "C51") === "Long web copy 1 — extended description." && readCellText(fc, outWorkbook.sharedStrings, "C53") === "Long web copy 3 — extended description.", "Final Copy: Website Copy Long's 3 values land AFTER the header, at rows 51-53");
+
+  // The other 7 tabs (sheet6 "Marketing Direction" and sheet7 "Final Copy"
+  // are now filled targets, no longer untouched) + shared parts must be
+  // byte-for-byte identical to the original template — the strongest
+  // possible form of "untouched".
   const origZip = new PizZip(templateBuffer);
   const outZip = new PizZip(result.buffer);
   const untouchedParts = [
     "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml",
-    "xl/worksheets/sheet7.xml", "xl/worksheets/sheet8.xml", "xl/worksheets/sheet9.xml",
+    "xl/worksheets/sheet8.xml", "xl/worksheets/sheet9.xml",
     "xl/worksheets/sheet10.xml", "xl/worksheets/sheet11.xml", "xl/worksheets/sheet12.xml",
     "xl/styles.xml", "xl/sharedStrings.xml", "xl/theme/theme1.xml",
   ];
@@ -238,13 +289,19 @@ async function main() {
     const outBytes = outZip.file(p)?.asUint8Array();
     return origBytes && outBytes && Buffer.compare(Buffer.from(origBytes), Buffer.from(outBytes)) === 0;
   });
-  assert(allUntouchedIdentical, "all 8 non-target sheets + styles/sharedStrings/theme are byte-for-byte identical to the original template");
+  assert(allUntouchedIdentical, "all 7 non-target sheets + styles/sharedStrings/theme are byte-for-byte identical to the original template");
 
   const sheet6Changed = Buffer.compare(
     Buffer.from(origZip.file("xl/worksheets/sheet6.xml")!.asUint8Array()),
     Buffer.from(outZip.file("xl/worksheets/sheet6.xml")!.asUint8Array())
   ) !== 0;
   assert(sheet6Changed, "Marketing Direction (sheet6.xml) DID change — confirms it's now actually being filled, not silently skipped");
+
+  const sheet7Changed = Buffer.compare(
+    Buffer.from(origZip.file("xl/worksheets/sheet7.xml")!.asUint8Array()),
+    Buffer.from(outZip.file("xl/worksheets/sheet7.xml")!.asUint8Array())
+  ) !== 0;
+  assert(sheet7Changed, "Final Copy (sheet7.xml) DID change — confirms it's now actually being filled, not silently skipped");
 
   // ---- Section 2: FAQ grounding (the AI call itself needs a live key —
   // not exercised offline; this verifies the deterministic guard around it) ----

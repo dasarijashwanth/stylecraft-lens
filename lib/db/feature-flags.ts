@@ -26,6 +26,7 @@ const ENV_DEFAULTS: Record<string, string | undefined> = {
   news_updates_enabled: process.env.NEWS_UPDATES_ENABLED,
   deck_generation_enabled: process.env.DECK_GENERATION_ENABLED,
   marketing_direction_generation_enabled: process.env.MARKETING_DIRECTION_GENERATION_ENABLED,
+  content_form_generation_enabled: process.env.CONTENT_FORM_GENERATION_ENABLED,
 };
 
 // Per-flag fallback used ONLY when no DB row exists for this flag at all
@@ -51,6 +52,11 @@ const DEFAULT_ENABLED: Record<string, boolean> = {
   // Features page (no deploy) if it turns out to stall production the way
   // deck/GTM generation once did.
   marketing_direction_generation_enabled: true,
+  // Content Form (the 15-field Product Detail Page content sheet) is a new
+  // pipeline phase with 4 grouped AI calls — defaults ON for the same reason
+  // as marketing_direction_generation_enabled above (the spec requires
+  // auto-generation), with the same admin-page kill-switch safety net.
+  content_form_generation_enabled: true,
 };
 
 function fallbackEnabled(flagName: string): boolean {

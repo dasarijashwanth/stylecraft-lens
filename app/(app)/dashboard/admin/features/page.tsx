@@ -33,6 +33,16 @@ const FLAG_LABELS: Record<string, { title: string; description: string }> = {
     description:
       "Off by default — deck generation was repeatedly stalling/timing out as the auto-pipeline's last phase, so project setup now completes right after Product FAQs instead of hanging on it. Turn on to resume auto-generating a deck for every new project; a deck can still be generated manually anytime from a project's Project Deck tab regardless of this setting.",
   },
+  marketing_direction_generation_enabled: {
+    title: "Automatic Marketing Direction Generation",
+    description:
+      "On by default — auto-generates the GTM workbook's Marketing Direction tab (Our Differentiators, Selling Position, Rep Talking Points, etc.) right after Product FAQs for every new project. Turn off to skip this phase if it starts stalling/timing out; fields can still be generated manually anytime from the Go-To-Market tab regardless of this setting.",
+  },
+  content_form_generation_enabled: {
+    title: "Automatic Content Form Generation",
+    description:
+      "On by default — auto-generates the 15-field Content Form (Amazon/website titles, taglines, bullets, keywords) right after the Go-To-Market sheet for every new project. Turn off to skip this phase if it starts stalling/timing out; fields can still be generated manually anytime from the Content Form tab regardless of this setting.",
+  },
 };
 
 export default function AdminFeaturesPage() {

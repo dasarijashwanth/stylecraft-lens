@@ -23,18 +23,20 @@ import { getProjectReports } from "./db/reports";
 import { getActiveDeckTemplate } from "./db/deck-templates";
 import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
-import { isTdsEnabled, isDeckGenerationEnabled, isMarketingDirectionGenerationEnabled } from "./feature-flags";
+import { isTdsEnabled, isDeckGenerationEnabled, isMarketingDirectionGenerationEnabled, isContentFormGenerationEnabled } from "./feature-flags";
 import { listToolTypes } from "./db/tool-types";
 import { generateProductFaqs } from "./gtm-product-faqs";
 import { finalizeFieldAnswers } from "./field-finalize";
 import { generateMarketingDirection } from "./gtm-marketing-direction";
+import { generateContentForm } from "./content-form-generate";
+import { CONTENT_FORM_SCHEMA } from "./content-form-field-schema";
 import { listCatalogProducts } from "./db/catalog-products";
 import { matchCatalogProductByName } from "./our-product-position";
 import { getMarketingDefaults } from "./db/marketing-defaults";
 
 export interface GenerationStepResult {
   state: GenerationStateRow;
-  phaseCompleted: "snapshot" | "tds" | "gtm" | "faqs" | "marketing_direction" | "deck" | null;
+  phaseCompleted: "snapshot" | "tds" | "gtm" | "content_form" | "faqs" | "marketing_direction" | "deck" | null;
 }
 
 export async function runProjectGenerationStep(projectId: string, orgId: string, userId: string): Promise<GenerationStepResult> {
@@ -179,10 +181,11 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         await setDocumentSourceDocVersions(document.id, sourceDocVersions);
       }
 
-      // gtm is no longer a terminal phase — the pipeline continues into FAQ
-      // generation (needs GTM's fully-resolved fields as grounding) and then
-      // deck generation, so this is "running" not "complete".
-      await updateGenerationState(projectId, { phase: "faqs", status: "running" });
+      // gtm is no longer a terminal phase — the pipeline continues into
+      // Content Form generation (needs GTM's fully-resolved fields as
+      // grounding), then FAQ generation, then deck generation, so this is
+      // "running" not "complete".
+      await updateGenerationState(projectId, { phase: "content_form", status: "running" });
       logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "tds->gtm", outcome: "ok", elapsedMs: Date.now() - stepStart });
 
       // Cross-fill any TDS field GTM just answered for real while TDS was
@@ -194,7 +197,76 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         logCall("generation-pipeline", { op: "reconcile", projectId, phase: "tds-gtm-reconcile", outcome: "error", errorMessage: err.message || "reconcile failed", elapsedMs: Date.now() - stepStart });
       }
 
-      return { state: { ...state, phase: "faqs", status: "running" }, phaseCompleted: "gtm" };
+      return { state: { ...state, phase: "content_form", status: "running" }, phaseCompleted: "gtm" };
+    }
+
+    if (state.phase === "content_form") {
+      // Content Form — the 15-field Product Detail Page content sheet
+      // (doc_type="content_form"). Strictly after "gtm": all 15 fields only
+      // need GTM's already-resolved grounded facts (features/motor/blades/
+      // material/hair type/warranty/care), not FAQ/Marketing Direction
+      // output, so it runs immediately after "gtm" rather than waiting on
+      // either. Best-effort, same precedent as the faqs/marketing_direction
+      // branches — a generation hiccup here must never fail the rest of
+      // project setup (every field has its own in-app regenerate button).
+      if (!(await isContentFormGenerationEnabled())) {
+        logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "content_form", outcome: "ok", errorMessage: "Content Form generation disabled via feature flag", elapsedMs: Date.now() - stepStart });
+      } else {
+        try {
+          const gtmDocument = await getOrCreateDocument(projectId, "gtm");
+          const gtmDocFields = await getDocumentFields(gtmDocument.id);
+          const gtmFieldsFlat = flattenDocumentFields(gtmDocFields);
+
+          const [salesKit, tds, reports, catalogProducts] = await Promise.all([
+            getLatestOutput(projectId, "sales_kit"),
+            getTdsFieldsForProject(projectId),
+            getProjectReports(projectId, userId),
+            listCatalogProducts(),
+          ]);
+          const latestReport = reports?.[0];
+          const sources: GtmSources = {
+            project: {
+              productName: project.productName,
+              description: project.description,
+              category: project.category,
+              toolType: project.toolType,
+              motorFamily: (project as any).motorFamily,
+              motorBrandedName: (project as any).motorBrandedName,
+              motorTech: project.motorTech,
+              keyDiff: project.keyDiff,
+              pricePoint: project.pricePoint,
+              companyContext: project.companyContext,
+              targetMarket: project.targetMarket,
+              productUrl: project.productUrl,
+              asin: project.asin,
+            },
+            salesKit,
+            tds,
+            activeReport: latestReport
+              ? { competitive_analysis: latestReport.competitive_analysis, pricing_analysis: latestReport.pricing_analysis, content_form: latestReport.content_form }
+              : null,
+          };
+
+          const matchedCatalogProduct = matchCatalogProductByName(project.productName, catalogProducts);
+          const cfBrand = await resolveBrandForProduct(project.productName);
+          const cfVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(cfBrand));
+          const cfIsPreLaunch = !project.productUrl && !project.asin;
+          const cfUploadedTdsContext = await getUploadedTdsContext(projectId);
+          const cfTdsGroundingBlock = buildTdsGroundingBlock(cfUploadedTdsContext, cfIsPreLaunch);
+
+          const contentFormFields = await generateContentForm(sources, gtmFieldsFlat, matchedCatalogProduct, cfVoiceBlock, cfTdsGroundingBlock);
+          const finalized = finalizeFieldAnswers(contentFormFields, CONTENT_FORM_SCHEMA, 1);
+          const contentFormDocument = await getOrCreateDocument(projectId, "content_form");
+          await saveDocumentFields(contentFormDocument.id, CONTENT_FORM_SCHEMA, finalized, userId);
+          logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "content_form", outcome: "ok", elapsedMs: Date.now() - stepStart });
+        } catch (err: any) {
+          logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "content_form", outcome: "error", errorMessage: err.message || "Content Form generation failed", elapsedMs: Date.now() - stepStart });
+        }
+      }
+
+      await updateGenerationState(projectId, { phase: "faqs", status: "running" });
+      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "gtm->content_form", outcome: "ok", elapsedMs: Date.now() - stepStart });
+      return { state: { ...state, phase: "faqs", status: "running" }, phaseCompleted: "content_form" };
     }
 
     if (state.phase === "faqs") {

@@ -29,6 +29,11 @@ export interface DocumentRow {
   status: string;
   drive_url?: string | null;
   drive_file_id?: string | null;
+  // Separate from drive_url/drive_file_id above (which track the PDF's own
+  // saved Drive link) so saving the GTM XLSX workbook to Drive never
+  // clobbers an already-saved PDF link, and vice versa.
+  xlsx_drive_url?: string | null;
+  xlsx_drive_file_id?: string | null;
   snapshot_id?: string | null;
   // Brand Voice Guide work — which guide version was active when this
   // document was generated, mirroring project_decks.template_id pinning
@@ -107,7 +112,9 @@ export async function getDocumentByProject(projectId: string, docType: string): 
   if (!doc) return null;
   return {
     id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status,
-    drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null,
+    drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null,
+    xlsx_drive_url: doc.xlsxDriveUrl ?? null, xlsx_drive_file_id: doc.xlsxDriveFileId ?? null,
+    snapshot_id: doc.snapshotId ?? null,
     source_doc_versions: doc.sourceDocVersions ?? null,
     created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString(),
   };
@@ -128,9 +135,9 @@ export async function getOrCreateDocument(projectId: string, docType: string): P
   }
 
   const now = new Date();
-  const doc = { id: `doc_${Date.now()}`, projectId, docType, status: "draft", driveUrl: null, driveFileId: null, snapshotId: null, createdAt: now, updatedAt: now };
+  const doc = { id: `doc_${Date.now()}`, projectId, docType, status: "draft", driveUrl: null, driveFileId: null, xlsxDriveUrl: null, xlsxDriveFileId: null, snapshotId: null, createdAt: now, updatedAt: now };
   memoryDb.documents.push(doc);
-  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: null, drive_file_id: null, snapshot_id: null, created_at: now.toISOString(), updated_at: now.toISOString() };
+  return { id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status, drive_url: null, drive_file_id: null, xlsx_drive_url: null, xlsx_drive_file_id: null, snapshot_id: null, created_at: now.toISOString(), updated_at: now.toISOString() };
 }
 
 export async function setDocumentDriveInfo(documentId: string, driveUrl: string, driveFileId: string) {
@@ -140,6 +147,19 @@ export async function setDocumentDriveInfo(documentId: string, driveUrl: string,
   } else {
     const doc = memoryDb.documents.find(d => d.id === documentId);
     if (doc) { doc.driveUrl = driveUrl; doc.driveFileId = driveFileId; }
+  }
+}
+
+// Separate from setDocumentDriveInfo above — tracks the GTM XLSX workbook's
+// own saved Drive link, distinct from the PDF's (see DocumentRow's own
+// xlsx_drive_url/xlsx_drive_file_id comment for why they're separate columns).
+export async function setDocumentXlsxDriveInfo(documentId: string, driveUrl: string, driveFileId: string) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("documents").update({ xlsx_drive_url: driveUrl, xlsx_drive_file_id: driveFileId }).eq("id", documentId);
+    if (error) throw error;
+  } else {
+    const doc = memoryDb.documents.find(d => d.id === documentId);
+    if (doc) { doc.xlsxDriveUrl = driveUrl; doc.xlsxDriveFileId = driveFileId; }
   }
 }
 
@@ -180,7 +200,9 @@ export async function getDocumentById(documentId: string): Promise<DocumentRow |
   if (!doc) return null;
   return {
     id: doc.id, project_id: doc.projectId, doc_type: doc.docType, status: doc.status,
-    drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null, snapshot_id: doc.snapshotId ?? null,
+    drive_url: doc.driveUrl ?? null, drive_file_id: doc.driveFileId ?? null,
+    xlsx_drive_url: doc.xlsxDriveUrl ?? null, xlsx_drive_file_id: doc.xlsxDriveFileId ?? null,
+    snapshot_id: doc.snapshotId ?? null,
     voice_guide_id: doc.voiceGuideId ?? null, voice_guide_version: doc.voiceGuideVersion ?? null,
     source_doc_versions: doc.sourceDocVersions ?? null,
     created_at: doc.createdAt.toISOString(), updated_at: doc.updatedAt.toISOString(),

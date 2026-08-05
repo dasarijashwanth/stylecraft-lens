@@ -226,6 +226,34 @@ const MARKETING_DIRECTION_STEPS: Step[] = [
   { kind: "field", label: "Promo", fieldId: "marketing_promo" },
 ];
 
+// ---- Final Copy (Item=A, Owner=B, Copy=C, Notes=D) — the Content Form
+// tab's 15-field export (doc_type="content_form"). Labels/rows confirmed
+// via a raw OOXML dump of the real fixture (scripts/fixtures/
+// gtm-official-template.xlsx's xl/worksheets/sheet7.xml), listed here in
+// the template's own top-to-bottom row order (6, 7, 9, 10, 16, 22, 29, 34,
+// 35, 36, 40, 41, 42, 46, 50) — same forward-cursor-disambiguation
+// requirement as every other sheet in this file. Ad Sheet Headline/Sub
+// Header (Content Form item 13) has NO matching row anywhere in this sheet
+// — generated and editable in-app only, deliberately never mapped here
+// (not even as a `skipRow`, since there's no real row to skip past).
+const FINAL_COPY_STEPS: Step[] = [
+  { kind: "field", label: "Tagline/Headline - Sexy", fieldId: "sexy_tagline" },
+  { kind: "field", label: "Tagline/Headline - Techie", fieldId: "techie_tagline" },
+  { kind: "field", label: "Description (romance copy)", fieldId: "romance_copy" },
+  { kind: "group", label: "Consumer Facing Feature Bullets - LONG", fieldIdPrefix: "bullet_long", total: 6, offset: 0 },
+  { kind: "group", label: "Consumer Facing Feature Bullets - CONDENSED", fieldIdPrefix: "bullet_condensed", total: 6, offset: 0 },
+  { kind: "group", label: "Consumer Facing Feature Bullets - TOP 3", fieldIdPrefix: "bullet_top3", total: 3, offset: 0 },
+  { kind: "field", label: "Keyword Search Terms", fieldId: "keywords" },
+  { kind: "field", label: "Amazon Long Title", fieldId: "amazon_long_title" },
+  { kind: "field", label: "E-commerce Title", fieldId: "ecommerce_title" },
+  { kind: "field", label: "Website Title", fieldId: "website_title" },
+  { kind: "field", label: "Short Description", fieldId: "short_description" },
+  { kind: "field", label: "Suggested Use", fieldId: "suggested_use" },
+  { kind: "field", label: "Features & Benefits", fieldId: "features_benefits" },
+  { kind: "group", label: "Feature Bullets Top 3 For Web", fieldIdPrefix: "website_copy_short", total: 3, offset: 1 },
+  { kind: "group", label: "Feature Bullets Top 3 for Hot Spot", fieldIdPrefix: "website_copy_long", total: 3, offset: 1 },
+];
+
 function applyFieldStep(
   workbook: OpenGtmWorkbook,
   sheet: string,
@@ -350,6 +378,12 @@ export function renderGtmWorkbook(templateBuffer: Buffer, input: GtmWorkbookMapp
   applySteps(workbook, "BOX ONLY", "A", "C", null, BOX_ONLY_STEPS, boxFields, repairs, unmapped);
 
   applySteps(workbook, "Marketing Direction", "A", "C", "D", MARKETING_DIRECTION_STEPS, input.fields, repairs, unmapped);
+
+  // Content Form fields are merged into the same input.fields map by the
+  // caller (field ids don't collide with GTM_FIELD_SCHEMA's own ids) —
+  // applySteps only ever reads fields[id].answer, so no separate parameter
+  // is needed here.
+  applySteps(workbook, "Final Copy", "A", "C", "D", FINAL_COPY_STEPS, input.fields, repairs, unmapped);
 
   // Product FAQ needs its 3 existing Q:/A:/blank triads grown to 10 BEFORE
   // any label search runs (row numbers below the growth point shift).

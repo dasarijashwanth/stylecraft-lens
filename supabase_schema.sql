@@ -1695,3 +1695,23 @@ CREATE TABLE IF NOT EXISTS marketing_defaults (
 ALTER TABLE marketing_defaults ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for marketing_defaults" ON marketing_defaults FOR ALL USING (true) WITH CHECK (true);
 INSERT INTO marketing_defaults (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- 48. FEATURE FLAG: CONTENT FORM GENERATION — new pipeline phase
+-- (lib/project-generation-engine.ts's "content_form" phase, runs right
+-- after "gtm" and before "faqs") generating the 15-field Product Detail
+-- Page content sheet (doc_type="content_form" on the existing documents/
+-- document_fields tables — no new table needed). Defaults ON, same
+-- kill-switch precedent as Section 46's marketing_direction flag (this
+-- seed isn't load-bearing on its own — lib/db/feature-flags.ts's
+-- DEFAULT_ENABLED already returns true with no row — it exists so the row
+-- is visible in the admin Features page to disable later if needed).
+INSERT INTO feature_flags (flag_name, enabled) VALUES ('content_form_generation_enabled', true) ON CONFLICT (flag_name) DO NOTHING;
+
+-- 49. DOCUMENTS: XLSX DRIVE PROVENANCE — a "Save to Google Drive" option
+-- next to GTM's existing "Download XLSX" link, so the generated GTM
+-- workbook (not just its PDF) also saves to Drive. Kept as separate
+-- columns from documents.drive_url/drive_file_id (which track the PDF's
+-- own saved link, see Part with SaveToDriveButton) so saving the XLSX
+-- never clobbers an already-saved PDF link, and vice versa.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS xlsx_drive_url VARCHAR(500);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS xlsx_drive_file_id VARCHAR(255);

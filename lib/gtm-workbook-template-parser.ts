@@ -13,10 +13,10 @@ export interface GtmWorkbookSheetSummary {
 }
 
 // The 3 tabs this export feature fills — every other tab in the workbook
-// (Product, Product Testing, Marketing Direction, Final Copy, Austin
-// Review, Product Purchasing, Creative Playbook, GTM Plan Deliverables/
-// Asana Proj, Sampling Program) is exported byte-for-byte untouched.
-export const REQUIRED_GTM_WORKBOOK_SHEETS = ["Product Knowledge", "BOX ONLY", "Product FAQ"];
+// (Product, Product Testing, Austin Review, Product Purchasing, Creative
+// Playbook, GTM Plan Deliverables/Asana Proj, Sampling Program) is exported
+// byte-for-byte untouched.
+export const REQUIRED_GTM_WORKBOOK_SHEETS = ["Product Knowledge", "BOX ONLY", "Product FAQ", "Final Copy"];
 
 function attr(tag: string, name: string): string | null {
   const m = tag.match(new RegExp(`${name}="([^"]*)"`));

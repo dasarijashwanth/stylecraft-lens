@@ -23,3 +23,7 @@ export async function isDeckGenerationEnabled(): Promise<boolean> {
 export async function isMarketingDirectionGenerationEnabled(): Promise<boolean> {
   return getFeatureFlag("marketing_direction_generation_enabled");
 }
+
+export async function isContentFormGenerationEnabled(): Promise<boolean> {
+  return getFeatureFlag("content_form_generation_enabled");
+}
