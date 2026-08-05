@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Loader2, AlertCircle, HelpCircle, XCircle } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
-import HeroVideo from "@/components/scroll/HeroVideo";
+import { useBackgroundStageStore } from "@/stores/backgroundStageStore";
 
 interface PhaseState {
   status: "waiting" | "running" | "complete" | "error";
@@ -159,6 +159,15 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [failedMessage, setFailedMessage] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
+
+  // While this results-are-generating screen is showing, the persistent
+  // BackgroundStage (mounted in Shell.tsx) swaps to the "waiting/generating"
+  // GIF-2 video instead of /dashboard/analyze's own default background —
+  // cleared on unmount so the route's normal background resumes.
+  useEffect(() => {
+    useBackgroundStageStore.getState().setOverride("gif-2");
+    return () => useBackgroundStageStore.getState().clearOverride();
+  }, []);
   const [runToken, setRunToken] = useState(0);
   const startTime = useRef(Date.now());
   const timerRef = useRef<NodeJS.Timeout>();
@@ -419,15 +428,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
   const isRunning = !failedMessage && !pendingQuestion && completedCount < PHASE_LABELS.length;
 
   return (
-    <motion.div layout className="analysis-progress-panel relative bg-surface-2/85 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
-      <HeroVideo
-        srcMp4="/video/hero-2.mp4"
-        srcWebm="/video/hero-2.webm"
-        poster="/images/hero-2-poster.jpg"
-        className="absolute inset-0 opacity-30"
-        mediaClassName="w-full h-full object-cover"
-      />
-      <div className="relative z-10">
+    <motion.div layout className="analysis-progress-panel bg-surface-2 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
       {/* Top bar */}
       <div className="progress-topbar flex items-center justify-between px-5 py-3 border-b border-border bg-surface-3/30">
         <div className="progress-meta text-[11px] text-text-muted font-mono">
@@ -701,7 +702,6 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
           </div>
         </div>
       )}
-      </div>
     </motion.div>
   );
 }

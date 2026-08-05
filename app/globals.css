@@ -675,3 +675,13 @@ h3 {
   z-index: 60;
   pointer-events: none;
 }
+
+/* Applied to individual cards in long grids (Projects/Competitors lists) —
+   off-screen cards skip layout/paint entirely until scrolled near, per the
+   redesign's performance budget. contain-intrinsic-size gives the browser a
+   placeholder height so scrollbar/scroll-position don't jump as cards
+   enter/exit the "skipped" state. */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 220px;
+}

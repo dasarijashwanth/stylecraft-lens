@@ -33,6 +33,28 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
+/* Applied automatically (via useGlassMode(), see stores/backgroundStageStore.ts)
+   whenever the current route has a full-viewport BackgroundStage behind it —
+   every existing MagicBentoCard usage across the app gets this treatment for
+   free, no call-site changes needed. Mirrors .cinema-scrim's blur/tint
+   values (app/globals.css) so cards floating over the cinematic background
+   read as one coherent "glass" system rather than two different looks. */
+.magic-bento-card--glass {
+  background: rgba(22, 22, 26, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Browsers without backdrop-filter support (rare in 2026, but a real
+   fallback matters per the redesign's own performance/legibility rules) —
+   fall back to a near-solid panel rather than a see-through, unreadable one. */
+@supports not (backdrop-filter: blur(1px)) {
+  .magic-bento-card--glass {
+    background: rgba(22, 22, 26, 0.92);
+  }
+}
+
 .magic-bento-card--border-glow::after {
   content: "";
   position: absolute;

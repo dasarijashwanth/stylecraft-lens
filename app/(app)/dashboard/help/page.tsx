@@ -9,7 +9,6 @@ import FaqMarkdown from "@/components/help/FaqMarkdown";
 import { FAQ_CATEGORIES } from "@/lib/faq-seed-data";
 import { slugifyFaqCategory } from "@/lib/faq-slugs";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
-import HelpHero from "@/components/help/HelpHero";
 
 interface Faq {
   id: string;
@@ -232,7 +231,10 @@ export default function HelpPage() {
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <HelpHero />
+      <div className="flex items-center gap-2">
+        <HelpCircle className="w-5 h-5 text-accent" />
+        <h1 className="text-display">Help &amp; Support</h1>
+      </div>
 
       <div className="flex items-center gap-1 border-b border-border">
         <div className="px-3 py-2 border-b-2 border-accent text-accent font-bold text-xs flex items-center gap-1.5">

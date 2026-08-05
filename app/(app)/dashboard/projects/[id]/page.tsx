@@ -45,6 +45,7 @@ import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillRepo
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
+import { useGlassMode } from "@/stores/backgroundStageStore";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
 import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTIONS, ROYALTY_PCT_BY_TYPE, type Country, type ProductType, type RoyaltyType } from "@/lib/tariff-multipliers";
@@ -1151,6 +1152,7 @@ function PricingTab({ data, editing, localData, setLocalData }: any) {
 // ────────────────────────────────────────────────────────────────────────────
 function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: any) {
   const [recsOpen, setRecsOpen] = useState(false);
+  const isGlass = useGlassMode();
 
   const editBlock = editing && (
     <MagicBentoCard className="p-5 space-y-4 text-xs">
@@ -1184,7 +1186,7 @@ function GoToMarketTab({ data, editing, localData, setLocalData, projectId }: an
       {editing ? (
         editBlock
       ) : (
-        <div className="border border-border rounded-xl overflow-hidden">
+        <div className={`border border-border rounded-xl overflow-hidden ${isGlass ? "cinema-glass" : ""}`}>
           <button
             type="button"
             onClick={() => setRecsOpen(o => !o)}
@@ -1285,6 +1287,7 @@ function snapshotDomain(sourceUrl: string | null | undefined, asin: string | nul
 }
 
 function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string; pipelineStatus?: string }) {
+  const isGlass = useGlassMode();
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [snapshotMeta, setSnapshotMeta] = useState<{ capturedAt: string | null; sourceUrl: string | null; asin: string | null }>({ capturedAt: null, sourceUrl: null, asin: null });
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
@@ -1394,7 +1397,7 @@ function TdsKnowledgeSection({ projectId, pipelineStatus }: { projectId: string;
   const domain = snapshotDomain(snapshotMeta.sourceUrl, snapshotMeta.asin);
 
   return (
-    <div className="border border-border rounded-xl overflow-hidden">
+    <div className={`border border-border rounded-xl overflow-hidden ${isGlass ? "cinema-glass" : ""}`}>
       <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Technical Data Sheet</span>
@@ -1611,6 +1614,7 @@ function ProductKnowledgeSection({
   projectSku?: string | null;
   onSkuChange?: (sku: string) => void;
 }) {
+  const isGlass = useGlassMode();
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
   const [fillReport, setFillReport] = useState<FillReport | null>(null);
@@ -1930,7 +1934,7 @@ function ProductKnowledgeSection({
   const pipelineFailed = !hasDocument && pipelineStatus === "failed";
 
   return (
-    <div className="border border-border rounded-xl overflow-hidden">
+    <div className={`border border-border rounded-xl overflow-hidden ${isGlass ? "cinema-glass" : ""}`}>
       <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Product Knowledge</span>
@@ -2247,6 +2251,7 @@ function CharLimitTextarea({
 function ContentFormSection({
   projectId, pipelineStatus, pipelinePhase,
 }: { projectId: string; pipelineStatus?: string; pipelinePhase?: string }) {
+  const isGlass = useGlassMode();
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
   const [fillReport, setFillReport] = useState<FillReport | null>(null);
@@ -2499,7 +2504,7 @@ function ContentFormSection({
   }
 
   return (
-    <div className="border border-border rounded-xl overflow-hidden">
+    <div className={`border border-border rounded-xl overflow-hidden ${isGlass ? "cinema-glass" : ""}`}>
       <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Content Form</span>

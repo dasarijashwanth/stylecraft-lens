@@ -10,7 +10,6 @@ import { Spinner } from "@/components/ui/Spinner";
 import { buildPricingAnalysis } from "@/lib/pricing-analysis";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { getToolTypeLabel } from "@/lib/tool-type-taxonomy";
-import AnalysisIdentityScene from "./AnalysisIdentityScene";
 
 // Fallback for a raw family/tech key (e.g. "brushless_dc") when no
 // human-authored branded name was captured for this run — title-cases it
@@ -296,21 +295,54 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
       </div>
 
       {/* IDENTIFIED PRODUCT — shown so a wrong identification is caught
-          immediately, not buried inside the market analysis text. A pinned,
-          scrubbed cinematic reveal (see AnalysisIdentityScene) rather than a
-          plain static card. */}
+          immediately, not buried inside the market analysis text. */}
       {identity && (identity.category || identity.whatItIs) && (
-        <AnalysisIdentityScene
-          productName={analysis.productName}
-          category={identity.category}
-          subcategory={identity.subcategory}
-          whatItIs={identity.whatItIs}
-          confidence={identity.confidence}
-          evidence={identity.evidence}
-          toolTypeLabel={identityToolTypeLabel}
-          motorLabel={identityMotorLabel}
-          priceLabel={identityPriceLabel}
-        />
+        <div className="p-4 bg-surface-2 border border-border rounded-xl space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Identified Product</span>
+            {identity.confidence && (
+              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
+                identity.confidence === "high" ? "bg-success/10 border-success/30 text-success" :
+                identity.confidence === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
+                "bg-danger/10 border-danger/30 text-danger"
+              }`}>{identity.confidence} confidence</span>
+            )}
+          </div>
+          <div className="text-xs text-text-primary font-semibold">
+            {identity.category}{identity.subcategory && identity.subcategory !== identity.category ? ` / ${identity.subcategory}` : ""}
+          </div>
+          {(identityToolTypeLabel || identityMotorLabel || identityPriceLabel) && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              {identityToolTypeLabel && (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-surface-3 border border-border text-text-secondary uppercase">
+                  {identityToolTypeLabel}
+                </span>
+              )}
+              {identityMotorLabel && (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-surface-3 border border-border text-text-secondary uppercase">
+                  {identityMotorLabel}
+                </span>
+              )}
+              {identityPriceLabel && (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-accent-bg border border-accent-border text-accent-text uppercase">
+                  {identityPriceLabel}
+                </span>
+              )}
+            </div>
+          )}
+          {identity.whatItIs && <p className="text-[11px] text-text-secondary leading-relaxed">{identity.whatItIs}</p>}
+          {Array.isArray(identity.evidence) && identity.evidence.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-0.5">
+              {identity.evidence.slice(0, 4).map((e, i) => (
+                e.url ? (
+                  <a key={i} href={e.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-accent hover:underline" title={e.claim}>
+                    evidence {i + 1}
+                  </a>
+                ) : null
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Synthesis-stale banner — a competitor swap (CompetitorCard's

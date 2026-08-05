@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { gsap } from "gsap";
 import { useAuthStore } from "@/stores/authStore";
 import { Logo, Wordmark } from "@/components/ui/Logo";
-import HeroVideo from "@/components/scroll/HeroVideo";
+import BackgroundStage from "@/components/scroll/BackgroundStage";
 import ScrollProgressBar from "@/components/scroll/ScrollProgressBar";
 
 // Small cursor-tilt on the glass card, only while the cinematic hero video
@@ -161,20 +161,9 @@ export default function SignInPage() {
   return (
     <div className="relative flex items-center justify-center min-h-screen bg-bg text-text-primary px-4 overflow-hidden">
       <ScrollProgressBar />
+      <BackgroundStage />
 
-      <HeroVideo
-        srcMp4="/video/hero-1.mp4"
-        srcWebm="/video/hero-1.webm"
-        poster="/images/hero-1-poster.jpg"
-        className="absolute inset-0 z-0"
-        mediaClassName="w-full h-full object-cover"
-      />
-      <div
-        className="z-[1] cinema-scrim"
-        style={{ "--scrim-opacity": 0.72 } as React.CSSProperties}
-      />
-
-      <div className="relative z-10 w-full flex items-center justify-center">
+      <div className="relative z-[1] w-full flex items-center justify-center">
         <Suspense fallback={null}>
           <SignInForm />
         </Suspense>

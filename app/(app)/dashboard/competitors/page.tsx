@@ -433,7 +433,7 @@ export default function CompetitorsPage() {
             ) : (
               <MagicBentoSection className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {processedFixed.map(c => (
-                  <MagicBentoCard key={c.id} className="p-5 flex flex-col justify-between">
+                  <MagicBentoCard key={c.id} className="cv-auto p-5 flex flex-col justify-between">
                     <div>
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <h4 className="text-xs font-bold text-text-primary">{c.name}</h4>
@@ -660,7 +660,7 @@ function CompetitorGridCard({
   const amazonUrl = c.asin ? `https://www.amazon.com/dp/${c.asin}` : c.website;
 
   return (
-    <MagicBentoCard className={`p-5 flex flex-col justify-between ${isFromAnalysis ? "border-l-4 border-l-accent" : ""}`}>
+    <MagicBentoCard className={`cv-auto p-5 flex flex-col justify-between ${isFromAnalysis ? "border-l-4 border-l-accent" : ""}`}>
       <div>
         <div className="flex justify-between items-start mb-3 gap-2">
           <div className="flex items-center gap-2">

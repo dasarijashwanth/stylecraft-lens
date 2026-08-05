@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Loader2, AlertCircle } from "lucide-react";
-import HeroVideo from "@/components/scroll/HeroVideo";
+import { useBackgroundStageStore, useGlassMode } from "@/stores/backgroundStageStore";
 
 // Resumable phase-continue driver for the project-creation pipeline
 // (capture snapshot -> generate TDS -> generate GTM) — structurally the
@@ -117,6 +117,16 @@ export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled =
   const [failed, setFailed] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [runToken, setRunToken] = useState(0);
+  const isGlass = useGlassMode();
+
+  // While this generation screen is showing, the persistent BackgroundStage
+  // (mounted in Shell.tsx) swaps to the "waiting/generating" GIF-2 video
+  // instead of this route's own default background — cleared on unmount so
+  // the route's normal background resumes once generation finishes.
+  useEffect(() => {
+    useBackgroundStageStore.getState().setOverride("gif-2");
+    return () => useBackgroundStageStore.getState().clearOverride();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,21 +180,14 @@ export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled =
   }
 
   return (
-    <div className="relative border border-border rounded-xl overflow-hidden mb-4 bg-surface-2/85 shadow-sm">
-      <HeroVideo
-        srcMp4="/video/hero-2.mp4"
-        srcWebm="/video/hero-2.webm"
-        poster="/images/hero-2-poster.jpg"
-        className="absolute inset-0 opacity-30"
-        mediaClassName="w-full h-full object-cover"
-      />
-      <div className="relative z-10 flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
+    <div className={`border border-border rounded-xl overflow-hidden mb-4 shadow-sm ${isGlass ? "cinema-glass" : "bg-surface-2"}`}>
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
         <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
           Setting up this product
         </span>
         {!failed && <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />}
       </div>
-      <div className="relative z-10 flex flex-col p-4 gap-3">
+      <div className="flex flex-col p-4 gap-3">
         {phases.map((phase, i) => (
           <div key={i} className="flex items-start gap-2.5">
             <div className="w-5 h-5 flex items-center justify-center shrink-0 mt-0.5">

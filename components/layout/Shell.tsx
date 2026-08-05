@@ -22,6 +22,7 @@ import { Modal } from "@/components/ui/Modal";
 import GettingStartedBanner from "@/components/help/GettingStartedBanner";
 import { ContactSupportProvider } from "@/components/help/ContactSupportProvider";
 import ScrollProgressBar from "@/components/scroll/ScrollProgressBar";
+import BackgroundStage from "@/components/scroll/BackgroundStage";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -185,6 +186,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     <ContactSupportProvider>
     <div className="min-h-screen bg-bg text-text-primary">
       <ScrollProgressBar />
+      <BackgroundStage />
 
       {/* Sidebar navigation */}
       <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
@@ -196,7 +198,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           onSearchClick={() => setSearchOpen(true)}
         />
 
-        <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-4">
+        <main className="relative z-[1] flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-4">
           <GettingStartedBanner />
           {children}
         </main>

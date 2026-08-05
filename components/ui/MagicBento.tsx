@@ -13,6 +13,7 @@
 // magnetism, click ripple) is kept as close to source as practical.
 import { useRef, useEffect, useCallback, useState, type ReactNode } from "react";
 import { gsap } from "gsap";
+import { useGlassMode } from "@/stores/backgroundStageStore";
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 8;
@@ -94,6 +95,7 @@ export function MagicBentoCard({
   const magnetismAnimRef = useRef<gsap.core.Tween | null>(null);
   const isMobile = useMobileDetection();
   const shouldDisableAnimations = disableAnimations || isMobile;
+  const isGlass = useGlassMode();
 
   const initializeParticles = useCallback(() => {
     if (particlesInitialized.current || !cardRef.current) return;
@@ -221,7 +223,7 @@ export function MagicBentoCard({
     <div
       ref={cardRef}
       onClick={onClick}
-      className={`magic-bento-card cursor-target ${enableBorderGlow ? "magic-bento-card--border-glow" : ""} ${enableStars ? "magic-bento-card--particle-container" : ""} ${className}`}
+      className={`magic-bento-card cursor-target ${isGlass ? "magic-bento-card--glass" : ""} ${enableBorderGlow ? "magic-bento-card--border-glow" : ""} ${enableStars ? "magic-bento-card--particle-container" : ""} ${className}`}
       style={{ ...style, ["--glow-color" as string]: glowColor }}
     >
       {children}
