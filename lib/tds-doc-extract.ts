@@ -6,6 +6,10 @@
 // This is NOT the app's own (disabled) TDS-generation feature — no
 // scraping, no AI product-identification, just reading a file a human
 // already wrote.
+// MUST be the first import in this file, before "pdf-parse" — sets the
+// DOMMatrix global pdfjs-dist's Node build otherwise crashes on at module
+// load. See that file's own header comment for the full story.
+import "./pdf-dommatrix-polyfill";
 import PizZip from "pizzip";
 import * as XLSX from "xlsx";
 import { PDFParse } from "pdf-parse";
