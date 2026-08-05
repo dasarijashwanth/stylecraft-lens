@@ -41,6 +41,28 @@ const CSP = [
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // pdf-parse (lib/tds-doc-extract.ts) pulls in pdfjs-dist + @napi-rs/canvas,
+  // which reference browser-only globals (DOMMatrix, etc.) for its
+  // rendering/canvas code paths. Left to webpack's default bundling, Next
+  // tries to bundle these into the serverless function itself, and that
+  // bundled copy throws `ReferenceError: DOMMatrix is not defined` at
+  // MODULE LOAD time — confirmed live: this crashed every single call to
+  // every source-docs route (even the plain GET list and the presign-only
+  // upload-url route, neither of which ever touches PDF parsing) because
+  // they all transitively import lib/tds-doc-ingest.ts -> tds-doc-extract.ts
+  // -> pdf-parse, and the crash happens before any route handler code even
+  // runs. `serverExternalPackages` tells Next to leave these as plain
+  // Node `require()` calls instead of bundling them, so they resolve
+  // normally from node_modules at runtime (which Vercel deploys in full),
+  // the same standard fix used for any native/DOM-dependent Node package
+  // in a Next.js API route.
+  // Next 15 renamed this to a top-level `serverExternalPackages` — this repo
+  // is on Next 14.2.x, where it's still `experimental.serverComponentsExternalPackages`
+  // (confirmed against this exact installed version's own config schema,
+  // node_modules/next/dist/server/config-schema.js).
+  experimental: {
+    serverComponentsExternalPackages: ["pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
+  },
   env: {
     // Exposed client-side so Contact Support submissions (lib/support-email.ts's
     // context block) can auto-attach the app version without manual syncing.
