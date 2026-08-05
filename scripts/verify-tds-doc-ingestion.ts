@@ -198,6 +198,31 @@ async function main() {
   assert(docResult.extractionStatus === "complete", "extractDocContent's best-effort CFB text sweep reports complete for real text content");
   assert(docResult.fullText.includes("Brushless") && docResult.fullText.includes("Warranty"), "extractDocContent recovers real readable text from the WordDocument stream (best-effort, not a full Word parse)");
 
+  // Regression test — a real production incident: an earlier version of
+  // sweepPrintableRuns had no cap on how much of the WordDocument stream it
+  // would scan, a synchronous byte-by-byte loop that blocked the Node event
+  // loop long enough on a large real .doc upload to blow past Vercel's 60s
+  // maxDuration (which the finalize route's own withDeadline/routeStartTime
+  // budgeting can't catch — that mechanism only races ASYNC promises via
+  // setTimeout, and can't interrupt synchronous CPU-bound work). Verifies
+  // the fix directly: even a maximally adversarial ~14MB buffer that's
+  // ENTIRELY "printable-looking" bytes (the worst case for this sweep)
+  // completes in well under a second.
+  console.log("\n[5e-2] extractDocContent — a large adversarial buffer never blocks the event loop for long (regression: unbounded sweep)");
+  const adversarialDocBuffer: Buffer = (() => {
+    const cfb = (XLSX_STATIC as any).CFB.utils.cfb_new();
+    // All printable ASCII, ~14MB — the exact worst case for a naive
+    // unbounded sweep (one giant continuous "run" the whole way through).
+    const bigContent = Buffer.alloc(14 * 1024 * 1024, 0x41); // 'A' repeated
+    (XLSX_STATIC as any).CFB.utils.cfb_add(cfb, "WordDocument", bigContent);
+    return (XLSX_STATIC as any).CFB.write(cfb, { type: "buffer" });
+  })();
+  const sweepStart = Date.now();
+  const adversarialResult = await extractDocContent(adversarialDocBuffer);
+  const sweepElapsedMs = Date.now() - sweepStart;
+  assert(sweepElapsedMs < 5000, `a ~14MB all-printable adversarial .doc buffer is swept in well under 5s (got ${sweepElapsedMs}ms) — proves the MAX_DOC_SWEEP_BYTES cap actually bounds the work`);
+  assert(adversarialResult.extractionStatus === "complete", "the capped sweep still reports a real result, not a crash/failure, for the adversarial buffer");
+
   console.log("\n[5f] CSV — no binary signature, validated by content-sniff instead of detectDocType");
   const csvBuffer = Buffer.from("field,value\nMotor Type,Brushless\nWarranty,2 years\n", "utf-8");
   assert(looksLikeText(csvBuffer), "a real CSV's plain-text bytes pass the text-sniff check");

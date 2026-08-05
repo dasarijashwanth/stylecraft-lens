@@ -270,20 +270,35 @@ export async function extractDocxContent(buffer: Buffer): Promise<ExtractedDocCo
 // (e.g. extractPdfContent's own OCR-then-thin-text-layer fallback chain).
 const MIN_PRINTABLE_RUN_LENGTH = 4;
 
+// Hard cap on how much of the stream this synchronous, single-threaded
+// byte-sweep will ever scan — regression fix: an uncapped sweep over a
+// real, large (multi-MB) WordDocument stream blocks the Node event loop
+// for long enough to blow past Vercel's 60s maxDuration, which the
+// finalize route's OWN withDeadline/routeStartTime budgeting cannot catch
+// (that mechanism only races ASYNC promises via setTimeout — it can't
+// interrupt synchronous CPU-bound work, since the event loop is blocked
+// the whole time and never gets to check the timer). 3MB of a WordDocument
+// stream is already far more raw bytes than any real spec-sheet-style
+// document's actual text content, so this cap costs no real coverage in
+// practice while making the worst-case runtime provably fast (a few
+// hundred ms even on a maximally adversarial 15MB upload).
+const MAX_DOC_SWEEP_BYTES = 3 * 1024 * 1024;
+
 function sweepPrintableRuns(buffer: Buffer): string {
+  const bounded = buffer.length > MAX_DOC_SWEEP_BYTES ? buffer.subarray(0, MAX_DOC_SWEEP_BYTES) : buffer;
   const runs: string[] = [];
   let asciiRun = "";
   let i = 0;
-  while (i < buffer.length) {
+  while (i < bounded.length) {
     // UTF-16LE run: a printable ASCII byte followed by a 0x00 high byte is
     // Word's most common storage encoding for a plain-Latin text run.
-    if (i + 1 < buffer.length && buffer[i + 1] === 0x00 && buffer[i] >= 0x20 && buffer[i] < 0x7f) {
-      asciiRun += String.fromCharCode(buffer[i]);
+    if (i + 1 < bounded.length && bounded[i + 1] === 0x00 && bounded[i] >= 0x20 && bounded[i] < 0x7f) {
+      asciiRun += String.fromCharCode(bounded[i]);
       i += 2;
       continue;
     }
-    if (buffer[i] >= 0x20 && buffer[i] < 0x7f) {
-      asciiRun += String.fromCharCode(buffer[i]);
+    if (bounded[i] >= 0x20 && bounded[i] < 0x7f) {
+      asciiRun += String.fromCharCode(bounded[i]);
       i += 1;
       continue;
     }

@@ -22,6 +22,7 @@ import {
 } from "./db/uploaded-source-docs";
 import { upsertFacts, carryForwardConfirmedFacts, listFactsForDoc } from "./db/extracted-facts";
 import { isSupabaseConfigured } from "./supabase";
+import { logCall } from "./obs";
 
 // Matches the feature spec's own 15MB ceiling exactly (previously 20MB —
 // tightened, not loosened, so a file the spec calls "too large" at 15.1MB
@@ -51,8 +52,21 @@ export const ALLOWED_SOURCE_DOC_TYPES: SourceDocType[] = ["tds", "spec_sheet", "
 // same "one phase per request" discipline this codebase already uses for
 // the analysis and GTM generation pipelines (lib/analysisEngine.ts,
 // lib/project-generation-engine.ts), applied here for the same reason.
-export const CONTENT_EXTRACTION_DEADLINE_MS = 50_000;
-export const FACTS_DERIVATION_DEADLINE_MS = 50_000;
+//
+// Reduced from 50s to 40s after a live report of the SAME "server took too
+// long" timeout recurring for a large (10-15MB) text-layer PDF (not a
+// scanned one — the OCR fallback never even triggers for these). withDeadline
+// only reliably races away an async/network-bound call (like the OCR vision
+// request) — it CANNOT interrupt genuinely synchronous CPU work, and
+// pdf-parse's own page-by-page text extraction for a large, complex,
+// many-page PDF can be CPU-heavy enough on Vercel's constrained runtime that
+// there wasn't enough headroom left, after this budget, for the remaining
+// DB writes (createNewVersion/updateExtractionResult/carry-forward) to
+// finish before the platform's own 60s hard kill. 40s leaves a full 20s of
+// headroom for the Storage download (already accounted for via
+// routeStartTime) plus those final writes, instead of the previous ~10s.
+export const CONTENT_EXTRACTION_DEADLINE_MS = 40_000;
+export const FACTS_DERIVATION_DEADLINE_MS = 40_000;
 
 // Exported for direct verification (scripts/verify-tds-doc-ingestion.ts) —
 // the real AI providers aren't reachable offline, so there's no way to make
@@ -168,11 +182,27 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
 
   const routeStartTime = input.routeStartTime ?? Date.now();
   const extractionBudget = Math.max(0, CONTENT_EXTRACTION_DEADLINE_MS - (Date.now() - routeStartTime));
+  const extractionStart = Date.now();
   const content = await withDeadline(
     extractSourceDocContent(input.buffer, expectedFormat),
     extractionBudget,
     { fullText: "", locations: [], extractionStatus: "failed" as const, extractionMethod: "failed" as const }
   );
+  // Real elapsed time for JUST this step, separate from the overall route's
+  // own finalize-outcome log — lets a future timeout be diagnosed from
+  // server logs (was it extraction itself running the full budget out, i.e.
+  // withDeadline's fallback kicked in — logged here as method:"failed" with
+  // elapsedMs ~= extractionBudget — vs. something AFTER this step being the
+  // slow part) instead of guessing blind, which is what happened this time.
+  logCall("source-doc-upload", {
+    op: "extract",
+    projectId: input.projectId,
+    docType: input.docType,
+    fileSizeBytes: input.buffer.length,
+    outcome: content.extractionStatus === "complete" ? "ok" : "empty",
+    label: content.extractionMethod,
+    elapsedMs: Date.now() - extractionStart,
+  });
   await updateExtractionResult(document.id, content.fullText, content.extractionStatus);
 
   let carriedForwardCount = 0;
