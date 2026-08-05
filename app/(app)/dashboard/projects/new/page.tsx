@@ -476,12 +476,21 @@ export default function NewProjectPage() {
             <label className="font-semibold text-text-primary block">Product TDS (recommended for pre-launch products)</label>
             <input
               type="file"
-              accept=".pdf,.xlsx,.xlsm,.docx"
-              onChange={(e) => setTdsFile(e.target.files?.[0] || null)}
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.csv"
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                if (f && f.size > 15 * 1024 * 1024) {
+                  toast.error(`File is ${(f.size / 1024 / 1024).toFixed(1)} MB — max is 15 MB`);
+                  e.target.value = "";
+                  setTdsFile(null);
+                  return;
+                }
+                setTdsFile(f);
+              }}
               className="w-full text-[11px] text-text-secondary file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-accent file:text-white file:text-[11px] file:font-bold file:cursor-pointer"
             />
             <p className="text-[10px] text-text-muted">
-              No product page or Amazon listing yet? Upload the real Technical Data Sheet (PDF/XLSX/DOCX) and it becomes the top-priority grounded source for Go-To-Market generation — specs fill in verbatim, narrative fields are written from its facts. You can also add or replace this later from the project&apos;s Sources tab.
+              No product page or Amazon listing yet? Upload the real Technical Data Sheet (PDF/DOC/DOCX/XLS/XLSX/CSV, up to 15 MB) and it becomes the top-priority grounded source for Go-To-Market generation — specs fill in verbatim, narrative fields are written from its facts. You can also add or replace this later from the project&apos;s Sources tab.
             </p>
           </div>
         </div>

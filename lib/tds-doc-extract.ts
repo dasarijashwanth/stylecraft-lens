@@ -13,7 +13,7 @@ import { createResponseWithRetry, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
 import { sanitizeText } from "./sanitize";
 
-export type SourceDocFormat = "pdf" | "xlsx" | "docx";
+export type SourceDocFormat = "pdf" | "xlsx" | "docx" | "doc" | "xls" | "csv";
 
 export interface ExtractedLocation {
   label: string; // e.g. "p.3", "Motor sheet, row 12"
@@ -252,11 +252,99 @@ export async function extractDocxContent(buffer: Buffer): Promise<ExtractedDocCo
   }
 }
 
+// Legacy .doc (Word 97-2003 binary format, a CFB/OLE2 container — NOT
+// zip-based like .docx) has no simple XML-regex equivalent to
+// extractDocxContent above; a correct parse needs the file's FIB (piece
+// table, character/paragraph formatting exceptions), which is a real
+// undertaking. Rather than add a new dependency or leave .doc completely
+// unextractable, this reuses the CFB parser SheetJS's own `xlsx` package
+// already bundles (XLSX.CFB — the same reader that makes legacy .xls work)
+// to locate the raw "WordDocument" stream, then sweeps it for runs of
+// printable text (ASCII and UTF-16LE, the two encodings Word actually
+// stores runs in). This is a best-effort heuristic, not a real Word parser
+// — it will miss formatting and may include some binary noise between real
+// sentences — but it surfaces genuine document text (numbers, labels,
+// sentences) well enough for the downstream fact-extraction AI call to
+// work with, matching this module's own "always return SOMETHING rather
+// than nothing" philosophy for a failed/degraded extraction elsewhere
+// (e.g. extractPdfContent's own OCR-then-thin-text-layer fallback chain).
+const MIN_PRINTABLE_RUN_LENGTH = 4;
+
+function sweepPrintableRuns(buffer: Buffer): string {
+  const runs: string[] = [];
+  let asciiRun = "";
+  let i = 0;
+  while (i < buffer.length) {
+    // UTF-16LE run: a printable ASCII byte followed by a 0x00 high byte is
+    // Word's most common storage encoding for a plain-Latin text run.
+    if (i + 1 < buffer.length && buffer[i + 1] === 0x00 && buffer[i] >= 0x20 && buffer[i] < 0x7f) {
+      asciiRun += String.fromCharCode(buffer[i]);
+      i += 2;
+      continue;
+    }
+    if (buffer[i] >= 0x20 && buffer[i] < 0x7f) {
+      asciiRun += String.fromCharCode(buffer[i]);
+      i += 1;
+      continue;
+    }
+    if (asciiRun.length >= MIN_PRINTABLE_RUN_LENGTH) runs.push(asciiRun);
+    asciiRun = "";
+    i += 1;
+  }
+  if (asciiRun.length >= MIN_PRINTABLE_RUN_LENGTH) runs.push(asciiRun);
+  return runs.join("\n");
+}
+
+export async function extractDocContent(buffer: Buffer): Promise<ExtractedDocContent> {
+  try {
+    const cfb = XLSX.CFB.read(buffer, { type: "buffer" });
+    const wordStream = XLSX.CFB.find(cfb, "WordDocument");
+    const streamBuffer: Buffer | null = wordStream?.content ? Buffer.from(wordStream.content) : null;
+    const fullText = sweepPrintableRuns(streamBuffer || buffer);
+    return {
+      fullText,
+      locations: fullText ? [{ label: "document body (best-effort extraction)", text: fullText }] : [],
+      extractionStatus: fullText.trim().length >= 20 ? "complete" : "failed",
+      extractionMethod: "docx",
+    };
+  } catch (err) {
+    console.warn("DOC (legacy binary) extraction failed:", err);
+    return { fullText: "", locations: [], extractionStatus: "failed", extractionMethod: "failed" };
+  }
+}
+
+// CSV is already plain text — no parsing library needed. Splits into rows
+// so each row can be its own "location" (mirrors XLSX's per-sheet location
+// granularity), joins cells with the same "label: value"-ish flattening
+// sheetToText already uses for a 2-column spec export, since most uploaded
+// CSVs of this kind ARE a 2-column (or narrow) spec export.
+export async function extractCsvContent(buffer: Buffer): Promise<ExtractedDocContent> {
+  try {
+    const text = buffer.toString("utf-8").replace(/^﻿/, ""); // strip a UTF-8 BOM if present
+    const lines = text.split(/\r\n|\r|\n/).map(l => l.trim()).filter(Boolean);
+    const fullText = lines.join("\n");
+    return {
+      fullText,
+      locations: fullText ? [{ label: "CSV rows", text: fullText }] : [],
+      extractionStatus: fullText ? "complete" : "failed",
+      extractionMethod: "spreadsheet",
+    };
+  } catch (err) {
+    console.warn("CSV extraction failed:", err);
+    return { fullText: "", locations: [], extractionStatus: "failed", extractionMethod: "failed" };
+  }
+}
+
 export async function extractSourceDocContent(buffer: Buffer, format: SourceDocFormat): Promise<ExtractedDocContent> {
   const result =
     format === "pdf" ? await extractPdfContent(buffer) :
-    format === "xlsx" ? await extractXlsxContent(buffer) :
-    await extractDocxContent(buffer);
+    // Legacy .xls (BIFF binary) needs no separate code path — SheetJS's
+    // XLSX.read() auto-detects and transparently parses BIFF/XLS the same
+    // way it parses OOXML/XLSX, so extractXlsxContent already handles both.
+    format === "xlsx" || format === "xls" ? await extractXlsxContent(buffer) :
+    format === "docx" ? await extractDocxContent(buffer) :
+    format === "doc" ? await extractDocContent(buffer) :
+    await extractCsvContent(buffer);
 
   return { ...result, fullText: sanitizeText(result.fullText) || "" };
 }

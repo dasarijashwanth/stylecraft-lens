@@ -199,6 +199,21 @@ export async function updateExtractionResult(id: string, fullText: string, statu
   }
 }
 
+// "Remove" for this append-only-versioned model means deactivating the
+// currently-active version — the slot goes back to "not uploaded" (no
+// active row for that project+docType) without deleting history, same
+// non-destructive spirit as replacing (createNewVersion) never deleting
+// the prior version either.
+export async function deactivateVersion(id: string): Promise<void> {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("uploaded_source_docs").update({ is_active: false }).eq("id", id);
+    if (error) throw error;
+    return;
+  }
+  const row = memoryDb.uploadedSourceDocs.find(d => d.id === id);
+  if (row) row.isActive = false;
+}
+
 export async function getSourceDocFileBuffer(doc: UploadedSourceDocRow): Promise<Buffer> {
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).download(doc.file_path);

@@ -8,7 +8,7 @@
 // (extractStructuredFacts) is DELIBERATELY a separate function
 // (deriveFactsForDoc, below) called from its OWN route/request — see that
 // function's own header comment for why.
-import { detectDocType } from "./file-magic-bytes";
+import { detectDocType, looksLikeText } from "./file-magic-bytes";
 import { extractSourceDocContent, SourceDocFormat, ExtractedDocContent } from "./tds-doc-extract";
 import { extractStructuredFacts } from "./tds-doc-facts";
 import {
@@ -23,7 +23,11 @@ import {
 import { upsertFacts, carryForwardConfirmedFacts, listFactsForDoc } from "./db/extracted-facts";
 import { isSupabaseConfigured } from "./supabase";
 
-export const MAX_SOURCE_DOC_SIZE_BYTES = 20 * 1024 * 1024;
+// Matches the feature spec's own 15MB ceiling exactly (previously 20MB —
+// tightened, not loosened, so a file the spec calls "too large" at 15.1MB
+// is genuinely rejected server-side too, not just by a client-side check
+// that a forged/direct request could bypass).
+export const MAX_SOURCE_DOC_SIZE_BYTES = 15 * 1024 * 1024;
 export const ALLOWED_SOURCE_DOC_TYPES: SourceDocType[] = ["tds", "spec_sheet", "sales_kit", "other"];
 
 // Both the finalize route and the facts-derivation route this feeds have
@@ -59,13 +63,21 @@ export async function withDeadline<T>(promise: Promise<T>, ms: number, fallback:
   return Promise.race([promise, timeout]);
 }
 
-function inferFormatFromFileName(fileName: string): SourceDocFormat | null {
+export function inferFormatFromFileName(fileName: string): SourceDocFormat | null {
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".pdf")) return "pdf";
   if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm")) return "xlsx";
   if (lower.endsWith(".docx")) return "docx";
+  if (lower.endsWith(".doc")) return "doc";
+  if (lower.endsWith(".xls")) return "xls";
+  if (lower.endsWith(".csv")) return "csv";
   return null;
 }
+
+// User-facing label for the accepted-types error message — kept in one
+// place so the client (pre-upload check) and server (this file's own
+// rejection message) always describe the same set the same way.
+export const ACCEPTED_SOURCE_DOC_TYPES_LABEL = "PDF, DOC/DOCX, XLS/XLSX, or CSV";
 
 export interface IngestSourceDocInput {
   projectId: string;
@@ -102,24 +114,38 @@ export interface IngestSourceDocResult {
 // other upload route in this codebase.
 export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promise<IngestSourceDocResult> {
   if (input.buffer.length > MAX_SOURCE_DOC_SIZE_BYTES) {
-    throw Object.assign(new Error(`File too large (max ${MAX_SOURCE_DOC_SIZE_BYTES / 1024 / 1024}MB)`), { status: 400 });
+    const actualMb = (input.buffer.length / 1024 / 1024).toFixed(1);
+    const maxMb = MAX_SOURCE_DOC_SIZE_BYTES / 1024 / 1024;
+    throw Object.assign(new Error(`File is ${actualMb} MB — max is ${maxMb} MB`), { status: 400 });
   }
 
   const expectedFormat = inferFormatFromFileName(input.fileName);
   if (!expectedFormat) {
-    throw Object.assign(new Error("File must be a .pdf, .xlsx/.xlsm, or .docx"), { status: 400 });
+    throw Object.assign(new Error(`File type not accepted — upload ${ACCEPTED_SOURCE_DOC_TYPES_LABEL}`), { status: 400 });
   }
-  const detected = detectDocType(input.buffer);
-  if (detected === null || detected !== expectedFormat) {
-    // Diagnostic only (never blocks/changes the rejection) — this exact
-    // check has already needed widening once in production (the PDF sniff
-    // window was too small for a real, unmodified file); logging the
-    // leading bytes means a future edge case is debuggable from server
-    // logs instead of requiring the file itself to be reproduced.
-    console.warn(
-      `[tds-doc-ingest] rejected "${input.fileName}" — expected ${expectedFormat}, detected ${detected ?? "null"}. First 32 bytes (hex): ${input.buffer.subarray(0, 32).toString("hex")}`
-    );
-    throw Object.assign(new Error("File content doesn't match its extension — a real PDF/XLSX/DOCX is required"), { status: 400 });
+
+  // CSV has no binary signature to match against (it's plain text) —
+  // validated by content-sniffing instead of detectDocType, which only
+  // ever returns pdf/xlsx/docx/doc/xls. A binary file renamed .csv is
+  // still rejected, just via looksLikeText's own control-byte check.
+  if (expectedFormat === "csv") {
+    if (!looksLikeText(input.buffer)) {
+      console.warn(`[tds-doc-ingest] rejected "${input.fileName}" — declared .csv but content contains binary bytes. First 32 bytes (hex): ${input.buffer.subarray(0, 32).toString("hex")}`);
+      throw Object.assign(new Error("This file doesn't look like plain-text CSV content — a real CSV export is required"), { status: 400 });
+    }
+  } else {
+    const detected = detectDocType(input.buffer);
+    if (detected === null || detected !== expectedFormat) {
+      // Diagnostic only (never blocks/changes the rejection) — this exact
+      // check has already needed widening once in production (the PDF sniff
+      // window was too small for a real, unmodified file); logging the
+      // leading bytes means a future edge case is debuggable from server
+      // logs instead of requiring the file itself to be reproduced.
+      console.warn(
+        `[tds-doc-ingest] rejected "${input.fileName}" — expected ${expectedFormat}, detected ${detected ?? "null"}. First 32 bytes (hex): ${input.buffer.subarray(0, 32).toString("hex")}`
+      );
+      throw Object.assign(new Error(`File content doesn't match its extension — a real ${ACCEPTED_SOURCE_DOC_TYPES_LABEL} file is required`), { status: 400 });
+    }
   }
 
   // The doc CURRENTLY active for this project+docType (before this upload

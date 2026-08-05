@@ -51,19 +51,48 @@ async function deriveFacts(projectId: string, documentId: string): Promise<{ fac
   }
 }
 
-export async function uploadProjectSourceDoc(projectId: string, docType: string, file: File): Promise<UploadSourceDocResult> {
+// Raw XMLHttpRequest PUT straight to the signed URL (rather than
+// supabase-js's own `uploadToSignedUrl` helper) so real byte-level upload
+// progress is available via `xhr.upload.onprogress` — the SDK's own fetch-
+// based implementation has no equivalent hook. The signed URL's embedded
+// token is itself sufficient authorization (confirmed live: a bare PUT
+// with only Content-Type/cache-control/x-upsert headers succeeds, no
+// Authorization/apikey header needed), so this doesn't need a Supabase
+// client at all.
+function putToSignedUrl(signedUrl: string, file: File, onProgress?: (fraction: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", signedUrl);
+    xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("cache-control", "max-age=3600");
+    xhr.setRequestHeader("x-upsert", "false");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Upload to storage failed (status ${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed (network) — retry"));
+    xhr.send(file);
+  });
+}
+
+export async function uploadProjectSourceDoc(
+  projectId: string,
+  docType: string,
+  file: File,
+  onProgress?: (fraction: number) => void
+): Promise<UploadSourceDocResult> {
   const urlData = await fetchJson(`/api/projects/${projectId}/source-docs/upload-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fileName: file.name }),
+    body: JSON.stringify({ fileName: file.name, fileSize: file.size, docType }),
   });
 
   let uploadResult: UploadSourceDocResult;
   if (urlData.mode === "signed") {
-    const { createSupabaseBrowserClient } = await import("@/lib/supabase-browser");
-    const supabase = createSupabaseBrowserClient();
-    const { error: uploadError } = await supabase.storage.from("project-source-docs").uploadToSignedUrl(urlData.path, urlData.token, file);
-    if (uploadError) throw new Error(uploadError.message || "Upload to storage failed");
+    await putToSignedUrl(urlData.signedUrl, file, onProgress);
 
     uploadResult = await fetchJson(`/api/projects/${projectId}/source-docs/finalize`, {
       method: "POST",

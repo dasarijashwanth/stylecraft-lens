@@ -30,8 +30,12 @@ export interface LogCallFields {
   tokensIn?: number;
   tokensOut?: number;
   totalTokens?: number;
+  // source-doc-upload scope (Sources tab upload hardening)
+  docType?: string;
+  fileSizeBytes?: number;
+  referenceId?: string;
 }
 
-export function logCall(scope: "rainforest" | "review-tier" | "generation-pipeline" | "openai", fields: LogCallFields): void {
+export function logCall(scope: "rainforest" | "review-tier" | "generation-pipeline" | "openai" | "source-doc-upload", fields: LogCallFields): void {
   console.warn(`[${scope}] ${JSON.stringify(fields)}`);
 }

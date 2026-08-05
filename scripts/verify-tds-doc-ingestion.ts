@@ -10,6 +10,15 @@
 //
 // Run with: VERCEL=1 npx tsx scripts/verify-tds-doc-ingestion.ts
 
+// A static top-level import, not the dynamic `await import("xlsx")` this
+// file otherwise uses for every other module — confirmed live: under
+// tsx/Node's CJS-interop for a dynamic import(), this package's `.CFB`
+// namespace is dropped from the resolved module entirely (a static import
+// exposes it correctly; lib/tds-doc-extract.ts's own real code already
+// uses this same static form, so production is unaffected — this is
+// purely a test-script fixture-construction concern).
+import * as XLSX_STATIC from "xlsx";
+
 export {};
 
 let failures = 0;
@@ -32,7 +41,7 @@ async function main() {
   const XLSX = await import("xlsx");
   const { extractDocxContent, extractXlsxContent, splitVisionTranscriptIntoPages } = await import("../lib/tds-doc-extract");
   const { extractStructuredFacts } = await import("../lib/tds-doc-facts");
-  const { detectDocType } = await import("../lib/file-magic-bytes");
+  const { detectDocType, looksLikeText } = await import("../lib/file-magic-bytes");
   const { applyUploadedTdsFacts, buildUploadedTdsPromptBlock, buildPreLaunchGroundingRule, buildTdsGroundingBlock } = await import("../lib/gtm-uploaded-tds");
   const { finalizeFieldAnswers } = await import("../lib/field-finalize");
   const { GTM_FIELD_SCHEMA } = await import("../lib/gtm-field-schema");
@@ -165,6 +174,78 @@ async function main() {
 
   const zeroBudgetResult = await deriveFactsForDoc(factsDoc.id, FACTS_TEST_PROJECT_ID, "Test Product", Date.now() - 999_999);
   assert(zeroBudgetResult.factsFound === 0, "a routeStartTime already past the deadline skips the AI call entirely instead of attempting it with a negative/zero budget");
+
+  // ---- Section 5d: DOC/XLS/CSV support (Sources tab upload hardening) ----
+  console.log("\n[5d] Legacy XLS — SheetJS's own XLSX.read auto-detects BIFF, extractXlsxContent already handles it");
+  const xlsWorkbook = XLSX.utils.book_new();
+  const xlsSheet = XLSX.utils.aoa_to_sheet([["Motor Type", "Brushless"], ["Run Time", "3h"]]);
+  XLSX.utils.book_append_sheet(xlsWorkbook, xlsSheet, "Motor");
+  const xlsBuffer: Buffer = XLSX.write(xlsWorkbook, { type: "buffer", bookType: "biff8" });
+  assert(detectDocType(xlsBuffer) === "xls", "a real legacy .xls (BIFF8) buffer is detected as xls, not confused with .doc");
+  const xlsResult = await extractXlsxContent(xlsBuffer);
+  assert(xlsResult.extractionStatus === "complete" && xlsResult.fullText.includes("Brushless"), "extractXlsxContent (reused for .xls) extracts real content from a legacy XLS buffer");
+
+  console.log("\n[5e] Legacy DOC — CFB WordDocument stream detected and disambiguated from XLS's Workbook stream");
+  const { extractDocContent, extractCsvContent } = await import("../lib/tds-doc-extract");
+  const docBuffer: Buffer = (() => {
+    const cfb = (XLSX_STATIC as any).CFB.utils.cfb_new();
+    (XLSX_STATIC as any).CFB.utils.cfb_add(cfb, "WordDocument", Buffer.from("Motor Type: Brushless (EON Digital). Warranty: 2 years on all parts.", "ascii"));
+    return (XLSX_STATIC as any).CFB.write(cfb, { type: "buffer" });
+  })();
+  assert(detectDocType(docBuffer) === "doc", "a real synthetic .doc (CFB with a WordDocument stream) is detected as doc, not xls");
+  assert(detectDocType(xlsBuffer) !== "doc", "the legacy XLS fixture is never misdetected as doc (Workbook vs WordDocument stream disambiguates)");
+  const docResult = await extractDocContent(docBuffer);
+  assert(docResult.extractionStatus === "complete", "extractDocContent's best-effort CFB text sweep reports complete for real text content");
+  assert(docResult.fullText.includes("Brushless") && docResult.fullText.includes("Warranty"), "extractDocContent recovers real readable text from the WordDocument stream (best-effort, not a full Word parse)");
+
+  console.log("\n[5f] CSV — no binary signature, validated by content-sniff instead of detectDocType");
+  const csvBuffer = Buffer.from("field,value\nMotor Type,Brushless\nWarranty,2 years\n", "utf-8");
+  assert(looksLikeText(csvBuffer), "a real CSV's plain-text bytes pass the text-sniff check");
+  const csvResult = await extractCsvContent(csvBuffer);
+  assert(csvResult.extractionStatus === "complete" && csvResult.fullText.includes("Motor Type,Brushless"), "extractCsvContent decodes real CSV rows into fullText");
+  const binaryAsCsv = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x00, 0x00]);
+  assert(!looksLikeText(binaryAsCsv), "a binary file's bytes fail the text-sniff check regardless of its .csv extension");
+
+  console.log("\n[5g] inferFormatFromFileName — all 6 accepted extensions, plus a genuinely unsupported one");
+  const { inferFormatFromFileName, ACCEPTED_SOURCE_DOC_TYPES_LABEL } = await import("../lib/tds-doc-ingest");
+  assert(inferFormatFromFileName("spec.pdf") === "pdf", "'.pdf' -> pdf");
+  assert(inferFormatFromFileName("spec.xlsx") === "xlsx", "'.xlsx' -> xlsx");
+  assert(inferFormatFromFileName("spec.xlsm") === "xlsx", "'.xlsm' -> xlsx (macro-enabled workbook, same OOXML shape)");
+  assert(inferFormatFromFileName("spec.docx") === "docx", "'.docx' -> docx");
+  assert(inferFormatFromFileName("spec.doc") === "doc", "'.doc' -> doc");
+  assert(inferFormatFromFileName("spec.xls") === "xls", "'.xls' -> xls");
+  assert(inferFormatFromFileName("spec.csv") === "csv", "'.csv' -> csv");
+  assert(inferFormatFromFileName("photo.png") === null, "an unsupported extension (.png) returns null");
+  assert(ACCEPTED_SOURCE_DOC_TYPES_LABEL.includes("CSV"), "the shared accepted-types label mentions CSV (used in both client and server rejection messages)");
+
+  console.log("\n[5h] ingestSourceDocUpload — 15MB size limit, wrong-content rejection, real DOC/CSV uploads succeed");
+  const { ingestSourceDocUpload, MAX_SOURCE_DOC_SIZE_BYTES } = await import("../lib/tds-doc-ingest");
+  const oversized = Buffer.alloc(MAX_SOURCE_DOC_SIZE_BYTES + 1024);
+  try {
+    await ingestSourceDocUpload({ projectId: "proj_size_test", docType: "other", filePath: "p", fileName: "big.pdf", buffer: oversized, mimeType: "application/pdf", productName: "Test" });
+    assert(false, "an oversized file should have thrown");
+  } catch (err: any) {
+    assert(err.status === 400 && /MB/.test(err.message), `an oversized file is rejected with a specific MB-based message (got "${err.message}")`);
+  }
+
+  try {
+    await ingestSourceDocUpload({ projectId: "proj_type_test", docType: "other", filePath: "p", fileName: "fake.docx", buffer: fakeHtml, mimeType: "application/octet-stream", productName: "Test" });
+    assert(false, "content/extension mismatch should have thrown");
+  } catch (err: any) {
+    assert(err.status === 400 && err.message.includes("doesn't match its extension"), `a .docx-named file with HTML content is rejected (got "${err.message}")`);
+  }
+
+  try {
+    await ingestSourceDocUpload({ projectId: "proj_csv_binary_test", docType: "other", filePath: "p", fileName: "fake.csv", buffer: binaryAsCsv, mimeType: "text/csv", productName: "Test" });
+    assert(false, "a binary file named .csv should have thrown");
+  } catch (err: any) {
+    assert(err.status === 400 && err.message.toLowerCase().includes("csv"), `a binary file named .csv is rejected with a CSV-specific message (got "${err.message}")`);
+  }
+
+  const realDocUpload = await ingestSourceDocUpload({ projectId: "proj_doc_success_test", docType: "spec_sheet", filePath: "p_doc", fileName: "spec.doc", buffer: docBuffer, mimeType: "application/msword", productName: "Test Product" });
+  assert(realDocUpload.document.file_name === "spec.doc", "a real, correctly-typed .doc upload succeeds and is persisted");
+  const realCsvUpload = await ingestSourceDocUpload({ projectId: "proj_csv_success_test", docType: "other", filePath: "p_csv", fileName: "spec.csv", buffer: csvBuffer, mimeType: "text/csv", productName: "Test Product" });
+  assert(realCsvUpload.document.file_name === "spec.csv", "a real, correctly-typed .csv upload succeeds and is persisted");
 
   // ---- Section 6: fill-ladder override (lib/gtm-uploaded-tds.ts) ----
   console.log("\n[6] applyUploadedTdsFacts — verbatim override, project_record is the only thing that outranks it");

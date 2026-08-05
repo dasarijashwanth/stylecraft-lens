@@ -3,6 +3,7 @@ import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { supabaseAdmin } from "@/lib/supabase";
 import { ingestSourceDocUpload, ALLOWED_SOURCE_DOC_TYPES } from "@/lib/tds-doc-ingest";
+import { logCall } from "@/lib/obs";
 
 export const maxDuration = 60;
 
@@ -37,7 +38,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     const { data, error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).download(path);
-    if (error) throw error;
+    if (error) {
+      logCall("source-doc-upload", { op: "finalize", projectId: params.id, docType, outcome: "error", errorMessage: error.message, elapsedMs: Date.now() - routeStartTime });
+      throw error;
+    }
     const buffer = Buffer.from(await data.arrayBuffer());
 
     const result = await ingestSourceDocUpload({
@@ -52,6 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       routeStartTime,
     });
 
+    logCall("source-doc-upload", { op: "finalize", projectId: params.id, docType, fileSizeBytes: buffer.length, outcome: "ok", elapsedMs: Date.now() - routeStartTime });
     return NextResponse.json({
       document: result.document,
       factsFound: result.factsFound,
@@ -59,6 +64,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       carriedForwardCount: result.carriedForwardCount,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to finalize source document upload" }, { status: err.status || 500 });
+    // A reference id (not a secret, just a correlation handle) lets a user
+    // report "ref abc123" and the exact logCall line above be found
+    // instantly in server logs — never expose the raw error internals for
+    // an unexpected (non-validation) failure, only this id.
+    const referenceId = Math.random().toString(36).slice(2, 10);
+    const isValidationError = typeof err.status === "number" && err.status < 500;
+    if (!isValidationError) {
+      logCall("source-doc-upload", { op: "finalize", projectId: params.id, outcome: "error", errorMessage: err.message, errorClass: err.name, referenceId, elapsedMs: Date.now() - routeStartTime });
+    }
+    const message = isValidationError ? (err.message || "Failed to finalize source document upload") : `Upload failed on our side — support has been notified (ref ${referenceId})`;
+    return NextResponse.json({ error: message }, { status: err.status || 500 });
   }
 }
