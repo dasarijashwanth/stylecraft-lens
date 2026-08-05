@@ -1,18 +1,62 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import Link from "next/link";
 import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+import { gsap } from "gsap";
 import { useAuthStore } from "@/stores/authStore";
 import { Logo, Wordmark } from "@/components/ui/Logo";
+import HeroVideo from "@/components/scroll/HeroVideo";
+import ScrollProgressBar from "@/components/scroll/ScrollProgressBar";
+
+// Small cursor-tilt on the glass card, only while the cinematic hero video
+// plays behind it — skipped entirely under prefers-reduced-motion (a static
+// card is the correct "reduced motion" state, not a tilt with no easing).
+const MAX_TILT_DEG = 3;
+
+function useCardTilt<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    gsap.set(el, { transformPerspective: 800 });
+    const quickX = gsap.quickTo(el, "rotateX", { duration: 0.4, ease: "power3.out" });
+    const quickY = gsap.quickTo(el, "rotateY", { duration: 0.4, ease: "power3.out" });
+
+    function onPointerMove(e: PointerEvent) {
+      const rect = el!.getBoundingClientRect();
+      const px = (e.clientX - rect.left) / rect.width - 0.5;
+      const py = (e.clientY - rect.top) / rect.height - 0.5;
+      quickY(px * MAX_TILT_DEG * 2);
+      quickX(-py * MAX_TILT_DEG * 2);
+    }
+    function onPointerLeave() {
+      quickX(0);
+      quickY(0);
+    }
+
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerleave", onPointerLeave);
+    return () => {
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerleave", onPointerLeave);
+    };
+  }, []);
+
+  return ref;
+}
 
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { fetchSession } = useAuthStore();
+  const cardRef = useCardTilt<HTMLDivElement>();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -50,7 +94,11 @@ function SignInForm() {
   }
 
   return (
-    <div className="w-full max-w-sm p-6 md:p-8 bg-surface-2 border border-border rounded-2xl shadow-2xl relative overflow-hidden text-xs space-y-6">
+    <div
+      ref={cardRef}
+      style={{ transformStyle: "preserve-3d" }}
+      className="w-full max-w-sm p-6 md:p-8 cinema-glass rounded-2xl shadow-2xl relative overflow-hidden text-xs space-y-6"
+    >
       <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-accent/15 blur-3xl" />
 
       <div className="flex flex-col items-center space-y-2 relative z-10 text-center">
@@ -111,10 +159,26 @@ function SignInForm() {
 
 export default function SignInPage() {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-bg text-text-primary px-4">
-      <Suspense fallback={null}>
-        <SignInForm />
-      </Suspense>
+    <div className="relative flex items-center justify-center min-h-screen bg-bg text-text-primary px-4 overflow-hidden">
+      <ScrollProgressBar />
+
+      <HeroVideo
+        srcMp4="/video/hero-1.mp4"
+        srcWebm="/video/hero-1.webm"
+        poster="/images/hero-1-poster.jpg"
+        className="absolute inset-0 z-0"
+        mediaClassName="w-full h-full object-cover"
+      />
+      <div
+        className="z-[1] cinema-scrim"
+        style={{ "--scrim-opacity": 0.72 } as React.CSSProperties}
+      />
+
+      <div className="relative z-10 w-full flex items-center justify-center">
+        <Suspense fallback={null}>
+          <SignInForm />
+        </Suspense>
+      </div>
     </div>
   );
 }

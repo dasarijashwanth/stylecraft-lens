@@ -34,6 +34,23 @@
   --brand-pink:      #ED1E79;
   --brand-pink-glow: rgba(237, 30, 121, 0.35);
 
+  /* Cinematic scroll surfaces ONLY (Login hero, Dashboard hero band,
+     Projects collapsing header, Analysis pinned intro, Help hero, loading
+     backdrops, the scroll-progress bar) — lib/scroll-scenes.ts and
+     components/scroll/*. Deliberately isolated the same way --brand-pink
+     is above: every existing dashboard/table/editor screen keeps using
+     --accent (indigo) untouched. Fixed values in both themes (a dark,
+     heavily-scrimmed cinematic backdrop stays dark regardless of the
+     app's own light/dark toggle) — see the light-mode override block
+     below for why unlisted tokens cascade through unchanged. */
+  --cinema-gold:      #C9A227;
+  --cinema-gold-hover: #B8931F;
+  --cinema-gold-glow: rgba(201, 162, 39, 0.35);
+  --cinema-gold-text: #E8C766;
+  --cinema-red:       #8B1E1E;
+  --cinema-red-glow:  rgba(139, 30, 30, 0.35);
+  --cinema-scrim:     rgba(0, 0, 0, 0.65);
+
   /* GooeyNav particle burst palette (components/ui/GooeyNav.tsx) — light,
      saturated colors needed for the mix-blend-mode:lighten gooey-merge
      trick to read against the effect layer's own black backdrop. */
@@ -524,7 +541,16 @@ h3 {
   .pulse-dot,
   .bell-badge-pop,
   .bell-ring,
-  .highlight-fade {
+  .highlight-fade,
+  /* Older landing-page keyframes (below, in this same file) — pre-existing
+     gap this same pass closes: these predate the motion-token system's own
+     reduced-motion block and were never added to it. */
+  .animate-pulse-soft,
+  .animate-slide-down,
+  .animate-pulse-once,
+  .animate-float-slow,
+  .animate-float-slow-reverse,
+  .animate-glow-breathe {
     animation: none !important;
     transition: none !important;
     transform: none !important;
@@ -598,4 +624,54 @@ h3 {
   background-size: 28px 28px;
   -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 40%, #000 40%, transparent 85%);
   mask-image: radial-gradient(ellipse 60% 55% at 50% 40%, #000 40%, transparent 85%);
+}
+
+/* ---- Scroll-driven cinematic surfaces (lib/scroll-scenes.ts,
+   components/scroll/*) — shared static styling. The actual scroll-linked
+   MOVEMENT (parallax offset, pin/scrub, crossfade, reveal) is applied
+   imperatively by GSAP inline styles, already reduced-motion/mobile-gated
+   in lib/scroll-scenes.ts itself — these classes only ever set the static
+   layout/appearance every scene shares, so there's nothing scroll-linked
+   here that ALSO needs a @media (prefers-reduced-motion) override. ---- */
+
+/* A dark scrim over hero imagery/video so overlaid text/cards stay
+   readable at every scroll position — tunable per instance via
+   --scrim-opacity (defaults to the --cinema-scrim token's own 0.65). */
+.cinema-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, var(--scrim-opacity, 0.65)) 0%,
+    rgba(0, 0, 0, calc(var(--scrim-opacity, 0.65) * 0.7)) 60%,
+    rgba(0, 0, 0, var(--scrim-opacity, 0.65)) 100%
+  );
+  pointer-events: none;
+}
+
+/* Content sitting on top of hero imagery — blur(12px) + subtle border per
+   spec's "legibility system." */
+.cinema-glass {
+  background: rgba(22, 22, 26, 0.55); /* --surface-2 at partial alpha */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Thin fixed top progress bar, gold accent — mounted once per surface via
+   components/scroll/ScrollProgressBar.tsx. Starts at scaleX(0); GSAP
+   animates scaleX up to 1 as the page scrolls (skipped under reduced
+   motion, per scrollProgressBar() in lib/scroll-scenes.ts — the bar simply
+   stays invisible/inert rather than showing a stuck partial fill). */
+.scroll-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--cinema-gold);
+  transform: scaleX(0);
+  transform-origin: left center;
+  z-index: 60;
+  pointer-events: none;
 }

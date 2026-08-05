@@ -43,7 +43,16 @@ const config: Config = {
           active: "var(--status-active)",
           monitoring: "var(--status-monitoring)",
           archived: "var(--status-archived)",
-        }
+        },
+        // Scroll-driven cinematic surfaces ONLY (see app/globals.css's own
+        // --cinema-* token comment) — every existing screen keeps using
+        // `accent` (indigo) above, untouched.
+        cinema: {
+          gold: "var(--cinema-gold)",
+          "gold-hover": "var(--cinema-gold-hover)",
+          "gold-text": "var(--cinema-gold-text)",
+          red: "var(--cinema-red)",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sans)", "Inter", "sans-serif"],

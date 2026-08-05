@@ -9,6 +9,19 @@ import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { Spinner } from "@/components/ui/Spinner";
 import { buildPricingAnalysis } from "@/lib/pricing-analysis";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
+import { getToolTypeLabel } from "@/lib/tool-type-taxonomy";
+import AnalysisIdentityScene from "./AnalysisIdentityScene";
+
+// Fallback for a raw family/tech key (e.g. "brushless_dc") when no
+// human-authored branded name was captured for this run — title-cases it
+// rather than showing the raw snake_case key in the chip.
+function prettifyKey(key: string): string {
+  return key
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 interface ResultsPanelProps {
   analysis: {
@@ -163,6 +176,23 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
       .catch(() => {});
   }, []);
 
+  // Same source phase1/phase2 already fall back to for the PDF export's
+  // "Data Sources & Methodology" appendix (see handleExportPDF below) — the
+  // pinned identity scene's chips reuse it rather than requiring new props
+  // threaded down from analyze/page.tsx's own form state.
+  const formInputs = phase1.form_inputs ?? phase2.form_inputs ?? null;
+  const identityToolTypeLabel = formInputs?.toolType ? getToolTypeLabel(formInputs.toolType, toolTypes) : null;
+  const identityMotorLabel = formInputs?.motorBrandedName
+    ? formInputs.motorBrandedName
+    : formInputs?.motorFamily
+    ? prettifyKey(formInputs.motorFamily)
+    : formInputs?.heatTechBrandedName
+    ? formInputs.heatTechBrandedName
+    : formInputs?.heatTechFamily
+    ? prettifyKey(formInputs.heatTechFamily)
+    : null;
+  const identityPriceLabel = analysis.pricePoint || formInputs?.pricePoint || null;
+
   const handleExportPDF = async () => {
     setExporting(true);
     try {
@@ -266,35 +296,21 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
       </div>
 
       {/* IDENTIFIED PRODUCT — shown so a wrong identification is caught
-          immediately, not buried inside the market analysis text. */}
+          immediately, not buried inside the market analysis text. A pinned,
+          scrubbed cinematic reveal (see AnalysisIdentityScene) rather than a
+          plain static card. */}
       {identity && (identity.category || identity.whatItIs) && (
-        <div className="p-4 bg-surface-2 border border-border rounded-xl space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Identified Product</span>
-            {identity.confidence && (
-              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
-                identity.confidence === "high" ? "bg-success/10 border-success/30 text-success" :
-                identity.confidence === "medium" ? "bg-warning/10 border-warning/25 text-warning" :
-                "bg-danger/10 border-danger/30 text-danger"
-              }`}>{identity.confidence} confidence</span>
-            )}
-          </div>
-          <div className="text-xs text-text-primary font-semibold">
-            {identity.category}{identity.subcategory && identity.subcategory !== identity.category ? ` / ${identity.subcategory}` : ""}
-          </div>
-          {identity.whatItIs && <p className="text-[11px] text-text-secondary leading-relaxed">{identity.whatItIs}</p>}
-          {Array.isArray(identity.evidence) && identity.evidence.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-0.5">
-              {identity.evidence.slice(0, 4).map((e, i) => (
-                e.url ? (
-                  <a key={i} href={e.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-accent hover:underline" title={e.claim}>
-                    evidence {i + 1}
-                  </a>
-                ) : null
-              ))}
-            </div>
-          )}
-        </div>
+        <AnalysisIdentityScene
+          productName={analysis.productName}
+          category={identity.category}
+          subcategory={identity.subcategory}
+          whatItIs={identity.whatItIs}
+          confidence={identity.confidence}
+          evidence={identity.evidence}
+          toolTypeLabel={identityToolTypeLabel}
+          motorLabel={identityMotorLabel}
+          priceLabel={identityPriceLabel}
+        />
       )}
 
       {/* Synthesis-stale banner — a competitor swap (CompetitorCard's

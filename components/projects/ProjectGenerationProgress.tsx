@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Loader2, AlertCircle } from "lucide-react";
+import HeroVideo from "@/components/scroll/HeroVideo";
 
 // Resumable phase-continue driver for the project-creation pipeline
 // (capture snapshot -> generate TDS -> generate GTM) — structurally the
@@ -169,14 +170,21 @@ export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled =
   }
 
   return (
-    <div className="border border-border rounded-xl overflow-hidden mb-4 bg-surface-2 shadow-sm">
-      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
+    <div className="relative border border-border rounded-xl overflow-hidden mb-4 bg-surface-2/85 shadow-sm">
+      <HeroVideo
+        srcMp4="/video/hero-2.mp4"
+        srcWebm="/video/hero-2.webm"
+        poster="/images/hero-2-poster.jpg"
+        className="absolute inset-0 opacity-30"
+        mediaClassName="w-full h-full object-cover"
+      />
+      <div className="relative z-10 flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
         <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
           Setting up this product
         </span>
         {!failed && <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />}
       </div>
-      <div className="flex flex-col p-4 gap-3">
+      <div className="relative z-10 flex flex-col p-4 gap-3">
         {phases.map((phase, i) => (
           <div key={i} className="flex items-start gap-2.5">
             <div className="w-5 h-5 flex items-center justify-center shrink-0 mt-0.5">

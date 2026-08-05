@@ -21,6 +21,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Modal } from "@/components/ui/Modal";
 import GettingStartedBanner from "@/components/help/GettingStartedBanner";
 import { ContactSupportProvider } from "@/components/help/ContactSupportProvider";
+import ScrollProgressBar from "@/components/scroll/ScrollProgressBar";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -183,6 +184,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   return (
     <ContactSupportProvider>
     <div className="min-h-screen bg-bg text-text-primary">
+      <ScrollProgressBar />
+
       {/* Sidebar navigation */}
       <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
 

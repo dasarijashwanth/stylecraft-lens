@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
+import DashboardHero from "@/components/dashboard/DashboardHero";
 
 function timeAgo(date: Date) {
   const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
@@ -183,6 +184,8 @@ export default function DashboardOverview() {
 
   return (
     <div className="space-y-6">
+      <DashboardHero />
+
       <div className="flex items-center gap-2">
         <h1 className="text-display">Dashboard</h1>
         <FaqHelpLink category="Dashboard" />

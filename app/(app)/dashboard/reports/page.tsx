@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { 
   FileText, 
@@ -243,17 +244,20 @@ export default function ReportsPage() {
         </div>
       ) : (
         /* Empty State */
-        <div className="flex flex-col items-center justify-center p-16 bg-surface-2 border border-border rounded-xl text-center">
-          <div className="p-4 rounded-full bg-surface-3 border border-border-strong text-text-secondary mb-4">
+        <div className="relative flex flex-col items-center justify-center p-16 bg-surface-2 border border-border rounded-xl text-center overflow-hidden">
+          <Image src="/images/hero-4.jpg" alt="" fill sizes="100vw" className="object-cover" />
+          <div className="cinema-scrim" style={{ "--scrim-opacity": 0.75 } as React.CSSProperties} />
+
+          <div className="relative z-10 p-4 rounded-full bg-surface-3 border border-border-strong text-text-secondary mb-4">
             <FileText className="w-10 h-10 opacity-70 animate-pulse" />
           </div>
-          <h2 className="text-base font-bold text-text-primary mb-1">No reports yet</h2>
-          <p className="text-xs text-text-muted max-w-sm mb-6">
+          <h2 className="relative z-10 text-base font-bold text-text-primary mb-1">No reports yet</h2>
+          <p className="relative z-10 text-xs text-text-muted max-w-sm mb-6">
             Reports are generated from competitive analyses. Run an analysis and choose &quot;Save as report&quot; to compile your dashboard.
           </p>
           <Link
             href="/dashboard/analyze"
-            className="flex items-center gap-1.5 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/25"
+            className="relative z-10 flex items-center gap-1.5 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/25"
           >
             <Sparkles className="w-4 h-4" />
             <span>Run first analysis</span>

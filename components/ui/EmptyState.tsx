@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/ui";
 
@@ -18,9 +19,13 @@ interface EmptyStateProps {
   // the full variant matches app/(app)/dashboard/projects/page.tsx's reference pattern.
   compact?: boolean;
   className?: string;
+  // Optional cinematic backdrop (public/images path) — full variant only,
+  // heavily scrimmed so the icon/title/description stay fully legible. Never
+  // used with compact (inline/table-cell contexts stay imagery-free).
+  backgroundImage?: string;
 }
 
-export function EmptyState({ icon: Icon, title, description, action, compact = false, className }: EmptyStateProps) {
+export function EmptyState({ icon: Icon, title, description, action, compact = false, className, backgroundImage }: EmptyStateProps) {
   const ActionIcon = action?.icon;
   const actionButtonClass = "inline-flex items-center gap-1.5 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold rounded-lg transition-colors shadow shadow-accent/25";
   const actionContent = action && (
@@ -49,13 +54,19 @@ export function EmptyState({ icon: Icon, title, description, action, compact = f
   }
 
   return (
-    <div className={cn("flex flex-col items-center justify-center p-16 bg-surface-2 border border-border rounded-xl text-center", className)}>
-      <div className="p-4 rounded-full bg-surface-3 border border-border-strong text-text-secondary mb-4">
+    <div className={cn("relative flex flex-col items-center justify-center p-16 bg-surface-2 border border-border rounded-xl text-center overflow-hidden", className)}>
+      {backgroundImage && (
+        <>
+          <Image src={backgroundImage} alt="" fill sizes="100vw" className="object-cover" />
+          <div className="cinema-scrim" style={{ "--scrim-opacity": 0.75 } as React.CSSProperties} />
+        </>
+      )}
+      <div className="relative z-10 p-4 rounded-full bg-surface-3 border border-border-strong text-text-secondary mb-4">
         <Icon className="w-10 h-10 opacity-70 animate-pulse" />
       </div>
-      <h2 className="text-base font-bold text-text-primary mb-1">{title}</h2>
-      {description && <p className="text-xs text-text-muted max-w-sm mb-6">{description}</p>}
-      {actionButton}
+      <h2 className="relative z-10 text-base font-bold text-text-primary mb-1">{title}</h2>
+      {description && <p className="relative z-10 text-xs text-text-muted max-w-sm mb-6">{description}</p>}
+      <div className="relative z-10">{actionButton}</div>
     </div>
   );
 }

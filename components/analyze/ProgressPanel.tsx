@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Loader2, AlertCircle, HelpCircle, XCircle } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import HeroVideo from "@/components/scroll/HeroVideo";
 
 interface PhaseState {
   status: "waiting" | "running" | "complete" | "error";
@@ -418,7 +419,15 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
   const isRunning = !failedMessage && !pendingQuestion && completedCount < PHASE_LABELS.length;
 
   return (
-    <motion.div layout className="analysis-progress-panel bg-surface-2 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
+    <motion.div layout className="analysis-progress-panel relative bg-surface-2/85 border border-border rounded-xl overflow-hidden mb-6 shadow-xl text-xs">
+      <HeroVideo
+        srcMp4="/video/hero-2.mp4"
+        srcWebm="/video/hero-2.webm"
+        poster="/images/hero-2-poster.jpg"
+        className="absolute inset-0 opacity-30"
+        mediaClassName="w-full h-full object-cover"
+      />
+      <div className="relative z-10">
       {/* Top bar */}
       <div className="progress-topbar flex items-center justify-between px-5 py-3 border-b border-border bg-surface-3/30">
         <div className="progress-meta text-[11px] text-text-muted font-mono">
@@ -692,6 +701,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
           </div>
         </div>
       )}
+      </div>
     </motion.div>
   );
 }
