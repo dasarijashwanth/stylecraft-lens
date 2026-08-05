@@ -39,7 +39,7 @@ const PROJECT_ID = "proj_tds_ingest_test";
 async function main() {
   const PizZip = (await import("pizzip")).default;
   const XLSX = await import("xlsx");
-  const { extractDocxContent, extractXlsxContent, splitVisionTranscriptIntoPages } = await import("../lib/tds-doc-extract");
+  const { extractDocxContent, extractXlsxContent, extractPdfContent, splitVisionTranscriptIntoPages } = await import("../lib/tds-doc-extract");
   const { extractStructuredFacts } = await import("../lib/tds-doc-facts");
   const { detectDocType, looksLikeText } = await import("../lib/file-magic-bytes");
   const { applyUploadedTdsFacts, buildUploadedTdsPromptBlock, buildPreLaunchGroundingRule, buildTdsGroundingBlock } = await import("../lib/gtm-uploaded-tds");
@@ -96,6 +96,38 @@ async function main() {
   const noMarkerTranscript = "Just plain text, no page markers";
   const fallbackPages = splitVisionTranscriptIntoPages(noMarkerTranscript);
   assert(fallbackPages.length === 1 && fallbackPages[0].label === "p.1", "a transcript with no [PAGE N] markers falls back to one p.1 block");
+
+  // ---- Section 3b: PDF page-cap (regression — a live "Server took too long
+  // to respond" report for a large, NORMAL text-layer PDF, not a scanned
+  // one). withDeadline can't interrupt pdf-parse's own synchronous-enough
+  // per-page work; the real fix bounds the WORK itself via pdf-parse's own
+  // `first` page-range option, verified directly against a real multi-page
+  // PDF built with @react-pdf/renderer (already a project dependency). ----
+  console.log("\n[3b] extractPdfContent — a PDF with more pages than the cap only parses the first N, fast");
+  const React = (await import("react")).default;
+  const { Document, Page, Text, StyleSheet } = await import("@react-pdf/renderer");
+  const { renderToBuffer } = await import("@react-pdf/renderer");
+  const pdfStyles = StyleSheet.create({ page: { padding: 20 }, text: { fontSize: 12 } });
+  const TOTAL_TEST_PAGES = 65; // exceeds MAX_PDF_PAGES_FOR_TEXT_EXTRACTION (60)
+  const manyPageDoc = React.createElement(
+    Document,
+    null,
+    Array.from({ length: TOTAL_TEST_PAGES }, (_, i) =>
+      React.createElement(
+        Page,
+        { key: i, size: "A4", style: pdfStyles.page },
+        React.createElement(Text, { style: pdfStyles.text }, `This is page content number ${i + 1} of the test document.`)
+      )
+    )
+  );
+  const manyPagePdfBuffer = await renderToBuffer(manyPageDoc as any);
+  const pdfCapStart = Date.now();
+  const cappedResult = await extractPdfContent(manyPagePdfBuffer);
+  const pdfCapElapsedMs = Date.now() - pdfCapStart;
+  assert(cappedResult.locations.length <= 60, `only the first 60 pages are parsed out of ${TOTAL_TEST_PAGES} real pages (got ${cappedResult.locations.length} locations)`);
+  assert(cappedResult.fullText.includes("page content number 1") && !cappedResult.fullText.includes(`page content number ${TOTAL_TEST_PAGES}`), "extracted text includes early pages but not the truncated tail");
+  assert(pdfCapElapsedMs < 15000, `a ${TOTAL_TEST_PAGES}-page real PDF extracts in well under 15s thanks to the page cap (got ${pdfCapElapsedMs}ms)`);
+  assert(cappedResult.extractionStatus === "complete", "the capped extraction still reports a real, usable result");
 
   // ---- Section 4: structured fact extraction — graceful no-key behavior ----
   console.log("\n[4] extractStructuredFacts — no OpenAI key configured in this environment");

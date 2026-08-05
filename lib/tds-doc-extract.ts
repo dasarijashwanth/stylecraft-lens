@@ -91,13 +91,34 @@ export function splitVisionTranscriptIntoPages(transcript: string): ExtractedLoc
   return locations.length ? locations : [{ label: "p.1", text: transcript.trim() }];
 }
 
+// Regression fix — a live "Server took too long to respond" report for a
+// large (10-15MB), NORMAL text-layer PDF (not scanned, so the OCR fallback
+// below never even triggers). withDeadline can only race away genuinely
+// async/network-bound work; it can't interrupt pdf-parse's own page-by-page
+// text extraction if that work is CPU-heavy enough to not yield back to the
+// event loop for long stretches — for a many-page, visually complex PDF,
+// this can run long enough on Vercel's constrained runtime to blow the
+// platform's own 60s hard cap regardless of what our OWN deadline constant
+// says (shrinking that number doesn't reduce the actual work being done).
+// The real fix: bound the amount of WORK itself, not just how long we're
+// willing to wait for it — pdf-parse's own `first` option caps parsing to
+// the document's first N pages. A real technical data sheet/spec document
+// is virtually always well under this cap; a genuinely huge multi-hundred-
+// page manual gets a partial-but-fast extraction (still enough real text
+// for fact-extraction to work with) instead of a slow, all-or-nothing
+// attempt at the entire document.
+const MAX_PDF_PAGES_FOR_TEXT_EXTRACTION = 60;
+
 export async function extractPdfContent(buffer: Buffer): Promise<ExtractedDocContent> {
   try {
     const parser = new PDFParse({ data: new Uint8Array(buffer) });
-    const result = await parser.getText();
+    const result = await parser.getText({ first: MAX_PDF_PAGES_FOR_TEXT_EXTRACTION });
     await parser.destroy();
 
     const pages = result.pages || [];
+    if (result.total > pages.length) {
+      console.warn(`[tds-doc-extract] PDF has ${result.total} pages — only the first ${pages.length} were parsed (MAX_PDF_PAGES_FOR_TEXT_EXTRACTION cap) to keep extraction time bounded.`);
+    }
     const avgCharsPerPage = pages.length ? result.text.length / pages.length : result.text.length;
 
     if (pages.length > 0 && avgCharsPerPage >= SCANNED_PDF_MIN_CHARS_PER_PAGE) {
