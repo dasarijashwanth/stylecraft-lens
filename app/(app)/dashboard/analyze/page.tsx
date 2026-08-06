@@ -1183,7 +1183,7 @@ export default function AnalyzePage() {
                     <input
                       type="text"
                       value={row.input}
-                      onChange={(e) => updateRelatedRow(i, { input: e.target.value })}
+                      onChange={(e) => updateRelatedRow(i, { input: e.target.value, error: null, mismatchWarning: null })}
                       onBlur={() => handleRelatedProductBlur(i)}
                       placeholder={`Related product ${i + 1} — Amazon URL or ASIN (optional)`}
                       className="flex-1 px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-sm"
