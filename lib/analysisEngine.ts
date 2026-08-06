@@ -4,7 +4,7 @@ import { genAI, hasGeminiKey, GEMINI_MODEL, cleanJsonString } from "./gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { getAmazonProduct, fetchAmazonProductFresh, resolveAsinBySearch, hasRainforestKey, searchAmazonCategory, type RainforestProduct } from "./rainforest";
 import { isSupabaseConfigured } from "./supabase";
-import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck, updatePhase1BrandProgress, patchAnalysisPhaseResults, resetPhase3ForRegeneration } from "./db/analyses";
+import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck, updatePhase1BrandProgress, patchAnalysisPhaseResults, resetPhase3ForRegeneration, patchRelatedProducts } from "./db/analyses";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { extractAsinFromUrl } from "./snapshot-capture";
 import { createReportFromAnalysis } from "./db/reports";
@@ -41,7 +41,7 @@ import { computeHeatTechMatchTier } from "./heat-tech-taxonomy";
 import { extractCompetitorHeatTech, resolveOurHeatTech, type OurHeatTechResolution } from "./heat-tech-extraction";
 import {
   computeMotorScore, computePriceScoreAbsolute, computePriceScoreRelative, computeFeatureScore,
-  computeCompositeScore, dedupeToOnePerBrand, type MatchingWeights,
+  computeCompositeScore, dedupeToOnePerBrand, computeRelatedProductSimilarity, type MatchingWeights, type RelatedProductProfile,
 } from "./competitor-scoring";
 import { buildIndieBrandLineups, computePercentileInLineup, type LineupProduct } from "./indie-brand-lineup";
 import { discoverBrandSiteCandidatesForEmerging } from "./brand-site-discovery";
@@ -170,6 +170,179 @@ export async function seedKnownGoodCandidates(
   return seeds;
 }
 
+// Related Products feature — up to 3 user-pasted "nearby similar products"
+// (analyze form, next to Positioning Context) seed discovery as ADDITIVE
+// signals only: never change the Motor -> Price -> Brand gate order or any
+// hard rule (see selectByCompositeScore's 5 gates, all untouched by this
+// feature). A ResolvedRelatedProduct is shaped exactly like a normal
+// competitor object (same fields mergeRainforestProductIntoCompetitor
+// already produces) plus a few extra provenance/eligibility fields.
+export interface ResolvedRelatedProduct {
+  asin: string;
+  url?: string | null;
+  addedAt: string;
+  name: string;
+  [key: string]: any;
+  toolTypeMismatch: boolean;
+  toolTypeMismatchLabel: string | null;
+  // false for a cross-tool-type paste (e.g. a clipper pasted into a
+  // trimmer analysis) — still resolved/displayed in the Related Products
+  // section, but never pushed into the discovery pool at all.
+  eligibleForPoolSeeding: boolean;
+  resolutionFailed?: boolean;
+}
+
+// Resolves each related ASIN into a full Rainforest payload + motor/heat-
+// tech extraction — called once from the Phase 0 block, before any AI
+// discovery round runs, and persisted to analyses.related_products
+// (patchRelatedProducts) independently of phase0_result. Reuses the exact
+// same budget machinery (remainingRainforestBudget/withDeadline/
+// RAINFOREST_CANDIDATE_DEADLINE_MS) every other Rainforest call site in
+// this file shares — a slow/failed resolution just marks that one product
+// unresolved (resolutionFailed: true), it never blocks Phase 0 from
+// completing, matching this file's fail-open convention throughout.
+export async function resolveRelatedProducts(
+  relatedAsins: { asin: string; url?: string; addedAt: string }[] | undefined,
+  card: IdentityCard,
+  toolTypes: ToolTypeRow[],
+  routeStartTime: number
+): Promise<ResolvedRelatedProduct[]> {
+  if (!relatedAsins?.length) return [];
+
+  const primaryCriterion = resolvePrimaryCriterion(card, toolTypes);
+  const [motorFamilies, brandedNames, heatTechFamilies, brandedHeatTechNames] = await Promise.all([
+    primaryCriterion === "motor" ? listMotorFamilies() : Promise.resolve([] as MotorFamilyRow[]),
+    primaryCriterion === "motor" ? listBrandedMotorNames() : Promise.resolve([] as BrandedMotorNameRow[]),
+    primaryCriterion === "heat_technology" ? listHeatTechFamilies() : Promise.resolve([] as HeatTechFamilyRow[]),
+    primaryCriterion === "heat_technology" ? listBrandedHeatTechNames() : Promise.resolve([] as BrandedHeatTechNameRow[]),
+  ]);
+
+  return mapWithConcurrency(relatedAsins.slice(0, 3), 3, async (entry): Promise<ResolvedRelatedProduct> => {
+    const budgetLeft = remainingRainforestBudget(routeStartTime);
+    const product = budgetLeft > 0
+      ? await withDeadline(getAmazonProduct(entry.asin), Math.min(RAINFOREST_CANDIDATE_DEADLINE_MS, budgetLeft), null)
+      : null;
+
+    if (!product) {
+      return {
+        asin: entry.asin.toUpperCase(), url: entry.url ?? null, addedAt: entry.addedAt, name: entry.asin,
+        toolTypeMismatch: false, toolTypeMismatchLabel: null, eligibleForPoolSeeding: false, resolutionFailed: true,
+      };
+    }
+
+    let related: any = mergeRainforestProductIntoCompetitor(
+      { name: product.title, brand: product.brand, tier: "related", key_features: [], strengths: [], weaknesses: [], recent_news: [] },
+      product
+    );
+
+    if (primaryCriterion === "motor") {
+      const motorExtraction = extractCompetitorMotorType({ ...related, title: related.name }, motorFamilies, { brand: related.brand, brandedNames });
+      related = { ...related, motor_type: motorExtraction?.label ?? null, motor_family_key: motorExtraction?.familyKey ?? null, motor_branded_name: motorExtraction?.brandedName ?? null };
+    } else if (primaryCriterion === "heat_technology") {
+      const heatTechExtraction = extractCompetitorHeatTech({ ...related, title: related.name }, heatTechFamilies, { brand: related.brand, brandedNames: brandedHeatTechNames });
+      related = { ...related, heat_tech_type: heatTechExtraction?.label ?? null, heat_tech_family_key: heatTechExtraction?.familyKey ?? null, heat_tech_branded_name: heatTechExtraction?.brandedName ?? null };
+    }
+
+    const mismatch = card.toolType ? assertToolType(product.title, card.toolType, toolTypes) : { ok: true };
+    const toolTypeMismatch = !mismatch.ok;
+
+    return {
+      ...related,
+      asin: product.asin, url: entry.url ?? null, addedAt: entry.addedAt,
+      toolTypeMismatch,
+      toolTypeMismatchLabel: toolTypeMismatch ? `Doesn't match this analysis's tool type${card.toolType ? ` (${getToolTypeLabel(card.toolType, toolTypes)})` : ""}` : null,
+      eligibleForPoolSeeding: !toolTypeMismatch,
+    };
+  });
+}
+
+// Maps eligible related products into the same pool-candidate shape every
+// other discovered candidate has, tagged for provenance — merged into
+// Phase 1/2's `pool` alongside seedKnownGoodCandidates's output so an
+// eligible related product can independently earn a legacy/emerging slot
+// by passing the SAME 5 gates as everything else (tool-type gate,
+// correction-exclude, price-band widen-loop, motor-evidence split, brand-
+// dedupe) — this function never bypasses any of them, it only ever adds
+// one extra pool entry per eligible related product.
+export function buildRelatedProductSeeds(relatedProducts: ResolvedRelatedProduct[], tier: "legacy" | "emerging"): any[] {
+  return relatedProducts
+    .filter(rp => rp.eligibleForPoolSeeding && !rp.resolutionFailed)
+    .map(rp => ({
+      ...rp,
+      tier,
+      inclusion_rationale: "User-provided related product — independently matched this analysis's discovery criteria.",
+      related_product_seed: true,
+      related_product_asin: rp.asin,
+    }));
+}
+
+// Amazon "similar/related" search leverage (additive signal, separate from
+// buildRelatedProductSeeds above) — searches Amazon using each eligible
+// related product's own brand + title keywords, surfacing real neighbors
+// an AI discovery prompt alone might not have found. Tool-type-gated
+// exactly like discoverCompetitorsLive's own live-search results below — a
+// mismatched neighbor is dropped here, never reaches the pool at all.
+// Shares the same RAINFOREST_STEP_DEADLINE_MS clock as every other
+// Rainforest call in this phase step; stops early once that budget is gone.
+export async function searchRelatedProductNeighbors(
+  relatedProducts: ResolvedRelatedProduct[],
+  toolTypes: ToolTypeRow[],
+  identity: IdentityCard,
+  tier: "legacy" | "emerging",
+  routeStartTime: number
+): Promise<any[]> {
+  if (!hasRainforestKey) return [];
+  const eligible = relatedProducts.filter(rp => rp.eligibleForPoolSeeding && !rp.resolutionFailed);
+  if (!eligible.length) return [];
+
+  const seenAsins = new Set<string>(eligible.map(rp => rp.asin));
+  const collected: any[] = [];
+
+  for (const rp of eligible) {
+    if (remainingRainforestBudget(routeStartTime) <= 0) break;
+    const titleKeywords = (rp.name || "").split(/\s+/).slice(0, 4).join(" ");
+    const query = [rp.brand, titleKeywords].filter(Boolean).join(" ").trim();
+    if (!query) continue;
+
+    const results = await searchAmazonCategory(query, 5);
+    for (const r of results) {
+      if (seenAsins.has(r.asin)) continue;
+      if (identity.toolType && !assertToolType(r.title, identity.toolType, toolTypes).ok) continue;
+      seenAsins.add(r.asin);
+      const brand = (r.title.split(/[\s,]+/)[0] || "Unknown").replace(/[^\w-]/g, "");
+      collected.push({
+        name: r.title.length > 100 ? `${r.title.slice(0, 100)}…` : r.title,
+        brand, tier, asin: r.asin, amazon_url: `https://www.amazon.com/dp/${r.asin}`,
+        price: r.price, price_raw: r.price_raw, rating: r.rating, review_count: r.reviewsTotal,
+        monthly_sales: r.monthlyStr, bsr_rank: null,
+        initials: brand.slice(0, 2).toUpperCase(),
+        key_features: [], strengths: [], weaknesses: [], recent_news: [], top_feature_summary: "",
+        verified_by_rainforest: true,
+        related_product_neighbor_seed: true,
+        related_product_neighbor_of: rp.asin,
+      });
+    }
+  }
+  return collected;
+}
+
+// The Claude/OpenAI discovery-context sentence — joined into
+// buildPhase1Prompt/buildPhase2Prompt's existing extraInstruction
+// composition at every call site, exactly like fillRoundExtraInstruction/
+// buildCorrectionsGuidance already are (all `.filter(Boolean).join("\n\n")`
+// composed). Returns null when there are no eligible related products so
+// callers' filter drops it cleanly — no new prompt-builder parameter
+// needed anywhere.
+export function buildRelatedProductsDiscoveryContext(relatedProducts: ResolvedRelatedProduct[]): string | null {
+  const eligible = relatedProducts.filter(rp => !rp.resolutionFailed);
+  if (!eligible.length) return null;
+  const summaries = eligible.map(rp => {
+    const attrs = [rp.brand, rp.motor_type || rp.heat_tech_type, rp.price].filter(Boolean).join(", ");
+    return attrs ? `${rp.name} (${attrs})` : rp.name;
+  });
+  return `The user provided these as examples of nearby similar products: ${summaries.join("; ")}. Prioritize candidates with comparable profiles.`;
+}
+
 // PART 3.4 (prompt-level feedback digest) — a compact summary of this tool
 // type's correction history, concatenated into the discovery AI's
 // extraInstruction (same mechanism fillRoundExtraInstruction already
@@ -247,6 +420,12 @@ export interface AnalysisContext {
   // (never persisted back to the profile unless the form's own "Save to
   // profile" action is used, a separate explicit API call).
   weightOverride?: MatchingWeights;
+  // Up to 3 user-pasted "nearby similar products" (Related Products field,
+  // next to Positioning Context) — raw input only. The enriched Rainforest+
+  // motor-extraction result (resolveRelatedProducts, below) lives in its
+  // own analyses.related_products column, resolved once in Phase 0 and
+  // read fresh by every later phase — never re-derived from this raw list.
+  relatedAsins?: { asin: string; url?: string; addedAt: string }[];
 }
 
 // Snapshotted onto the phase1/phase2 result alongside matching_weights
@@ -1026,6 +1205,12 @@ export interface CompositeScoringContext {
   // scoring at all) get a fixed composite-score penalty here instead of
   // being dropped outright — still eligible, just deprioritized.
   penalizedAsins?: Set<string>;
+  // Related Products feature — eligible related products' profiles
+  // (motor/heat-tech family, price, specs), used ONLY to compute a small
+  // additive bonus inside computeFeatureScore below; absent/empty degrades
+  // to exactly today's scoring (see computeRelatedProductSimilarity's own
+  // header comment in lib/competitor-scoring.ts).
+  relatedProducts?: RelatedProductProfile[];
 }
 
 // Replaces applyPriceBandGate's plain "in-band first, then closest to
@@ -1156,7 +1341,17 @@ export function selectByCompositeScore(
     // that's actually been verified, not just asserted by the discovery step.
     const candidateText = [c.name, ...(Array.isArray(c.feature_bullets) ? c.feature_bullets : []), c.description || ""].filter(Boolean).join(" ");
     const differentiatorMatch = ctx.keyDiff ? matchesDifferentiator(ctx.keyDiff, candidateText) : null;
-    const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs, differentiatorMatch);
+    // Related Products additive bonus (never a gate, never overrides
+    // motor/price) — 0 when ctx.relatedProducts is absent/empty, in which
+    // case computeFeatureScore's own falsy-check skips it entirely.
+    const relatedProductSimilarity = ctx.relatedProducts?.length
+      ? computeRelatedProductSimilarity(
+          { motorFamilyKey: motorExtraction?.familyKey ?? null, heatTechFamilyKey: heatTechExtraction?.familyKey ?? null, priceRaw: c._resolvedPrice ?? null },
+          theirSpecs,
+          ctx.relatedProducts
+        )
+      : 0;
+    const featureScore = computeFeatureScore(ctx.ourSpecs, theirSpecs, differentiatorMatch, relatedProductSimilarity);
     // PART 3 correction-learning penalty — a single independent
     // "wrong_product"/"discontinued" report against this exact ASIN
     // deprioritizes it (still eligible) rather than excluding it outright
@@ -2010,6 +2205,20 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
   // lambda can interleave requests from different orgs on the same process).
   const toolTypes = await listToolTypes();
 
+  // Related Products feature — resolved once in Phase 0 (below) and
+  // persisted to analyses.related_products; read fresh here every phase so
+  // Phase 1/2's pool-seeding, AI discovery context, and composite-scoring
+  // bonus all see the same enriched data without re-resolving it.
+  const relatedProducts: ResolvedRelatedProduct[] = Array.isArray(record.related_products) ? record.related_products : [];
+  const eligibleRelatedProducts = relatedProducts.filter(rp => rp.eligibleForPoolSeeding && !rp.resolutionFailed);
+  const relatedProductsDiscoveryContext = buildRelatedProductsDiscoveryContext(relatedProducts);
+  const relatedProductProfiles: RelatedProductProfile[] = eligibleRelatedProducts.map(rp => ({
+    motorFamilyKey: rp.motor_family_key ?? null,
+    heatTechFamilyKey: rp.heat_tech_family_key ?? null,
+    priceRaw: rp.price_raw ?? null,
+    specs: extractCompetitorSpecs(rp as any),
+  }));
+
   let webSearchCount = 0;
   const onSearchUsed = () => { webSearchCount += 1; };
 
@@ -2047,6 +2256,20 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         };
         await setPendingQuestion(analysisId, question);
         return { analysisId, phase: 0, status: "running", stepResult: card, totalSearches: 0, pendingQuestion: question };
+      }
+
+      // Related Products — resolved once here, before Phase 1 ever runs, so
+      // its discovery-context sentence/pool-seeding/scoring-bonus are ready
+      // the moment Phase 1 starts. Fail-open: a resolution failure never
+      // blocks Phase 0 from completing (see resolveRelatedProducts's own
+      // header comment).
+      if (context.relatedAsins?.length) {
+        try {
+          const resolvedRelated = await resolveRelatedProducts(context.relatedAsins, card, toolTypes, startTime);
+          await patchRelatedProducts(analysisId, resolvedRelated);
+        } catch (e) {
+          console.warn("Failed to resolve related products for analysis", analysisId, e);
+        }
       }
 
       await updateAnalysisPhase(analysisId, 1, "phase0_result", card, 0);
@@ -2148,6 +2371,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         weights,
         keyDiff: context.keyDiff ?? null,
         penalizedAsins: correctionSignals.penalizedAsins,
+        relatedProducts: relatedProductProfiles,
       };
 
       // Curated legacy-brand registry (lib/db/legacy-brands.ts) takes
@@ -2189,6 +2413,19 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // seed, checked BEFORE any AI discovery search runs this round.
       if (fill.round === 1 && pool.length === 0) {
         pool = await seedKnownGoodCandidates(correctionSignals, "legacy", primaryCriterion, ourMotor, ourHeatTech, targetPriceRaw != null ? deriveTierKeyword(targetPriceRaw) : null);
+      }
+
+      // Related Products eligibility (additive only) — an eligible related
+      // product seeds directly into the pool so it can independently earn
+      // one of the 5 legacy slots by passing the SAME gates every other
+      // candidate does below; a brand+title-keyword Amazon search seeded by
+      // each one also surfaces real neighbors. Both filtered through
+      // filterCandidatesByCategoryAndIdentity exactly like every other
+      // incoming batch, never merged into `pool` unfiltered.
+      if (fill.round === 1 && eligibleRelatedProducts.length) {
+        const relatedSeeds = filterCandidatesByCategoryAndIdentity(buildRelatedProductSeeds(eligibleRelatedProducts, "legacy"), "legacy", identityCard, toolTypes);
+        const neighbors = filterCandidatesByCategoryAndIdentity(await searchRelatedProductNeighbors(eligibleRelatedProducts, toolTypes, identityCard, "legacy", startTime), "legacy", identityCard, toolTypes);
+        pool = mergeNewCandidatesIntoPool(pool, [...relatedSeeds, ...neighbors]);
       }
 
       if (fill.round === 1) {
@@ -2304,10 +2541,11 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           };
         } else {
           const correctionsGuidance = buildCorrectionsGuidance(correctionSignals.corrections);
+          const round1ExtraInstruction = [correctionsGuidance, relatedProductsDiscoveryContext].filter(Boolean).join("\n\n") || undefined;
           const aiResult: any = await withAiFallback(
             "Phase 1",
-            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, correctionsGuidance ?? undefined, primaryCriterion) : null,
-            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, correctionsGuidance ?? undefined, primaryCriterion) : null,
+            hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, round1ExtraInstruction, primaryCriterion) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, round1ExtraInstruction, primaryCriterion) : null,
             () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
             startTime
           );
@@ -2328,7 +2566,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // registry branch it's simply a broader/relaxed re-ask. ----
         const usedBrands = new Set(pool.map((c: any) => normalizeBrandToken(c.brand || "")));
         const correctionsGuidance = buildCorrectionsGuidance(correctionSignals.corrections);
-        const extraInstruction = [fillRoundExtraInstruction(fill.round, "legacy"), correctionsGuidance].filter(Boolean).join("\n\n");
+        const extraInstruction = [fillRoundExtraInstruction(fill.round, "legacy"), correctionsGuidance, relatedProductsDiscoveryContext].filter(Boolean).join("\n\n");
         const aiResult: any = await withAiFallback(
           `Phase 1 (fill round ${fill.round})`,
           hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion) : null,
@@ -2488,9 +2726,17 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           pool = await seedKnownGoodCandidates(correctionSignals, "emerging", primaryCriterion, ourMotor, ourHeatTech, targetPriceRaw != null ? deriveTierKeyword(targetPriceRaw) : null);
         }
 
+        // Related Products eligibility (additive only) — same reasoning as
+        // Phase 1's identical block above, scoped to "emerging" here.
+        if (fill.round === 1 && eligibleRelatedProducts.length) {
+          const relatedSeeds = filterCandidatesByCategoryAndIdentity(buildRelatedProductSeeds(eligibleRelatedProducts, "emerging"), "emerging", identityCard, toolTypes);
+          const neighbors = filterCandidatesByCategoryAndIdentity(await searchRelatedProductNeighbors(eligibleRelatedProducts, toolTypes, identityCard, "emerging", startTime), "emerging", identityCard, toolTypes);
+          pool = mergeNewCandidatesIntoPool(pool, [...relatedSeeds, ...neighbors]);
+        }
+
         const usedBrands = new Set(pool.map((c: any) => normalizeBrandToken(c.brand || "")));
         const correctionsGuidance = buildCorrectionsGuidance(correctionSignals.corrections);
-        const extraInstruction = [fill.round === 1 ? null : fillRoundExtraInstruction(fill.round, "emerging"), correctionsGuidance].filter(Boolean).join("\n\n") || undefined;
+        const extraInstruction = [fill.round === 1 ? null : fillRoundExtraInstruction(fill.round, "emerging"), correctionsGuidance, relatedProductsDiscoveryContext].filter(Boolean).join("\n\n") || undefined;
         const result: any = await withAiFallback(
           fill.round === 1 ? "Phase 2" : `Phase 2 (fill round ${fill.round})`,
           hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion) : null,
@@ -2522,6 +2768,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           weights,
           keyDiff: context.keyDiff ?? null,
           penalizedAsins: correctionSignals.penalizedAsins,
+          relatedProducts: relatedProductProfiles,
         };
         const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "emerging", identityCard, 5, trialCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
 
@@ -2629,6 +2876,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         indieLineups,
         keyDiff: context.keyDiff ?? null,
         penalizedAsins: correctionSignals.penalizedAsins,
+        relatedProducts: relatedProductProfiles,
       };
       // Captured before the reassignment below — this is the full,
       // already-enriched candidate pool the nearest-similar fallback draws
@@ -3086,6 +3334,46 @@ export async function replaceCompetitor(
   }
 
   return { competitor: newCompetitor, synthesisPossiblyStale };
+}
+
+export interface ReplaceRelatedProductResult {
+  relatedProduct: ResolvedRelatedProduct;
+}
+
+// Related Products' "fixing a mispaste re-fetches in place" swap —
+// deliberately simpler than replaceCompetitor above: no CorrectionReason
+// picker and no recordCorrection() call (a mispaste fix on a user-provided
+// product isn't a discovery-learning signal), and a tool-type mismatch
+// here is never a hard block (it's an expected, common case for this
+// feature — only the toolTypeMismatch flag gets recomputed).
+export async function replaceRelatedProduct(analysisId: string, oldAsin: string, newAsinOrUrl: string): Promise<ReplaceRelatedProductResult> {
+  const record: any = await getAnalysis(analysisId);
+  if (!record) throw new Error("Analysis not found");
+
+  const identity: IdentityCard | null = hasResult(record.phase0_result) ? record.phase0_result : null;
+  if (!identity) throw new Error("Analysis has no confirmed product identity yet — cannot replace a related product before Phase 0 completes");
+
+  const existing: ResolvedRelatedProduct[] = Array.isArray(record.related_products) ? record.related_products : [];
+  const idx = existing.findIndex(rp => rp.asin === oldAsin);
+  if (idx < 0) throw new Error(`No related product with ASIN "${oldAsin}" found on this analysis`);
+
+  const newAsin = resolveAsinFromInput(newAsinOrUrl);
+  if (!newAsin) throw new Error("Could not resolve an ASIN from that input");
+
+  const toolTypes = await listToolTypes();
+  const [resolved] = await resolveRelatedProducts(
+    [{ asin: newAsin, url: /^https?:\/\//i.test(newAsinOrUrl) ? newAsinOrUrl : (existing[idx].url ?? undefined), addedAt: existing[idx].addedAt }],
+    identity,
+    toolTypes,
+    Date.now()
+  );
+  if (!resolved || resolved.resolutionFailed) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}"`);
+
+  const updated = [...existing];
+  updated[idx] = resolved;
+  await patchRelatedProducts(analysisId, updated);
+
+  return { relatedProduct: resolved };
 }
 
 // ----------------------------------------------------

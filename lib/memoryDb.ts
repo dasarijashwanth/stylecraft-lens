@@ -56,6 +56,9 @@ export interface MockProject {
   lastUsedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  // Raw {asin,url,addedAt} input only, for re-run pre-fill — see
+  // lib/db/analyses.ts's related_products for the ENRICHED per-analysis data.
+  relatedProducts?: any[];
 }
 
 export interface MockAnalysis {
@@ -72,6 +75,7 @@ export interface MockAnalysis {
   phase3Result: any;
   pendingQuestion?: { question: string; foundSoFar?: string } | null;
   phase1BrandProgress?: any[] | null;
+  relatedProducts?: any[];
   errorMessage: string | null;
   durationMs: number | null;
   createdAt: Date;

@@ -158,6 +158,7 @@ export async function buildReportSections(analysis: {
   targetMarket?: string;
   pricePoint?: string;
   identity?: { category?: string; subcategory?: string; whatItIs?: string };
+  relatedProducts?: any[];
 }) {
   const p1Comps = analysis.phase1?.competitors || [];
   const p2Comps = analysis.phase2?.competitors || [];
@@ -196,6 +197,11 @@ export async function buildReportSections(analysis: {
       product_name: analysis.productName,
       large_brand_competitors: p1Comps,
       indie_emerging_competitors: p2Comps,
+      // Related Products (user-provided, up to 3) — a genuinely separate
+      // array, deliberately never spread into buildPricingAnalysis's
+      // `competitors` input below, so medians/tiers never see them unless
+      // one also independently earned a real phase1/phase2 slot.
+      related_products: analysis.relatedProducts || [],
       // Which curated legacy-brand registry category (if any) Phase 1
       // actually searched — see lib/legacy-brand-registry.ts /
       // lib/analysisEngine.ts's Phase 1 branch. Null when the identified
@@ -292,6 +298,7 @@ export async function createReportFromAnalysis(
     targetMarket?: string;
     pricePoint?: string;
     identity?: { category?: string; subcategory?: string; whatItIs?: string };
+    relatedProducts?: any[];
   },
   orgId: string = "dev_org_id"
 ) {

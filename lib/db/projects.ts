@@ -39,6 +39,11 @@ interface ProjectInput {
   // once set; not part of the 76-item GTM inventory itself, so it lives
   // here at the project level instead of as a GTM field.
   sku?: string;
+  // Related Products (analyze form field) — raw {asin,url,addedAt} input
+  // only, so a re-run from this project can pre-fill the same 3 rows. Never
+  // the enriched Rainforest/motor data (see lib/db/analyses.ts's
+  // related_products) — that's always refetched fresh per analysis run.
+  relatedProducts?: { asin: string; url?: string; addedAt: string }[];
 }
 
 // Supabase columns are snake_case, but the rest of this app (Prisma models,
@@ -65,6 +70,7 @@ function toProjectShape(row: any) {
     productUrl: row.product_url,
     asin: row.asin,
     sku: row.sku,
+    relatedProducts: row.related_products ?? [],
     savedDefaults: row.saved_defaults,
     latestAnalysisId: row.latest_analysis_id,
     latestReportId: row.latest_report_id,
@@ -102,6 +108,7 @@ export async function createProject(userId: string, orgId: string, data: Project
         product_url: data.productUrl ?? null,
         asin: data.asin ?? null,
         sku: data.sku ?? null,
+        related_products: data.relatedProducts ?? [],
         last_used_at: new Date().toISOString(),
       })
       .select()
@@ -151,6 +158,7 @@ export async function createProject(userId: string, orgId: string, data: Project
       productUrl: data.productUrl || null,
       asin: data.asin || null,
       sku: data.sku || null,
+      relatedProducts: data.relatedProducts ?? [],
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -262,6 +270,7 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   productUrl: "product_url",
   asin: "asin",
   sku: "sku",
+  relatedProducts: "related_products",
   savedDefaults: "saved_defaults",
   latestAnalysisId: "latest_analysis_id",
   latestReportId: "latest_report_id",

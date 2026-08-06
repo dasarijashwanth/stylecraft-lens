@@ -70,6 +70,7 @@ export async function POST(request: Request) {
         targetMarket,
         pricePoint,
         identity: analysisData.phase0_result || undefined,
+        relatedProducts: analysisData.related_products || [],
       },
       session.orgId
     );

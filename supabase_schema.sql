@@ -1730,3 +1730,28 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS xlsx_drive_file_id VARCHAR(255);
 -- deliberately distinct from 'failed' so old rows don't retroactively show
 -- an error banner they never actually had.
 ALTER TABLE uploaded_source_docs ADD COLUMN IF NOT EXISTS facts_extraction_status VARCHAR(20) NOT NULL DEFAULT 'not_attempted'; -- not_attempted | complete | failed
+
+-- 51. ANALYSES: RELATED PRODUCTS (ENRICHED) — the raw user-pasted ASINs/
+-- URLs (0-3, from the analyze form's "Related Products" field) travel in
+-- the existing free-form analyses.context JSONB column (context.relatedAsins),
+-- exactly like companyContext/keyDiff already do — no migration needed for
+-- that. This column instead holds the ENRICHED result: each related ASIN's
+-- full Rainforest payload + motor/heat-tech extraction, resolved once at
+-- the start of the run (lib/analysisEngine.ts's resolveRelatedProducts,
+-- called from the Phase 0 block) plus a toolTypeMismatch flag and
+-- eligibility for pool-seeding into discovery. Kept as its own column
+-- (mirroring phase0_result/phase1_result/...) rather than folded into
+-- phase0_result, since it has its own patch lifecycle (the "fixing a
+-- mispaste re-fetches in place" swap flow patches only this column, never
+-- touching the identity card).
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS related_products JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 52. PROJECTS: RELATED PRODUCTS DEFAULTS (RAW) — lets "Related Products"
+-- pre-fill on a re-run from a project, the same way companyContext/
+-- motorFamily/keyDiff already do (see PATCH /api/projects/[id]'s
+-- whitelist). Deliberately holds only the raw {asin,url,addedAt} input,
+-- never the enriched Rainforest/motor data in Section 51 above — that
+-- enrichment must always be refetched fresh at the start of each run
+-- (prices/availability/motor claims go stale), never carried forward
+-- project-to-project.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS related_products JSONB NOT NULL DEFAULT '[]'::jsonb;

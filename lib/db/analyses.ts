@@ -206,6 +206,25 @@ export async function patchAnalysisPhaseResults(
   }
 }
 
+// Related Products feature — patches ONLY analyses.related_products,
+// independent of phase0_result/phase1_result/etc (its own lifecycle: set
+// once by lib/analysisEngine.ts's resolveRelatedProducts in Phase 0,
+// re-patched in place by replaceRelatedProduct's "fixing a mispaste"
+// swap). Same shape as patchAnalysisPhaseResults above — Supabase or
+// memoryDb only, no Prisma column (mirrors phase0_result/
+// phase1_brand_progress, both Supabase/memoryDb-only scratch data not in
+// the Prisma schema).
+export async function patchRelatedProducts(analysisId: string, relatedProducts: any[]) {
+  if (isSupabaseConfigured) {
+    const { error } = await supabaseAdmin.from("analyses").update({ related_products: relatedProducts }).eq("id", analysisId);
+    if (error) throw error;
+    return;
+  }
+
+  const mockAnalysis = memoryDb.analyses.find(a => a.id === analysisId);
+  if (mockAnalysis) mockAnalysis.relatedProducts = relatedProducts;
+}
+
 // Manually re-opens Phase 3 (synthesis) on an already-complete analysis —
 // used by the "Regenerate" banner shown after a competitor swap leaves
 // stale synthesis text (lib/analysisEngine.ts's replaceCompetitor sets
@@ -445,6 +464,7 @@ export async function getAnalysis(analysisId: string) {
         phase3_result: mockAnalysis.phase3Result,
         pending_question: mockAnalysis.pendingQuestion,
         phase1_brand_progress: mockAnalysis.phase1BrandProgress ?? null,
+        related_products: mockAnalysis.relatedProducts ?? [],
         error_message: mockAnalysis.errorMessage,
         duration_ms: mockAnalysis.durationMs,
         created_at: mockAnalysis.createdAt,

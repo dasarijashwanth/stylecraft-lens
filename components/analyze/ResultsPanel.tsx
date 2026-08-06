@@ -92,6 +92,13 @@ interface ResultsPanelProps {
       // below rather than silently leaving stale text or auto-regenerating.
       synthesis_possibly_stale?: boolean;
     };
+    // Related Products (up to 3, user-pasted on the analyze form) — a
+    // genuinely separate array from phase1/phase2, never spread into
+    // buildPricingAnalysis's input below, so medians/tiers never see them
+    // unless one also independently earned a real phase1/phase2 slot (see
+    // lib/analysisEngine.ts's buildRelatedProductSeeds). Empty/absent hides
+    // the whole section.
+    relatedProducts?: any[];
   };
   // Best-effort — lets each competitor's live per-section provenance writes
   // (lib/db/section-provenance.ts) carry a real analysis_id when one exists.
@@ -104,6 +111,12 @@ interface ResultsPanelProps {
   // (analyze/page.tsx) owns the actual analysisResult state and patches
   // phase1/phase2's competitors array in place.
   onCompetitorReplaced?: (oldAsin: string, updatedCompetitor: any, synthesisPossiblyStale: boolean) => void;
+  // Related Products' "fixing a mispaste re-fetches in place" swap —
+  // separate from onCompetitorReplaced since it patches a different array
+  // (analysisResult.relatedProducts, not phase1/phase2.competitors) and
+  // never touches synthesis-staleness (related products aren't named in
+  // Phase 3 synthesis the way a selected competitor could be).
+  onRelatedProductReplaced?: (oldAsin: string, updatedRelatedProduct: any) => void;
   // Triggers POST .../regenerate-synthesis then hands control back to the
   // parent's ProgressPanel view (same phase-3-only re-run, no new
   // state-machine code) — see the banner below.
@@ -122,13 +135,14 @@ function describeCriterionForCompetitors(competitors: any[]): string | null {
   return null;
 }
 
-export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis, onCompetitorReplaced, onRegenerateSynthesis, regeneratingSynthesis }: ResultsPanelProps) {
+export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis, onCompetitorReplaced, onRelatedProductReplaced, onRegenerateSynthesis, regeneratingSynthesis }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   // A slot the fill loop couldn't fill (lib/analysisEngine.ts's
   // buildEmptySlotPlaceholder) renders as EmptySlotCard, not a real
   // competitor — counts/comparison-table columns must never include it.
   const phase1RealCompetitors = (phase1.competitors || []).filter((c: any) => !c.empty_slot);
   const phase2RealCompetitors = (phase2.competitors || []).filter((c: any) => !c.empty_slot);
+  const relatedProducts = analysis.relatedProducts || [];
   const phase1CriterionLabel = describeCriterionForCompetitors(phase1RealCompetitors);
   const phase2CriterionLabel = describeCriterionForCompetitors(phase2RealCompetitors);
   // lib/analysisEngine.ts's nearest-similar fallback (selectByCompositeScore's
@@ -202,6 +216,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           product_name: analysis.productName,
           large_brand_competitors: phase1RealCompetitors,
           indie_emerging_competitors: phase2RealCompetitors,
+          related_products: relatedProducts,
           market_snapshot: phase3.market_snapshot,
           key_trends: phase3.key_trends,
           market_gaps: phase3.market_gaps,
@@ -658,6 +673,48 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
           <CompetitorTable competitors={phase2RealCompetitors} tier="emerging" resolvedFeatures={phase2Features} />
         </div>
       </section>
+
+      {/* 5. RELATED PRODUCTS (USER-PROVIDED) SECTION — hidden entirely when
+          none were pasted on the analyze form. Genuinely separate from
+          phase1/phase2: no matching-weights/nearest-match language (these
+          were never scored/ranked), no empty-slot placeholders (there's no
+          fixed slot count to fill). */}
+      {relatedProducts.length > 0 && (
+        <section className="results-section bg-surface-2 border border-border rounded-xl p-6 md:p-8 space-y-6">
+          <div className="flex items-center justify-between pb-3 border-b border-border/60">
+            <div className="flex items-center gap-2">
+              <UserCheck className="w-5 h-5 text-emerald-400" />
+              <h2 className="text-base font-bold text-text-primary tracking-tight">Related Products (user-provided)</h2>
+            </div>
+            <span className="count-badge bg-emerald-950/60 border border-emerald-900/60 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
+              {relatedProducts.length} Product{relatedProducts.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <p className="text-[10px] text-text-muted italic -mt-3">
+            Pasted directly by you as examples of nearby similar products — shown here for reference and used to guide discovery above, not independently scored.
+          </p>
+
+          <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
+            {relatedProducts.map((comp, i) => (
+              <CompetitorCard
+                key={comp.asin || i}
+                competitor={comp}
+                tier="related"
+                mode="related"
+                analysisId={analysisId}
+                buyerSentimentEnabled={buyerSentimentEnabled}
+                newsUpdatesEnabled={false}
+                onReplaced={(oldAsin, updated) => onRelatedProductReplaced?.(oldAsin, updated)}
+              />
+            ))}
+          </div>
+
+          <div className="pt-4 border-t border-border/40">
+            <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Related Products Specification Comparison</h3>
+            <CompetitorTable competitors={relatedProducts} tier="related" />
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -669,7 +726,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
    show empty cells). */
 interface CompetitorTableProps {
   competitors: any[];
-  tier: "legacy" | "emerging";
+  tier: "legacy" | "emerging" | "related";
   resolvedFeatures?: Record<number, KeyFeaturesResult>;
 }
 
@@ -773,7 +830,7 @@ function CompetitorTable({ competitors, tier, resolvedFeatures }: CompetitorTabl
             {competitors.map((comp, idx) => (
               <th key={idx} className="p-2 border-r border-border/40 min-w-[120px]">
                 <div className="text-text-primary font-bold text-xs truncate max-w-[150px]">{comp.brand || comp.name}</div>
-                <div className="text-[8px] text-text-muted mt-0.5">{tier === "legacy" ? "Legacy" : "Emerging"}</div>
+                <div className="text-[8px] text-text-muted mt-0.5">{tier === "legacy" ? "Legacy" : tier === "emerging" ? "Emerging" : "Related"}</div>
               </th>
             ))}
           </tr>

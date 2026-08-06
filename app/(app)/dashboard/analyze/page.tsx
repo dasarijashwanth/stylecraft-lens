@@ -14,8 +14,26 @@ import { useAuth } from "@/hooks/useAuth";
 // runtime code (which imports the server-only Supabase admin client) never
 // reaches this "use client" bundle. Same precedent as ToolTypeRow above.
 import type { CatalogProductRow } from "@/lib/db/catalog-products";
+import { resolveAsinLocal } from "@/lib/asin-parse-client";
 
 const TARGET_MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "Retail", both: "Both" };
+
+interface RelatedProductRow {
+  input: string;
+  asin: string | null;
+  title: string | null;
+  brand: string | null;
+  price: string | null;
+  image: string | null;
+  error: string | null;
+  mismatchWarning: string | null;
+  loading: boolean;
+  addedAt: string | null;
+}
+const EMPTY_RELATED_ROW: RelatedProductRow = {
+  input: "", asin: null, title: null, brand: null, price: null, image: null,
+  error: null, mismatchWarning: null, loading: false, addedAt: null,
+};
 
 // Sentinel select value that opens the inline "add new tool type" mini-form
 // below, instead of being a real tool type itself.
@@ -142,6 +160,9 @@ export default function AnalyzePage() {
   const [heatTechFamily, setHeatTechFamily] = useState("");
   const [heatTechBrandedName, setHeatTechBrandedName] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
+  const [relatedProductRows, setRelatedProductRows] = useState<RelatedProductRow[]>([
+    { ...EMPTY_RELATED_ROW }, { ...EMPTY_RELATED_ROW }, { ...EMPTY_RELATED_ROW },
+  ]);
   const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
   const [heatTechFamilies, setHeatTechFamilies] = useState<HeatTechFamilyOption[]>([]);
   const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
@@ -396,6 +417,20 @@ export default function AnalyzePage() {
     });
   }
 
+  // Related Products' "fixing a mispaste re-fetches in place" swap —
+  // patches analysisResult.relatedProducts by ASIN match, mirroring
+  // handleCompetitorReplaced above exactly, just against a flat array
+  // instead of phase1/phase2.competitors.
+  function handleRelatedProductReplaced(oldAsin: string, updatedRelatedProduct: any) {
+    setAnalysisResult((prev: any) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        relatedProducts: (prev.relatedProducts || []).map((r: any) => (r.asin === oldAsin ? updatedRelatedProduct : r)),
+      };
+    });
+  }
+
   // Resets Phase 3 server-side then hands control back to the same
   // ProgressPanel view a fresh analysis uses — it re-fetches phase0-2
   // results (already complete, instant) and re-runs only the synthesis
@@ -438,11 +473,19 @@ export default function AnalyzePage() {
             // canonical select once motorFamilies has loaded.
             setMotorBrandedName(p.motorFamily ? p.motorBrandedName || "" : p.motorTech || "");
             setKeyDiff(p.keyDiff || "");
+            if (Array.isArray(p.relatedProducts) && p.relatedProducts.length) {
+              const saved = p.relatedProducts as { asin: string; url?: string; addedAt?: string }[];
+              setRelatedProductRows((rows) => rows.map((row, i) => (saved[i] ? { ...EMPTY_RELATED_ROW, input: saved[i].url || saved[i].asin } : row)));
+              saved.slice(0, 3).forEach((sp, i) => {
+                void resolveRelatedRow(i, sp.url || sp.asin, [], sp.addedAt || null, p.toolType || "");
+              });
+            }
             toast.success(`Loaded specifications from project "${p.name}"`);
           }
         })
         .catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectIdParam]);
 
   // Load past analysis if id is passed — resumes it via the ProgressPanel if
@@ -470,7 +513,7 @@ export default function AnalyzePage() {
             const searches = (p1.web_searches_performed || 0) + (p2.web_searches_performed || 0) + (p3.web_searches_performed || 0);
 
             setAnalysisId(analysis.id);
-            setAnalysisResult({ identity, phase1: p1, phase2: p2, phase3: p3, productName: name, totalSearches: searches });
+            setAnalysisResult({ identity, phase1: p1, phase2: p2, phase3: p3, relatedProducts: analysis.related_products || [], productName: name, totalSearches: searches });
             setViewState("results");
           } else if (analysis.status === "failed") {
             toast.error(analysis.error_message || "This analysis failed");
@@ -520,6 +563,74 @@ export default function AnalyzePage() {
     if (n !== null && n > 0) setPricePoint(`$${n.toFixed(2)}`);
   }
 
+  function updateRelatedRow(index: number, patch: Partial<RelatedProductRow>) {
+    setRelatedProductRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  // Validates + resolves one Related Products row: cheap local ASIN/URL
+  // format check and duplicate-across-rows check first (no network
+  // round-trip for an obviously invalid paste), then a real lightweight
+  // preview fetch (POST /api/products/preview) for image/title/price so
+  // the user can confirm they pasted the right product. Takes the raw
+  // input/existing-ASINs as plain arguments (not read off component state)
+  // so it can be called either from the onBlur handler below OR directly
+  // from the project-pre-fill effect without a stale-closure risk.
+  async function resolveRelatedRow(index: number, raw: string, existingAsins: (string | null)[], preservedAddedAt: string | null, requiredToolType: string) {
+    if (!raw.trim()) {
+      updateRelatedRow(index, { ...EMPTY_RELATED_ROW, input: "" });
+      return;
+    }
+
+    const asin = resolveAsinLocal(raw);
+    if (!asin) {
+      updateRelatedRow(index, { error: "Enter a valid ASIN or Amazon product URL", asin: null, title: null, brand: null, price: null, image: null, mismatchWarning: null });
+      return;
+    }
+    if (existingAsins.some((a, i) => i !== index && a === asin)) {
+      updateRelatedRow(index, { error: "Already added in another row", asin: null, title: null, brand: null, price: null, image: null, mismatchWarning: null });
+      return;
+    }
+
+    updateRelatedRow(index, { loading: true, error: null });
+    try {
+      const res = await fetch("/api/products/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asinOrUrl: raw.trim(), requiredToolType: requiredToolType || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        updateRelatedRow(index, { loading: false, error: data.message || "Could not fetch that product", asin: null, title: null, brand: null, price: null, image: null, mismatchWarning: null });
+        return;
+      }
+      updateRelatedRow(index, {
+        loading: false, error: null,
+        asin: data.asin, title: data.title, brand: data.brand, price: data.price, image: data.image,
+        mismatchWarning: data.toolTypeMismatchWarning || null,
+        addedAt: preservedAddedAt || new Date().toISOString(),
+      });
+    } catch {
+      updateRelatedRow(index, { loading: false, error: "Could not fetch that product — check the connection and try again" });
+    }
+  }
+
+  function handleRelatedProductBlur(index: number) {
+    const row = relatedProductRows[index];
+    void resolveRelatedRow(index, row.input, relatedProductRows.map((r) => r.asin), row.addedAt, toolType);
+  }
+
+  // {asin,url,addedAt} triples for the submit body / project pre-fill —
+  // only resolved, non-errored rows count.
+  function resolvedRelatedAsins(): { asin: string; url?: string; addedAt: string }[] {
+    return relatedProductRows
+      .filter((r) => r.asin && !r.error)
+      .map((r) => ({
+        asin: r.asin!,
+        url: /^https?:\/\//i.test(r.input.trim()) ? r.input.trim() : undefined,
+        addedAt: r.addedAt || new Date().toISOString(),
+      }));
+  }
+
   const handleRunAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
@@ -545,7 +656,13 @@ export default function AnalyzePage() {
               motorFamily,
               motorBrandedName: motorBrandedName.trim(),
               keyDiff: keyDiff.trim(),
-            }
+            },
+            // Top-level column (not nested in savedDefaults, which the
+            // pre-fill effect above doesn't read) — mirrors how
+            // companyContext/motorFamily are ALSO real top-level project
+            // columns the pre-fill effect reads directly (p.companyContext,
+            // not p.savedDefaults.companyContext).
+            relatedProducts: resolvedRelatedAsins(),
           })
         }).catch(() => {});
       }
@@ -588,6 +705,7 @@ export default function AnalyzePage() {
           keyDiff: keyDiff.trim() || undefined,
           pricePoint: pricePoint.trim() || undefined,
           catalogProductId: catalogProductId || undefined,
+          relatedAsins: resolvedRelatedAsins().length ? resolvedRelatedAsins() : undefined,
           weightOverride: showWeightOverride && weightOverrideSum > 0 ? {
             motor: Number(weightOverrideInputs.motor) || 0,
             price: Number(weightOverrideInputs.price) || 0,
@@ -1051,6 +1169,42 @@ export default function AnalyzePage() {
                 Product-specific facts that sharpen positioning — current BSR, standout reviews, who actually buys it. Not a company/brand description.
               </p>
             </div>
+
+            <div className="space-y-3 pt-3 border-t border-border">
+              <div>
+                <label className="font-semibold text-text-primary block">Related Products</label>
+                <p className="text-[10px] text-text-muted">
+                  Paste Amazon URLs of up to 3 products similar to yours. These help Claude find nearby, comparable competitors — and they&apos;ll appear in the analysis alongside the discovered competitors.
+                </p>
+              </div>
+              {relatedProductRows.map((row, i) => (
+                <div key={i} className="space-y-1">
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      value={row.input}
+                      onChange={(e) => updateRelatedRow(i, { input: e.target.value })}
+                      onBlur={() => handleRelatedProductBlur(i)}
+                      placeholder={`Related product ${i + 1} — Amazon URL or ASIN (optional)`}
+                      className="flex-1 px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-sm"
+                    />
+                    {row.loading && <span className="text-[10px] text-text-muted whitespace-nowrap">Checking…</span>}
+                  </div>
+                  {row.error && <p className="text-[10px] text-danger">{row.error}</p>}
+                  {row.mismatchWarning && <p className="text-[10px] text-warning">{row.mismatchWarning}</p>}
+                  {row.asin && !row.error && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <div className="flex items-center gap-2 px-3 py-2 bg-surface-1 border border-border rounded-lg">
+                      {row.image && <img src={row.image} alt="" className="w-8 h-8 object-contain rounded flex-shrink-0" />}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-text-primary truncate">{row.title}</p>
+                        <p className="text-[10px] text-text-muted">{[row.brand, row.price].filter(Boolean).join(" · ")}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Card 3: Precision specs */}
@@ -1291,6 +1445,7 @@ export default function AnalyzePage() {
           savingReport={savingReport}
           onNewAnalysis={() => setViewState("form")}
           onCompetitorReplaced={handleCompetitorReplaced}
+          onRelatedProductReplaced={handleRelatedProductReplaced}
           onRegenerateSynthesis={handleRegenerateSynthesis}
           regeneratingSynthesis={regeneratingSynthesis}
         />

@@ -760,7 +760,65 @@ function generatePrintHTML(report: any, toolTypes: ToolTypeRow[], activeTab?: st
       </tbody>
     </table>
 
+    ${(ca.related_products || []).length > 0 ? `
+    <h3>Related Products (User-Provided)</h3>
+    <p style="font-size: 11px; color: #666; font-style: italic;">
+      Pasted directly by the user as examples of nearby similar products — shown for reference and used to guide discovery above, not independently scored or counted in the pricing benchmarks below.
+    </p>
+    <div class="competitor-grid">
+      ${(ca.related_products || []).map((c: any) => `
+        <div class="comp-card">
+          <div class="comp-header">
+            <div>
+              <div class="comp-name">${escapeHtml(c.name)}${c.toolTypeMismatch ? ` <span style="font-size:9px; color:#b45309; font-weight:600;">(${escapeHtml(c.toolTypeMismatchLabel || "Tool-type mismatch")})</span>` : ""}</div>
+              <div class="comp-brand">${escapeHtml(c.brand)}</div>
+            </div>
+            <div class="comp-price">${escapeHtml(c.price) || "—"}</div>
+          </div>
+          <div class="comp-metrics">
+            <div><strong>ASIN:</strong> ${escapeHtml(c.asin)}</div>
+            ${c.rating ? `<div><strong>Rating:</strong> ${renderStarRating(c.rating, c.review_count)}</div>` : ""}
+            <div><strong>Sales:</strong> ${escapeHtml(c.monthly_sales) || "—"}</div>
+            ${c.bsr_rank ? `<div><strong>Rank:</strong> ${escapeHtml(c.bsr_rank)}</div>` : ""}
+            ${c.manufacturer ? `<div><strong>Mfr:</strong> ${escapeHtml(c.manufacturer)}</div>` : ""}
+            ${c.model_number ? `<div><strong>Model:</strong> ${escapeHtml(c.model_number)}</div>` : ""}
+          </div>
+          ${c.description ? `<div class="comp-bullet"><strong>Description:</strong> ${escapeHtml(c.description.slice(0, 300))}${c.description.length > 300 ? "…" : ""}</div>` : ""}
+          <div class="comp-specs">
+            <strong>Specs:</strong> ${competitorCriterionSpecLabel(c)}: ${competitorCriterionCellValue(c)}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+
+    <h3>Related Products Comparison Table</h3>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th style="width: 22%">Model</th>
+          <th style="width: 15%">${criterionColumnLabel(ca.related_products || [])}</th>
+          <th style="width: 13%">Price</th>
+          <th style="width: 13%">Rating</th>
+          <th style="width: 15%">Review Count</th>
+          <th style="width: 22%">Monthly Sales</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(ca.related_products || []).map((c: any) => `
+          <tr>
+            <td><strong>${escapeHtml(c.name)}</strong></td>
+            <td>${competitorCriterionCellValue(c)}</td>
+            <td>${escapeHtml(c.price) || "—"}</td>
+            <td>${renderStarRating(c.rating) || "—"}</td>
+            <td>${escapeHtml(c.review_count) || "—"}</td>
+            <td>${escapeHtml(c.monthly_sales) || "—"}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+
     <div class="page-break"></div>
+    ` : ""}
 
     <h3>Strategic Positioning Statement</h3>
     <p>${escapeHtml(ca.positioning_recommendation || "No positioning recommendation specified.")}</p>

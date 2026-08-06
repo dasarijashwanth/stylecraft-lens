@@ -26,7 +26,13 @@ const CORRECTION_REASON_LABELS: Record<string, string> = {
 interface Competitor {
   name:               string;
   brand:              string;
-  tier:               "legacy" | "emerging";
+  tier:               "legacy" | "emerging" | "related";
+  // Related Products only (lib/analysisEngine.ts's resolveRelatedProducts) —
+  // a cross-tool-type paste (e.g. a clipper pasted into a trimmer analysis),
+  // still shown here with a mismatch note, per the feature's own Part 2.3/
+  // Part 4.4 ("shown in the section with the mismatch note").
+  toolTypeMismatch?:      boolean;
+  toolTypeMismatchLabel?: string | null;
   // Set by lib/analysisEngine.ts's fill loop when a slot genuinely
   // couldn't be filled after exhausting the full search/relaxation ladder
   // — render EmptySlotCard instead of CompetitorCard for these, never treat
@@ -144,7 +150,15 @@ interface Competitor {
 
 interface CompetitorCardProps {
   competitor: Competitor;
-  tier?: "legacy" | "emerging";
+  tier?: "legacy" | "emerging" | "related";
+  // "related" = a user-pasted Related Product (analyze form), not a
+  // discovered/scored competitor: no auto-fired review analysis (on-demand
+  // button instead), no News, no composite-score "Why this competitor"
+  // panel (never set for these anyway), "User-provided" badge instead of
+  // the Legacy/Emerging pill, and its editable-ASIN swap posts to
+  // /related-products/replace (no correction reason) instead of
+  // /competitors/replace.
+  mode?: "competitor" | "related";
   // Lets the comparison table (a sibling, not a parent, of this card) reuse
   // the same resolved Key Features instead of re-running the resolver —
   // fired once per successful/refreshed fetch.
@@ -177,6 +191,11 @@ type FeaturesState =
   | { status: "error"; message: string };
 
 type ReviewAnalysisState =
+  // "idle" — Related Products cards only (mode="related"): review analysis
+  // never auto-fires on mount, the user triggers it via the on-demand
+  // "Analyze reviews" button, which calls loadReviewAnalysis() the same way
+  // a normal competitor card's mount effect does.
+  | { status: "idle" }
   | { status: "loading" }
   | { status: "loaded"; data: ReviewAnalysis & { retrievedAt: string } }
   | { status: "error"; message: string };
@@ -412,9 +431,13 @@ export function EmptySlotCard({ reason }: { reason: string }) {
   );
 }
 
-export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true, onReplaced }: CompetitorCardProps) {
+export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true, mode = "competitor", onReplaced }: CompetitorCardProps) {
+  const isRelated = mode === "related";
   // All 4 sections load automatically on mount — collapsing is purely a
-  // visual/reading-convenience toggle, never a fetch trigger.
+  // visual/reading-convenience toggle, never a fetch trigger. Related
+  // Products cards are the one exception: Strengths/Weaknesses (both
+  // driven by reviewAnalysis) start "idle" and never auto-fetch — see the
+  // mount effect below.
   const [featuresOpen, setFeaturesOpen] = useState(true);
   const [strengthsOpen, setStrengthsOpen] = useState(true);
   const [weaknessesOpen, setWeaknessesOpen] = useState(true);
@@ -425,7 +448,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
   const [newsSourceOpen, setNewsSourceOpen] = useState(false);
 
   const [featuresState, setFeaturesState] = useState<FeaturesState>({ status: "loading" });
-  const [reviewAnalysis, setReviewAnalysis] = useState<ReviewAnalysisState>({ status: "loading" });
+  const [reviewAnalysis, setReviewAnalysis] = useState<ReviewAnalysisState>({ status: isRelated ? "idle" : "loading" });
   const [newsState, setNewsState] = useState<NewsState>({ status: "loading" });
 
   const { data: live, loading, error } = useAmazonProduct(c.verified_by_rainforest === undefined ? c.asin : null);
@@ -480,11 +503,18 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
     }
   }
 
-  // Fire on mount — no click required. News is skipped entirely when
-  // disabled, rather than fetched and hidden (real savings, see
-  // app/api/amazon/product-news/[asin]/route.ts).
+  // Fire on mount — no click required, EXCEPT review analysis on a Related
+  // Products card (mode="related"), which stays "idle" until the user
+  // clicks "Analyze reviews" (keeps the analysis run's time flat per the
+  // feature's own Part 3.2 — strengths/weaknesses aren't run for these by
+  // default). News is skipped entirely for Related Products cards
+  // regardless of newsUpdatesEnabled — not part of what this section shows.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadFeatures(); loadReviewAnalysis(); if (newsUpdatesEnabled) loadNews(); }, [c.asin, c.name, newsUpdatesEnabled]);
+  useEffect(() => {
+    loadFeatures();
+    if (!isRelated) loadReviewAnalysis();
+    if (newsUpdatesEnabled && !isRelated) loadNews();
+  }, [c.asin, c.name, newsUpdatesEnabled, isRelated]);
 
   const displayPrice   = live?.price        ?? c.price        ?? "—";
   const displayRating  = live?.rating_str   ?? c.rating       ?? "—";
@@ -526,14 +556,25 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
     setPreviewError(null);
     setPreview(null);
     try {
-      const res = await fetch(`/api/analyses/${analysisId}/competitors/preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asinOrUrl: asinInput.trim() }),
-      });
+      // Related Products cards use the generic, analysis-agnostic preview
+      // endpoint (same one the analyze form's rows use) rather than the
+      // analysis-scoped competitor preview — no duplicate-ASIN check here
+      // (that's a related-products-array concept, not phase1/phase2), and
+      // no confirmed-analysis identity dependency either.
+      const res = isRelated
+        ? await fetch("/api/products/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ asinOrUrl: asinInput.trim() }),
+          })
+        : await fetch(`/api/analyses/${analysisId}/competitors/preview`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ asinOrUrl: asinInput.trim() }),
+          });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Could not preview that product");
-      setPreview(data);
+      setPreview({ duplicateAsin: false, ...data });
     } catch (err: any) {
       setPreviewError(err.message || "Could not preview that product");
     } finally {
@@ -545,14 +586,29 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
     if (!preview || !analysisId || preview.duplicateAsin) return;
     setReplacing(true);
     try {
-      const res = await fetch(`/api/analyses/${analysisId}/competitors/replace`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ oldAsin: c.asin, asinOrUrl: preview.asin, reason: correctionReason, note: correctionNote.trim() || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to replace competitor");
-      onReplaced?.(c.asin, data.competitor, data.synthesisPossiblyStale);
+      // "Fixing a mispaste re-fetches in place" (Related Products) —
+      // deliberately simpler than the competitor-swap flow: no correction
+      // reason, and the response shape is { relatedProduct } not
+      // { competitor, synthesisPossiblyStale }.
+      if (isRelated) {
+        const res = await fetch(`/api/analyses/${analysisId}/related-products/replace`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ oldAsin: c.asin, asinOrUrl: preview.asin }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Failed to replace related product");
+        onReplaced?.(c.asin, data.relatedProduct, false);
+      } else {
+        const res = await fetch(`/api/analyses/${analysisId}/competitors/replace`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ oldAsin: c.asin, asinOrUrl: preview.asin, reason: correctionReason, note: correctionNote.trim() || undefined }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Failed to replace competitor");
+        onReplaced?.(c.asin, data.competitor, data.synthesisPossiblyStale);
+      }
       resetAsinEdit();
     } catch (err: any) {
       setPreviewError(err.message || "Failed to replace competitor");
@@ -586,14 +642,19 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
             <div className="comp-name font-bold text-text-primary text-sm leading-tight">{c.name}</div>
             <div className="flex items-center gap-1.5 mt-1">
               <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
-                c.tier === "legacy"
+                isRelated
+                  ? "bg-emerald-950/60 border border-emerald-900/60 text-emerald-400"
+                  : c.tier === "legacy"
                   ? "bg-indigo-950/60 border border-indigo-900/60 text-indigo-400"
                   : "bg-amber-950/60 border border-amber-900/60 text-amber-400"
               }`}>
-                {c.tier === "legacy" ? "Legacy" : "Emerging"}
+                {isRelated ? "User-provided" : c.tier === "legacy" ? "Legacy" : "Emerging"}
               </span>
               <span className="text-[10px] text-text-muted">by {c.brand}</span>
             </div>
+            {isRelated && c.toolTypeMismatch && c.toolTypeMismatchLabel && (
+              <p className="text-[10px] text-warning italic mt-1 max-w-xs leading-snug">{c.toolTypeMismatchLabel}</p>
+            )}
             {c.inclusion_rationale && (
               <p className="text-[10px] text-text-muted italic mt-1 max-w-xs leading-snug">{c.inclusion_rationale}</p>
             )}
@@ -679,32 +740,37 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
 
               {!preview.duplicateAsin && (
                 <>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Why are you replacing this competitor?</label>
+                  {/* No correction-reason picker for Related Products — a
+                      mispaste fix isn't a discovery-learning signal (see
+                      lib/analysisEngine.ts's replaceRelatedProduct). */}
+                  {!isRelated && (
                     <div className="space-y-1">
-                      {CorrectionReasonValues.map((reasonValue) => (
-                        <label key={reasonValue} className="flex items-center gap-1.5 text-[10px] text-text-secondary cursor-pointer">
-                          <input
-                            type="radio"
-                            name={`correction-reason-${c.asin}`}
-                            value={reasonValue}
-                            checked={correctionReason === reasonValue}
-                            onChange={() => setCorrectionReason(reasonValue)}
-                          />
-                          {CORRECTION_REASON_LABELS[reasonValue]}
-                        </label>
-                      ))}
+                      <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Why are you replacing this competitor?</label>
+                      <div className="space-y-1">
+                        {CorrectionReasonValues.map((reasonValue) => (
+                          <label key={reasonValue} className="flex items-center gap-1.5 text-[10px] text-text-secondary cursor-pointer">
+                            <input
+                              type="radio"
+                              name={`correction-reason-${c.asin}`}
+                              value={reasonValue}
+                              checked={correctionReason === reasonValue}
+                              onChange={() => setCorrectionReason(reasonValue)}
+                            />
+                            {CORRECTION_REASON_LABELS[reasonValue]}
+                          </label>
+                        ))}
+                      </div>
+                      {correctionReason === "other" && (
+                        <input
+                          type="text"
+                          value={correctionNote}
+                          onChange={(e) => setCorrectionNote(e.target.value)}
+                          placeholder="Briefly explain why"
+                          className="w-full mt-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                        />
+                      )}
                     </div>
-                    {correctionReason === "other" && (
-                      <input
-                        type="text"
-                        value={correctionNote}
-                        onChange={(e) => setCorrectionNote(e.target.value)}
-                        placeholder="Briefly explain why"
-                        className="w-full mt-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
-                      />
-                    )}
-                  </div>
+                  )}
 
                   {previewError && <p className="text-[10px] text-danger">{previewError}</p>}
 
@@ -1031,6 +1097,15 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
 
         {strengthsOpen && (
           <div className="mt-3 space-y-2.5 animate-slide-down">
+            {reviewAnalysis.status === "idle" && (
+              <button
+                type="button"
+                onClick={() => loadReviewAnalysis()}
+                className="px-3 py-1.5 text-[11px] font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors"
+              >
+                Analyze reviews
+              </button>
+            )}
             {reviewAnalysis.status === "loading" && <SkeletonRows count={2} />}
             {reviewAnalysis.status === "error" && (
               <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">
@@ -1094,6 +1169,15 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
 
         {weaknessesOpen && (
           <div className="mt-3 space-y-2.5 animate-slide-down">
+            {reviewAnalysis.status === "idle" && (
+              <button
+                type="button"
+                onClick={() => loadReviewAnalysis()}
+                className="px-3 py-1.5 text-[11px] font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors"
+              >
+                Analyze reviews
+              </button>
+            )}
             {reviewAnalysis.status === "loading" && <SkeletonRows count={2} />}
             {reviewAnalysis.status === "error" && (
               <div className="flex items-center justify-between gap-2 p-2 bg-danger-bg border border-danger/20 rounded-lg">

@@ -75,7 +75,20 @@ function normalizeStr(s: string): string {
 // and passes that boolean here — blended in at a fixed 30% weight so a
 // differentiator match can meaningfully move the score without ever fully
 // overriding grounded structural spec overlap.
-export function computeFeatureScore(ours: FeatureComparable, theirs: FeatureComparable, differentiatorMatch?: boolean | null): number {
+// `relatedProductSimilarity` (Related Products feature, Part 2.2) is a
+// separate, purely ADDITIVE bonus, not another blend term like
+// differentiatorMatch above — deliberately not folded into the 0.7/0.3
+// interpolation, since the spec calls for "+10% of the feature component,
+// never overrides motor/price gates" rather than a reweighting. Omit (or
+// pass null/undefined/0 — "no related products were given, or none of them
+// resemble this candidate") and this returns exactly what it returned
+// before this parameter existed.
+export function computeFeatureScore(
+  ours: FeatureComparable,
+  theirs: FeatureComparable,
+  differentiatorMatch?: boolean | null,
+  relatedProductSimilarity?: number | null
+): number {
   const checks: boolean[] = [];
 
   if (ours.bladeTech && theirs.bladeTech) checks.push(normalizeStr(ours.bladeTech) === normalizeStr(theirs.bladeTech));
@@ -89,8 +102,60 @@ export function computeFeatureScore(ours: FeatureComparable, theirs: FeatureComp
   if (ours.maxTempClass && theirs.maxTempClass) checks.push(normalizeStr(ours.maxTempClass) === normalizeStr(theirs.maxTempClass));
 
   const structuralScore = checks.length === 0 ? 0 : checks.filter(Boolean).length / checks.length;
-  if (differentiatorMatch === undefined || differentiatorMatch === null) return structuralScore;
-  return structuralScore * 0.7 + (differentiatorMatch ? 1 : 0) * 0.3;
+  const score = (differentiatorMatch === undefined || differentiatorMatch === null)
+    ? structuralScore
+    : structuralScore * 0.7 + (differentiatorMatch ? 1 : 0) * 0.3;
+
+  if (!relatedProductSimilarity) return score;
+  return Math.min(1, score + score * 0.10 * relatedProductSimilarity);
+}
+
+export interface RelatedProductProfile {
+  motorFamilyKey?: string | null;
+  heatTechFamilyKey?: string | null;
+  priceRaw?: number | null;
+  specs?: FeatureComparable | null;
+}
+
+export interface ScoredCandidateProfile {
+  motorFamilyKey?: string | null;
+  heatTechFamilyKey?: string | null;
+  priceRaw?: number | null;
+}
+
+// "Same motor family + within their price cluster + overlapping features"
+// (Related Products spec, Part 2.2) — one true/false check per related
+// product; similarity for that product = fraction of checks true. A
+// candidate only needs to resemble ONE related product to earn the bonus,
+// not all of them, so the result is the MAX across every related product
+// supplied. Returns 0 (never null) so callers can pass it straight into
+// computeFeatureScore's falsy-skips-the-bonus check above.
+export function computeRelatedProductSimilarity(
+  candidate: ScoredCandidateProfile,
+  candidateSpecs: FeatureComparable,
+  relatedProducts: RelatedProductProfile[]
+): number {
+  if (!relatedProducts.length) return 0;
+
+  let best = 0;
+  for (const rp of relatedProducts) {
+    const checks: boolean[] = [];
+
+    const candidateFamily = candidate.motorFamilyKey || candidate.heatTechFamilyKey;
+    const relatedFamily = rp.motorFamilyKey || rp.heatTechFamilyKey;
+    if (candidateFamily && relatedFamily) checks.push(normalizeStr(candidateFamily) === normalizeStr(relatedFamily));
+
+    if (candidate.priceRaw != null && rp.priceRaw != null && rp.priceRaw > 0) {
+      checks.push(Math.abs(candidate.priceRaw - rp.priceRaw) / rp.priceRaw <= 0.2);
+    }
+
+    if (rp.specs) checks.push(computeFeatureScore(candidateSpecs, rp.specs) >= 0.5);
+
+    if (checks.length === 0) continue;
+    const similarity = checks.filter(Boolean).length / checks.length;
+    if (similarity > best) best = similarity;
+  }
+  return best;
 }
 
 // Weights are entered as free-form relative-importance numbers (any

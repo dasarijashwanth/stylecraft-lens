@@ -114,6 +114,7 @@ export function ActiveReportPdf({
   const opps = ca.top_opportunities || [];
   const largeComps = ca.large_brand_competitors || [];
   const emergingComps = ca.indie_emerging_competitors || [];
+  const relatedProducts = ca.related_products || [];
   const prices = pricing.competitor_prices || [];
   const recs = gtm.recommendations || [];
   const wins = gtm.quick_wins || [];
@@ -160,6 +161,22 @@ export function ActiveReportPdf({
         {emergingComps.map((c: any, i: number) => (
           <TwoColRow key={i} question={c.name} answer={competitorSummary(c)} />
         ))}
+
+        {relatedProducts.length > 0 && (
+          <>
+            <SectionHeader title="Related Products (User-Provided)" />
+            <Text style={{ fontSize: 8, color: "#666666", fontStyle: "italic", marginBottom: 4 }}>
+              Pasted directly by the user as examples of nearby similar products — shown for reference, not independently scored or counted in the pricing benchmarks.
+            </Text>
+            {relatedProducts.map((c: any, i: number) => (
+              <TwoColRow
+                key={i}
+                question={`${c.name}${c.toolTypeMismatch ? ` (${c.toolTypeMismatchLabel || "tool-type mismatch"})` : ""}`}
+                answer={competitorSummary(c)}
+              />
+            ))}
+          </>
+        )}
 
         <View style={{ backgroundColor: "#f5f3ff", border: "0.5pt solid #ddd6fe", borderRadius: 6, padding: 10, marginTop: 8 }}>
           <Text style={{ fontSize: 8, fontWeight: 700, color: "#5b21b6", textTransform: "uppercase", marginBottom: 4 }}>

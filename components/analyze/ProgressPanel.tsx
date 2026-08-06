@@ -223,6 +223,9 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
           setIdentity(analysis.phase0_result);
           setPhases((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "complete", message: "Complete" } : p)));
         }
+        if (analysis.related_products?.length) {
+          results.relatedProducts = analysis.related_products;
+        }
         if (analysis.phase1_result && Object.keys(analysis.phase1_result).length) {
           results.phase1 = analysis.phase1_result;
           setPhases((prev) => prev.map((p, i) => (i === 1 ? { ...p, status: "complete", message: "Complete" } : p)));
@@ -240,6 +243,7 @@ export function ProgressPanel({ analysisId, productName, onComplete, onError, on
               phase1: results.phase1 || {},
               phase2: results.phase2 || {},
               phase3: analysis.phase3_result || results.phase3 || {},
+              relatedProducts: analysis.related_products || results.relatedProducts || [],
               productName,
               totalSearches: searchesSoFar,
               reportId: results.reportId,

@@ -125,6 +125,17 @@ export const AnalysisFormSchema = z.object({
     price: z.number().min(0),
     feature: z.number().min(0),
   }).refine(w => w.motor + w.price + w.feature > 0, "At least one criterion must be > 0").optional(),
+  // Up to 3 user-pasted "nearby similar products" (Related Products field,
+  // next to Positioning Context) — raw input only (asin/url/addedAt), rides
+  // in analyses.context like every other field here. The enriched
+  // Rainforest+motor-extraction result lives in its own analyses.
+  // related_products column (supabase_schema.sql Section 51), resolved by
+  // lib/analysisEngine.ts's resolveRelatedProducts during Phase 0.
+  relatedAsins: z.array(z.object({
+    asin: z.string().regex(/^[A-Z0-9]{10}$/i, "ASIN must be exactly 10 letters/digits"),
+    url: z.string().url().optional(),
+    addedAt: z.string(),
+  })).max(3, "Up to 3 related products").optional(),
 });
 
 // Same ASIN format check as ProjectSchema/NewProjectSchema's own asin
@@ -144,6 +155,26 @@ export const CompetitorReplaceSchema = z.object({
   asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
   reason: z.enum(CorrectionReasonValues),
   note: z.string().max(500).optional(),
+});
+
+// Related Products preview (analyze form, no analysisId yet — the analysis
+// doesn't exist until submit) — unlike CompetitorPreviewSchema's analysis-
+// scoped sibling, this needs the form's own toolType passed explicitly so
+// the server can still compute a tool-type-mismatch warning.
+export const RelatedProductPreviewSchema = z.object({
+  asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
+  requiredToolType: ToolTypeValue.optional(),
+});
+
+// Related Products "fixing a mispaste re-fetches in place" swap — no
+// CorrectionReason (a mispaste fix isn't a discovery-learning signal, see
+// lib/db/competitor-corrections.ts) and no tool-type-mismatch block (the
+// existing CompetitorReplaceSchema flow blocks discovered-competitor swaps
+// on a hard duplicate only; a related-product mismatch is expected/common
+// per the feature's own Part 2.3, never a hard error here).
+export const RelatedProductReplaceSchema = z.object({
+  oldAsin: AsinValue,
+  asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
 });
 
 export const NewProjectSchema = z.object({
