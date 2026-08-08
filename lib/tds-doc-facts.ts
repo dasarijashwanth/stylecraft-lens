@@ -54,14 +54,19 @@ export interface StructuredFactsResult {
 
 export async function extractStructuredFacts(
   content: ExtractedDocContent,
-  productName: string
+  productName: string,
+  // Field ids the deterministic synonym-map pass (lib/source-fact-extract-
+  // deterministic.ts) already resolved for this SAME document — skipped
+  // here to avoid a slower, lower-confidence re-derivation of a fact
+  // already found with a literal label match.
+  skipFieldIds: Set<string> = new Set()
 ): Promise<StructuredFactsResult> {
   if (!content.fullText.trim()) return { candidates: [], aiCallFailed: false };
 
   // Internal-kind fields are genuine human decisions (approved pricing,
   // packaging sign-off) — never AI/document-extractable, so they're never
   // asked for here, same exclusion the rest of GTM generation already applies.
-  const targetFields = TDS_FIELD_SCHEMA.filter(f => f.kind !== "internal");
+  const targetFields = TDS_FIELD_SCHEMA.filter(f => f.kind !== "internal" && !skipFieldIds.has(f.id));
   const fieldList = targetFields.map(f => `- ${f.id}: ${f.question}`).join("\n");
   const validFieldIds = new Set(targetFields.map(f => f.id));
 
@@ -108,6 +113,77 @@ Return ONLY valid JSON: { "facts": [{ "field_id": "...", "value": "...", "raw_te
         value: f.value.trim(),
         raw_text: f.raw_text.trim(),
         source_location: findLocationForRawText(content.locations, f.raw_text),
+      })),
+    aiCallFailed: false,
+  };
+}
+
+export interface NarrativeSignalCandidate {
+  key: string; // free-form slug, synthesized by the AI — no fixed schema field id
+  label: string; // short human-readable description of what this signal is
+  value: string;
+  raw_text: string;
+  source_location?: string;
+}
+
+export interface NarrativeSignalsResult {
+  candidates: NarrativeSignalCandidate[];
+  aiCallFailed: boolean;
+}
+
+// The "AI sweep over the remaining text" from the feature spec — free-form
+// marketing facts that don't map to any fixed TDS_FIELD_SCHEMA field id:
+// positioning language, feature claims, USPs, audience statements, taglines,
+// care instructions, collection references, marketing claims, channel
+// notes. A SEPARATE call from extractStructuredFacts above (different
+// target — narrative signals, not spec fields) so each stays a simple,
+// single-purpose prompt rather than one call trying to do both jobs. Same
+// quote-verification anti-hallucination gate as the spec sweep.
+export async function extractNarrativeSignals(
+  content: ExtractedDocContent,
+  productName: string
+): Promise<NarrativeSignalsResult> {
+  if (!content.fullText.trim()) return { candidates: [], aiCallFailed: false };
+
+  const systemInstruction = `Extract every product-marketing fact from this document about "${productName}" as key/value pairs — positioning language, feature claims, unique selling points (USPs), audience/who-it's-for statements, taglines, care/usage instructions, collection or product-family references, marketing claims, and sales-channel notes. Only extract what the text LITERALLY states — never infer, guess, or add outside knowledge.
+
+For each fact found, provide:
+- "key": a short snake_case slug describing what this is (e.g. "tagline", "usp_1", "audience_statement", "collection_reference")
+- "label": a short human-readable description (e.g. "Tagline", "USP #1", "Target Audience")
+- "value": the extracted fact text
+- "raw_text": a short VERBATIM quote (a few words to one sentence) copied EXACTLY from the document text below that proves this value — a fact whose raw_text isn't an exact quote will be discarded.
+
+DOCUMENT TEXT:
+"""
+${content.fullText.slice(0, MAX_EXTRACTION_TEXT_CHARS)}
+"""
+
+Return ONLY valid JSON: { "signals": [{ "key": "...", "label": "...", "value": "...", "raw_text": "..." }] } — omit anything not literally stated, never guess.`;
+
+  const raw = await callAiForJson<{ signals?: NarrativeSignalCandidate[] }>(
+    systemInstruction,
+    `Product: ${productName}`,
+    "TDS-Doc-Narrative-Signal-Extraction",
+    { timeoutMs: 30_000 }
+  );
+
+  if (raw === null) {
+    return { candidates: [], aiCallFailed: true };
+  }
+
+  const candidates = (raw.signals || []).filter(
+    s => s && typeof s.key === "string" && s.key.trim() && typeof s.value === "string" && typeof s.raw_text === "string" && s.value.trim() && s.raw_text.trim()
+  );
+
+  return {
+    candidates: candidates
+      .filter(s => quoteAppearsInText(s.raw_text, content.fullText))
+      .map(s => ({
+        key: s.key.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
+        label: (s.label || s.key).trim(),
+        value: s.value.trim(),
+        raw_text: s.raw_text.trim(),
+        source_location: findLocationForRawText(content.locations, s.raw_text),
       })),
     aiCallFailed: false,
   };

@@ -69,6 +69,14 @@ export default function ProjectDetailPage() {
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [linkingReport, setLinkingReport] = useState(false);
   const [pipelineState, setPipelineState] = useState<any>(null);
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill — the
+  // resumable "fill GTM -> fill Content Form" chain's current state. Polled
+  // (not just fetched once) from a driver mounted HERE, at the page level,
+  // rather than inside SourceDocsTab — this component stays mounted across
+  // every tab switch (only the tab's own child component remounts), so
+  // switching away from Sources never interrupts the chain, and reopening
+  // the project later resumes it via the same GET-then-poll effect below.
+  const [fillState, setFillState] = useState<any>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Defaults true (matches lib/db/feature-flags.ts's own default-enabled
@@ -143,6 +151,63 @@ export default function ProjectDetailPage() {
       .then(r => r.json())
       .then(data => setPipelineState(data.state ?? null))
       .catch(() => {});
+  }, [id]);
+
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill — resumable
+  // one-step-per-request chain (see lib/document-fill-engine.ts's
+  // runNextFillStep). Mounted at the PAGE level (not inside SourceDocsTab)
+  // so switching tabs never interrupts an in-flight chain; runs once on
+  // mount to resume anything already "running" (e.g. from before the user
+  // closed the tab), and again whenever SourceDocsTab's onSourceUploaded
+  // fires (pollGeneration below is exposed for that). No fixed polling
+  // interval — same tight "await, then immediately loop" pattern as
+  // ProgressPanel/ProjectGenerationProgress, since each step is itself a
+  // short, bounded request.
+  const pollFillState = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    async function run() {
+      try {
+        const res = await fetch(`/api/projects/${id}/fill-from-sources/continue`);
+        const data = await res.json();
+        let state = data.state;
+        if (cancelled) return;
+        setFillState(state);
+        const wasRunning = state?.status === "running";
+
+        while (!cancelled && state?.status === "running") {
+          const contRes = await fetch(`/api/projects/${id}/fill-from-sources/continue`, { method: "POST" });
+          const contData = await contRes.json();
+          state = contData.state;
+          if (cancelled) return;
+          setFillState(state);
+        }
+
+        if (!cancelled && wasRunning && state?.status === "complete") {
+          const gtmResult = state.results?.gtm;
+          const cfResult = state.results?.content_form;
+          const parts: string[] = [];
+          if (gtmResult) parts.push(`${(gtmResult.filled || 0) + (gtmResult.regenerated || 0)} in GTM`);
+          if (cfResult) parts.push(`${cfResult.regenerated || 0} in Content Form`);
+          const total = (gtmResult?.filled || 0) + (gtmResult?.regenerated || 0) + (cfResult?.regenerated || 0);
+          if (total > 0) {
+            toast.success(`Sources updated — filled ${parts.join(", ")}`, {
+              description: state.triggered_by_file_name ? `From ${state.triggered_by_file_name}` : undefined,
+            });
+          }
+        }
+      } catch {
+        // Best-effort — a failed poll just means the chain resumes the next
+        // time this effect runs (e.g. the next page visit), never surfaced
+        // as an error to the user.
+      }
+    }
+
+    pollFillState.current = run;
+    run();
+    return () => { cancelled = true; };
   }, [id]);
 
   useEffect(() => {
@@ -377,11 +442,11 @@ export default function ProjectDetailPage() {
             {/* Tab Content Canvas */}
             <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
               {activeTab === "sources" ? (
-                <SourceDocsTab projectId={id} />
+                <SourceDocsTab projectId={id} onSourceUploaded={() => pollFillState.current()} />
               ) : activeTab === "project-deck" ? (
                 <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : activeTab === "content-form" ? (
-                <ContentFormSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} pipelineErrorMessage={pipelineState?.error_message} />
+                <ContentFormSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} pipelineErrorMessage={pipelineState?.error_message} fillStatus={fillState?.status} />
               ) : selectedReport ? (
                 <ReportTabContent
                   report={selectedReport}
@@ -428,7 +493,7 @@ export default function ProjectDetailPage() {
             <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} marketingDirectionEnabled={marketingDirectionEnabled} contentFormEnabled={contentFormEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
-          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
+          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} fillStatus={fillState?.status} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
         </div>
       </div>
 
@@ -1611,12 +1676,19 @@ function ProductKnowledgeSection({
   projectId,
   pipelineStatus,
   pipelinePhase,
+  fillStatus,
   projectSku,
   onSkuChange,
 }: {
   projectId: string;
   pipelineStatus?: string;
   pipelinePhase?: string;
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill — flips
+  // "running" -> "complete" when the fill chain finishes touching this
+  // document; included in the refetch effect below so a tab already open
+  // when the chain completes shows the newly-filled fields without
+  // requiring a manual navigation-away-and-back remount.
+  fillStatus?: string;
   projectSku?: string | null;
   onSkuChange?: (sku: string) => void;
 }) {
@@ -1697,9 +1769,10 @@ function ProductKnowledgeSection({
     // Re-fetch whenever the auto-generation pipeline's status changes (e.g.
     // transitions to "complete") — otherwise a freshly-finished GTM document
     // only ever appeared after a manual page reload, since this fetch used
-    // to depend only on projectId.
+    // to depend only on projectId. fillStatus is the same idea for the
+    // Automatic Source-Doc Fact Extraction & Cross-Document Fill chain.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, pipelineStatus]);
+  }, [projectId, pipelineStatus, fillStatus]);
 
   // A mismatch (or an active doc that wasn't stamped on this document at
   // all) means at least one source has changed since this document was
@@ -2082,10 +2155,17 @@ function ProductKnowledgeSection({
                     : entry?.source === "web"
                     ? "bg-accent-bg border-accent-border text-accent-text"
                     : "bg-surface-3 border-border text-text-muted";
+                  // "{Doc type} (filename, p.X)" per the source-fill feature's
+                  // own badge spec — sourceDetail.label already carries this
+                  // exact string (lib/gtm-uploaded-tds.ts's buildFactSourceLabel)
+                  // for any uploaded_tds field; every other source keeps the
+                  // existing short generic label.
                   const chipLabel = awaitingInternal
                     ? "Awaiting Internal Input"
                     : notDeterminable
                     ? "Not Determinable"
+                    : entry?.source === "uploaded_tds" && entry?.source_detail?.label
+                    ? entry.source_detail.label
                     : SOURCE_LABELS[entry?.source || "none"];
                   const bothNeedsNotes = f.id === "core_consumer" && entry?.answer === "Both" && !entry?.notes?.trim();
                   return (
@@ -2268,8 +2348,8 @@ function CharLimitTextarea({
 }
 
 function ContentFormSection({
-  projectId, pipelineStatus, pipelinePhase, pipelineErrorMessage,
-}: { projectId: string; pipelineStatus?: string; pipelinePhase?: string; pipelineErrorMessage?: string | null }) {
+  projectId, pipelineStatus, pipelinePhase, pipelineErrorMessage, fillStatus,
+}: { projectId: string; pipelineStatus?: string; pipelinePhase?: string; pipelineErrorMessage?: string | null; fillStatus?: string }) {
   const isGlass = useGlassMode();
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, FieldRow>>({});
@@ -2299,9 +2379,11 @@ function ContentFormSection({
   useEffect(() => {
     loadDocument();
     // Re-fetch when the auto-generation pipeline's status changes, same
-    // reasoning as ProductKnowledgeSection's own effect.
+    // reasoning as ProductKnowledgeSection's own effect. fillStatus is the
+    // same idea for the Automatic Source-Doc Fact Extraction & Cross-
+    // Document Fill chain.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, pipelineStatus]);
+  }, [projectId, pipelineStatus, fillStatus]);
 
   const completedCount = CONTENT_FORM_SCHEMA.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
 

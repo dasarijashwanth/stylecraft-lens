@@ -7,6 +7,26 @@
 import { getMergedFactsForProject, MergedFact } from "./db/extracted-facts";
 import { GtmField, GtmFieldAnswer } from "./gtm-field-schema";
 
+// Human-readable per-doc-type label for the "{Doc type} (filename, p.X)"
+// field badge — distinct from GTM_SOURCE_LABELS.uploaded_tds (which is one
+// generic "Uploaded TDS" string covering ALL four upload slots; this map is
+// what actually distinguishes Spec Sheet/Sales Kit/Other on the badge).
+const SOURCE_DOC_TYPE_LABELS: Record<string, string> = {
+  tds: "Product TDS",
+  spec_sheet: "Spec Sheet",
+  sales_kit: "Sales Kit",
+  other: "Other",
+};
+
+// "{Doc type} ({filename}, p.X)" — the exact badge format from the feature
+// spec. Degrades gracefully when a piece is missing (no filename on an old
+// row, no location because this fact predates locations-persistence).
+export function buildFactSourceLabel(docType: string, fileName: string | null | undefined, location: string | null | undefined): string {
+  const typeLabel = SOURCE_DOC_TYPE_LABELS[docType] || "Uploaded Document";
+  const detail = [fileName, location].filter(Boolean).join(", ");
+  return detail ? `${typeLabel} (${detail})` : typeLabel;
+}
+
 export interface UploadedTdsContext {
   factsByFieldId: Record<string, MergedFact>;
   fullTextBlocks: string[];
@@ -51,9 +71,11 @@ export function applyUploadedTdsFacts(
       source: "uploaded_tds",
       sourceDetail: {
         docType: fact.doc_type,
+        fileName: fact.source_file_name,
         location: fact.source_location,
         rawText: fact.raw_text,
         confirmedByUser: fact.confirmed_by_user,
+        label: buildFactSourceLabel(fact.doc_type, fact.source_file_name, fact.source_location),
       },
     };
     uploadedTdsSourcedIds.add(f.id);

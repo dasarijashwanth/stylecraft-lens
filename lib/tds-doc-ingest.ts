@@ -10,7 +10,8 @@
 // function's own header comment for why.
 import { detectDocType, looksLikeText } from "./file-magic-bytes";
 import { extractSourceDocContent, SourceDocFormat, ExtractedDocContent } from "./tds-doc-extract";
-import { extractStructuredFacts } from "./tds-doc-facts";
+import { extractStructuredFacts, extractNarrativeSignals } from "./tds-doc-facts";
+import { extractDeterministicFacts, deterministicallyResolvedFieldIds } from "./source-fact-extract-deterministic";
 import {
   createNewVersion,
   updateExtractionResult,
@@ -204,7 +205,7 @@ export async function ingestSourceDocUpload(input: IngestSourceDocInput): Promis
     label: content.extractionMethod,
     elapsedMs: Date.now() - extractionStart,
   });
-  await updateExtractionResult(document.id, content.fullText, content.extractionStatus);
+  await updateExtractionResult(document.id, content.fullText, content.extractionStatus, content.locations);
 
   let carriedForwardCount = 0;
   if (priorActive) {
@@ -256,7 +257,7 @@ export async function deriveFactsForDoc(documentId: string, projectId: string, p
     return { factsFound: 0, sampleFacts: [], extractionError: false };
   }
 
-  const content: ExtractedDocContent = { fullText: doc.full_text, locations: [], extractionStatus: "complete", extractionMethod: "text-layer" };
+  const content: ExtractedDocContent = { fullText: doc.full_text, locations: doc.locations || [], extractionStatus: "complete", extractionMethod: "text-layer" };
   const start = routeStartTime ?? Date.now();
   const budget = Math.max(0, FACTS_DERIVATION_DEADLINE_MS - (Date.now() - start));
   if (budget <= 0) {
@@ -264,22 +265,38 @@ export async function deriveFactsForDoc(documentId: string, projectId: string, p
     return { factsFound: 0, sampleFacts: [], extractionError: true };
   }
 
-  const { candidates, aiCallFailed } = await withDeadline(
-    extractStructuredFacts(content, productName),
-    budget,
-    { candidates: [], aiCallFailed: true }
-  );
-  if (candidates.length > 0) {
+  // Deterministic pass first — no AI call, no time budget consumed, always
+  // runs regardless of how much of `budget` is left. Its resolved field ids
+  // are skipped by the AI spec-sweep below (skip, don't re-derive).
+  const deterministicCandidates = extractDeterministicFacts(content.fullText);
+  const resolvedFieldIds = deterministicallyResolvedFieldIds(deterministicCandidates);
+
+  const [{ candidates, aiCallFailed }, narrativeResult] = await Promise.all([
+    withDeadline(extractStructuredFacts(content, productName, resolvedFieldIds), budget, { candidates: [], aiCallFailed: true }),
+    withDeadline(extractNarrativeSignals(content, productName), budget, { candidates: [], aiCallFailed: false }),
+  ]);
+
+  const allCandidates: { field_id: string; value: string; raw_text: string; source_location?: string; fact_type: "grounded_field" | "narrative_signal"; confidence: "high" | "medium" }[] = [
+    ...deterministicCandidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location, fact_type: c.fact_type, confidence: "high" as const })),
+    ...candidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location, fact_type: "grounded_field" as const, confidence: "medium" as const })),
+    ...narrativeResult.candidates.map(c => ({ field_id: c.key, value: c.value, raw_text: c.raw_text, source_location: c.source_location, fact_type: "narrative_signal" as const, confidence: "medium" as const })),
+  ];
+
+  if (allCandidates.length > 0) {
     await upsertFacts(
       documentId,
       projectId,
-      candidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location }))
+      allCandidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location, fact_type: c.fact_type, confidence: c.confidence }))
     );
   }
+  // A real failure is either provider both failing on the SPEC sweep — the
+  // narrative sweep failing too is folded in defensively, but the spec
+  // sweep's own aiCallFailed is what actually matters for "extraction
+  // errored, retry" today (see facts_extraction_status's own usage).
   await updateFactsExtractionStatus(documentId, aiCallFailed ? "failed" : "complete");
   return {
-    factsFound: candidates.length,
-    sampleFacts: candidates.slice(0, 5).map(c => ({ field_id: c.field_id, value: c.value, source_location: c.source_location ?? null })),
+    factsFound: allCandidates.length,
+    sampleFacts: allCandidates.slice(0, 5).map(c => ({ field_id: c.field_id, value: c.value, source_location: c.source_location ?? null })),
     extractionError: aiCallFailed,
   };
 }

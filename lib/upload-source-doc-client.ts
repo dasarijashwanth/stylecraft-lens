@@ -114,5 +114,23 @@ export async function uploadProjectSourceDoc(
   }
 
   const { factsFound, sampleFacts, extractionError } = await deriveFacts(projectId, uploadResult.document.id);
+
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill — "uploading
+  // IS the trigger, no button required." Fire-and-forget: NOT awaited, and a
+  // failure here never surfaces to the uploader (the document + its facts
+  // are already saved regardless). Only fires when real facts were actually
+  // found — an upload that yields zero facts (or whose extraction errored)
+  // has nothing new to fill anything with. Subsequent steps of the chain are
+  // driven by ProjectDetailPage's own poll loop (mounted once per project,
+  // survives Sources-tab navigation), not by this client, which only ever
+  // fires the FIRST step.
+  if (factsFound > 0) {
+    fetch(`/api/projects/${projectId}/fill-from-sources/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ triggeredByDocId: uploadResult.document.id, triggeredByFileName: file.name }),
+    }).catch(err => console.warn("Failed to start automatic fill-from-sources chain:", err));
+  }
+
   return { ...uploadResult, factsFound, sampleFacts, extractionError };
 }

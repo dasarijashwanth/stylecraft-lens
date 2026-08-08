@@ -204,7 +204,17 @@ async function main() {
   await updateExtractionResult(factsDoc.id, "Motor Type: Brushless. RPM: 7200.", "complete");
   const derived = await deriveFactsForDoc(factsDoc.id, FACTS_TEST_PROJECT_ID, "Test Product");
   assert(Array.isArray(derived.sampleFacts) && derived.factsFound === derived.sampleFacts.length || derived.factsFound >= derived.sampleFacts.length, "deriveFactsForDoc returns a consistent {factsFound, sampleFacts} shape");
-  assert(derived.factsFound === 0, "with no OpenAI/Gemini key configured, deriveFactsForDoc gracefully returns 0 facts rather than inventing content (matches extractStructuredFacts's own established no-key behavior)");
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill added a
+  // DETERMINISTIC synonym-map pass (lib/source-fact-extract-deterministic.ts)
+  // that runs BEFORE the AI sweep and needs no API key at all — so "no
+  // OpenAI/Gemini key configured" no longer means "zero facts, full stop"
+  // the way it did before that pass existed. This fixture's own text
+  // ("Motor Type: Brushless...") is a literal label:value line, so the
+  // deterministic pass correctly finds it with confidence:"high" even with
+  // no AI key; extractStructuredFacts's own no-key behavior (returning
+  // nothing extra) is unchanged and still covered by [1]-[4] above.
+  assert(derived.factsFound >= 1, `with no OpenAI/Gemini key configured, the deterministic pass alone still finds the literal "Motor Type: Brushless" label:value fact (got ${derived.factsFound})`);
+  assert(derived.sampleFacts.some(f => f.field_id === "motor_type"), "the deterministic motor_type match is present in the sample");
   assert(derived.extractionError === true, "no key configured correctly reports extractionError:true — a REAL bug, not a silent empty-facts result");
 
   const pendingDoc = await createNewVersion({ projectId: FACTS_TEST_PROJECT_ID, docType: "spec_sheet", filePath: "p_pending", fileName: "pending-test.pdf", fileSizeBytes: 50, mimeType: "application/pdf" });
@@ -322,8 +332,8 @@ async function main() {
   const schema = GTM_FIELD_SCHEMA.filter(f => ["motor_type", "warranty", "product_title"].includes(f.id));
   const context = {
     factsByFieldId: {
-      motor_type: { field_id: "motor_type", value: "Brushless Motor (EON Digital)", raw_text: "Brushless (EON Digital)", source_location: "p.2", doc_type: "tds" as const, source_doc_id: "doc1", confirmed_by_user: false },
-      warranty: { field_id: "warranty", value: "2 years", raw_text: "2-year warranty", source_location: "p.5", doc_type: "tds" as const, source_doc_id: "doc1", confirmed_by_user: false },
+      motor_type: { field_id: "motor_type", value: "Brushless Motor (EON Digital)", raw_text: "Brushless (EON Digital)", source_location: "p.2", doc_type: "tds" as const, source_doc_id: "doc1", source_file_name: "product-tds.pdf", confirmed_by_user: false },
+      warranty: { field_id: "warranty", value: "2 years", raw_text: "2-year warranty", source_location: "p.5", doc_type: "tds" as const, source_doc_id: "doc1", source_file_name: "product-tds.pdf", confirmed_by_user: false },
     },
     fullTextBlocks: ["Brushless (EON Digital) motor. 2-year warranty on all parts."],
     docsUsed: [{ docType: "tds", id: "doc1", version: 1 }],

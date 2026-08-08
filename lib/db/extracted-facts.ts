@@ -7,6 +7,15 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { memoryDb, MockExtractedFact } from "@/lib/memoryDb";
 import { listActiveDocsForProject, SourceDocType, UploadedSourceDocRow } from "./uploaded-source-docs";
 
+// 'grounded_field' = schema-field-id-bound (spec values — deterministic
+// synonym-map matches AND the AI sweep's schema-targeted extraction both
+// land here). 'narrative_signal' = free-form marketing facts (taglines/
+// USPs/audience statements) that don't map to a fixed schema field id, keyed
+// by a synthesized slug in field_id instead. See supabase_schema.sql
+// Section 53.
+export type FactType = "grounded_field" | "narrative_signal";
+export type FactConfidence = "high" | "medium" | "low";
+
 export interface ExtractedFactRow {
   id: string;
   source_doc_id: string;
@@ -16,6 +25,8 @@ export interface ExtractedFactRow {
   raw_text: string | null;
   source_location: string | null;
   confirmed_by_user: boolean;
+  fact_type: FactType;
+  confidence: FactConfidence;
   created_at: string;
   updated_at: string;
 }
@@ -30,6 +41,8 @@ function mockToRow(f: MockExtractedFact): ExtractedFactRow {
     raw_text: f.rawText,
     source_location: f.sourceLocation,
     confirmed_by_user: f.confirmedByUser,
+    fact_type: (f.factType as FactType) || "grounded_field",
+    confidence: (f.confidence as FactConfidence) || "medium",
     created_at: f.createdAt.toISOString(),
     updated_at: f.updatedAt.toISOString(),
   };
@@ -50,6 +63,8 @@ export interface UpsertFactInput {
   raw_text?: string | null;
   source_location?: string | null;
   confirmed_by_user?: boolean;
+  fact_type?: FactType;
+  confidence?: FactConfidence;
 }
 
 // Inserts/updates facts for a doc, keyed by (source_doc_id, field_id) —
@@ -66,6 +81,8 @@ export async function upsertFacts(sourceDocId: string, projectId: string, facts:
       raw_text: f.raw_text ?? null,
       source_location: f.source_location ?? null,
       confirmed_by_user: f.confirmed_by_user ?? false,
+      fact_type: f.fact_type ?? "grounded_field",
+      confidence: f.confidence ?? "medium",
       updated_at: new Date().toISOString(),
     }));
     const { error } = await supabaseAdmin.from("extracted_facts").upsert(rows, { onConflict: "source_doc_id,field_id" });
@@ -81,6 +98,8 @@ export async function upsertFacts(sourceDocId: string, projectId: string, facts:
       existing.rawText = f.raw_text ?? null;
       existing.sourceLocation = f.source_location ?? null;
       existing.confirmedByUser = f.confirmed_by_user ?? existing.confirmedByUser;
+      existing.factType = f.fact_type ?? existing.factType ?? "grounded_field";
+      existing.confidence = f.confidence ?? existing.confidence ?? "medium";
       existing.updatedAt = now;
     } else {
       memoryDb.extractedFacts.push({
@@ -92,6 +111,8 @@ export async function upsertFacts(sourceDocId: string, projectId: string, facts:
         rawText: f.raw_text ?? null,
         sourceLocation: f.source_location ?? null,
         confirmedByUser: f.confirmed_by_user ?? false,
+        factType: f.fact_type ?? "grounded_field",
+        confidence: f.confidence ?? "medium",
         createdAt: now,
         updatedAt: now,
       });
@@ -144,6 +165,7 @@ export interface MergedFact {
   source_location: string | null;
   doc_type: SourceDocType;
   source_doc_id: string;
+  source_file_name: string | null;
   confirmed_by_user: boolean;
 }
 
@@ -180,6 +202,7 @@ export async function getMergedFactsForProject(projectId: string): Promise<Merge
         source_location: f.source_location,
         doc_type: doc.doc_type,
         source_doc_id: doc.id,
+        source_file_name: doc.file_name,
         confirmed_by_user: f.confirmed_by_user,
       };
       const existing = factsByFieldId[f.field_id];
@@ -202,4 +225,85 @@ export async function getMergedFactsForProject(projectId: string): Promise<Merge
     fullTextBlocks: activeDocs.map(d => d.full_text || "").filter(Boolean),
     docsUsed: activeDocs.map(d => ({ docType: d.doc_type, id: d.id, version: d.version })),
   };
+}
+
+export interface FactConflict {
+  field_id: string;
+  candidates: MergedFact[];
+  // The candidate getMergedFactsForProject would currently auto-resolve to
+  // (confirmed-wins, else doc-type priority) — auto-fill never blocks on an
+  // unresolved conflict, it just uses this one until a user picks.
+  auto_resolved_source_doc_id: string;
+}
+
+function normalizeFactValue(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// Two values "conflict" if they're not the same after normalization, and
+// (for values that parse as plain numbers) not within a small rounding
+// tolerance either — "7200" vs "7,200 RPM" must NOT be flagged as a
+// conflict, "7200" vs "7500" must.
+function valuesConflict(a: string, b: string): boolean {
+  const normA = normalizeFactValue(a);
+  const normB = normalizeFactValue(b);
+  if (normA === normB) return false;
+
+  const numA = parseFloat(normA.replace(/[^0-9.\-]/g, ""));
+  const numB = parseFloat(normB.replace(/[^0-9.\-]/g, ""));
+  if (!isNaN(numA) && !isNaN(numB) && /^[0-9.,\-\s]*[0-9](\s*\w+)?$/.test(normA.replace(/,/g, "")) && /^[0-9.,\-\s]*[0-9](\s*\w+)?$/.test(normB.replace(/,/g, ""))) {
+    if (numA === 0 && numB === 0) return false;
+    const denom = Math.max(Math.abs(numA), Math.abs(numB), 1);
+    return Math.abs(numA - numB) / denom > 0.01;
+  }
+  return true;
+}
+
+// Every field_id where 2+ active docs disagree beyond normalization
+// tolerance — a NEW cross-document view (no such thing existed before this
+// feature; the existing per-file preview panel only ever shows one file's
+// facts at a time). Never blocks the automatic fill (which keeps using
+// getMergedFactsForProject's existing confirmed-wins/doc-type-priority
+// resolution) — this is purely for surfacing + one-click resolution via the
+// existing confirmFact write-back (a confirmed fact already wins the merge
+// everywhere, so picking a candidate here requires no new propagation logic).
+export async function findFactConflicts(projectId: string): Promise<FactConflict[]> {
+  const activeDocs: UploadedSourceDocRow[] = await listActiveDocsForProject(projectId);
+  if (activeDocs.length < 2) return [];
+
+  const byFieldId = new Map<string, MergedFact[]>();
+  for (const doc of activeDocs) {
+    const facts = await listFactsForDoc(doc.id);
+    for (const f of facts) {
+      const candidate: MergedFact = {
+        field_id: f.field_id,
+        value: f.value,
+        raw_text: f.raw_text,
+        source_location: f.source_location,
+        doc_type: doc.doc_type,
+        source_doc_id: doc.id,
+        source_file_name: doc.file_name,
+        confirmed_by_user: f.confirmed_by_user,
+      };
+      const list = byFieldId.get(f.field_id) || [];
+      list.push(candidate);
+      byFieldId.set(f.field_id, list);
+    }
+  }
+
+  const conflicts: FactConflict[] = [];
+  for (const fieldId of Array.from(byFieldId.keys())) {
+    const candidates: MergedFact[] = byFieldId.get(fieldId)!;
+    if (candidates.length < 2) continue;
+    // Already-confirmed facts are settled, not a conflict — a user already
+    // picked. If NONE is confirmed and any pair of values genuinely
+    // disagrees, surface the whole candidate set.
+    if (candidates.some((c: MergedFact) => c.confirmed_by_user)) continue;
+    const hasDisagreement = candidates.some((c: MergedFact, i: number) => candidates.some((other: MergedFact, j: number) => i !== j && valuesConflict(c.value, other.value)));
+    if (!hasDisagreement) continue;
+
+    const autoResolved = [...candidates].sort((a: MergedFact, b: MergedFact) => DOC_TYPE_PRIORITY[a.doc_type] - DOC_TYPE_PRIORITY[b.doc_type])[0];
+    conflicts.push({ field_id: fieldId, candidates, auto_resolved_source_doc_id: autoResolved.source_doc_id });
+  }
+  return conflicts;
 }

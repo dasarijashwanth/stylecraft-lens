@@ -282,6 +282,10 @@ export interface MockUploadedSourceDoc {
   fullText: string | null;
   extractionStatus: string; // pending | complete | failed
   factsExtractionStatus?: string; // not_attempted | complete | failed
+  // {label, text}[] (lib/tds-doc-extract.ts's ExtractedLocation) — restores
+  // page/sheet attribution for facts derived after initial upload (see
+  // supabase_schema.sql Section 53's own comment on why this was missing).
+  locations?: { label: string; text: string }[];
   uploadedBy: string | null;
   uploadedAt: Date;
   updatedAt: Date;
@@ -298,7 +302,26 @@ export interface MockExtractedFact {
   rawText: string | null;
   sourceLocation: string | null;
   confirmedByUser: boolean;
+  // 'grounded_field' | 'narrative_signal' — see supabase_schema.sql Section 53.
+  factType?: string;
+  // 'high' | 'medium' | 'low'
+  confidence?: string;
   createdAt: Date;
+  updatedAt: Date;
+}
+
+// One row per project, tracks the automatic cross-document fill chain
+// (Sources upload -> extract -> fill GTM -> fill Content Form) — see
+// supabase_schema.sql Section 53's own header comment.
+export interface MockDocumentFillState {
+  projectId: string;
+  status: string; // idle | running | complete | failed
+  steps: string[];
+  currentStepIndex: number;
+  triggeredByDocId: string | null;
+  triggeredByFileName: string | null;
+  results: Record<string, any>;
+  startedAt: Date | null;
   updatedAt: Date;
 }
 
@@ -660,6 +683,7 @@ class MemoryDatabase {
   // default (there's no sensible default TDS to seed per-project).
   uploadedSourceDocs: MockUploadedSourceDoc[] = [];
   extractedFacts: MockExtractedFact[] = [];
+  documentFillStates: MockDocumentFillState[] = [];
   projectDecks: MockProjectDeck[] = [];
   // Unlike deckTemplates/projectDecks (an empty admin-fills-it-in feature),
   // this registry must be non-empty in local dev without Supabase too —

@@ -1755,3 +1755,55 @@ ALTER TABLE analyses ADD COLUMN IF NOT EXISTS related_products JSONB NOT NULL DE
 -- (prices/availability/motor claims go stale), never carried forward
 -- project-to-project.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS related_products JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 53. SOURCE-DOC FACTS: TYPE/CONFIDENCE + LOCATION PERSISTENCE + CROSS-
+-- DOCUMENT FILL CHAIN — "Automatic Source-Doc Fact Extraction & Cross-
+-- Document Fill." Three additions:
+--
+-- (a) extracted_facts gains fact_type ('grounded_field' | 'narrative_signal')
+-- and confidence ('high' | 'medium' | 'low'). Every fact before this column
+-- existed was a schema-field-id-bound grounded fact from the AI sweep
+-- (lib/tds-doc-facts.ts) — defaults preserve that read exactly.
+-- 'grounded_field' now also covers the new deterministic synonym-map parser
+-- (lib/source-fact-extract-deterministic.ts, confidence:'high');
+-- 'narrative_signal' is new — free-form marketing facts (taglines/USPs/
+-- audience statements) that don't map to a fixed schema field id, keyed by
+-- a synthesized slug in the existing field_id column (no FK/enum
+-- constraint on that column, so this needed no schema change beyond adding
+-- the two new columns themselves).
+ALTER TABLE extracted_facts ADD COLUMN IF NOT EXISTS fact_type VARCHAR(20) NOT NULL DEFAULT 'grounded_field';
+ALTER TABLE extracted_facts ADD COLUMN IF NOT EXISTS confidence VARCHAR(10) NOT NULL DEFAULT 'medium';
+--
+-- (b) uploaded_source_docs gains `locations` (JSONB array of
+-- {label, text} — lib/tds-doc-extract.ts's ExtractedLocation shape).
+-- lib/tds-doc-ingest.ts's deriveFactsForDoc previously reconstructed
+-- content with `locations: []` (a disclosed trade-off at the time,
+-- documented in that function's own header comment) because locations
+-- were never persisted — every fact derived AFTER initial upload lost its
+-- "found on p.3" attribution. Restoring this is required for the new
+-- "{Doc type} (filename, p.X)" field badge.
+ALTER TABLE uploaded_source_docs ADD COLUMN IF NOT EXISTS locations JSONB NOT NULL DEFAULT '[]'::jsonb;
+--
+-- (c) document_fill_state — one row per project, tracks the automatic
+-- "extract facts -> fill GTM -> fill Content Form" chain the same way
+-- project_generation_state tracks the project-creation pipeline: one phase
+-- per request/poll, checkpointed so a closed tab/browser just resumes the
+-- moment any tab of that project reopens (no background-job service —
+-- this app tried Inngest for a similar always-running chain and reverted
+-- it; see the revert commit's own reasoning). `steps` is the ordered
+-- remaining-step list for THIS run (e.g. ["gtm","content_form"]);
+-- `results` accumulates each step's {filled, regenerated, stillAwaiting}
+-- counts for the completion toast + per-document header summary.
+CREATE TABLE IF NOT EXISTS document_fill_state (
+    project_id UUID PRIMARY KEY,
+    status VARCHAR(20) NOT NULL DEFAULT 'idle', -- idle | running | complete | failed
+    steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    current_step_index INTEGER NOT NULL DEFAULT 0,
+    triggered_by_doc_id UUID,
+    triggered_by_file_name VARCHAR(255),
+    results JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE document_fill_state ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations for document_fill_state" ON document_fill_state FOR ALL USING (true) WITH CHECK (true);

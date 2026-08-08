@@ -31,6 +31,10 @@ export interface UploadedSourceDocRow {
   // column value — deliberately distinct from "failed" so old rows don't
   // retroactively show an error they never had.
   facts_extraction_status: "not_attempted" | "complete" | "failed";
+  // {label, text}[] (lib/tds-doc-extract.ts's ExtractedLocation) — restores
+  // page/sheet attribution for facts derived after initial upload. See
+  // supabase_schema.sql Section 53.
+  locations: { label: string; text: string }[];
   uploaded_by: string | null;
   uploaded_at: string;
   updated_at: string;
@@ -50,6 +54,7 @@ function mockToRow(d: MockUploadedSourceDoc): UploadedSourceDocRow {
     full_text: d.fullText,
     extraction_status: d.extractionStatus as "pending" | "complete" | "failed",
     facts_extraction_status: (d.factsExtractionStatus ?? "not_attempted") as "not_attempted" | "complete" | "failed",
+    locations: d.locations ?? [],
     uploaded_by: d.uploadedBy,
     uploaded_at: d.uploadedAt.toISOString(),
     updated_at: d.updatedAt.toISOString(),
@@ -191,11 +196,16 @@ export async function setLocalFileBytes(id: string, buffer: Buffer): Promise<voi
   if (row) row.fileBase64 = buffer.toString("base64");
 }
 
-export async function updateExtractionResult(id: string, fullText: string, status: "complete" | "failed"): Promise<void> {
+export async function updateExtractionResult(
+  id: string,
+  fullText: string,
+  status: "complete" | "failed",
+  locations: { label: string; text: string }[] = []
+): Promise<void> {
   if (isSupabaseConfigured) {
     const { error } = await supabaseAdmin
       .from("uploaded_source_docs")
-      .update({ full_text: fullText, extraction_status: status, updated_at: new Date().toISOString() })
+      .update({ full_text: fullText, extraction_status: status, locations, updated_at: new Date().toISOString() })
       .eq("id", id);
     if (error) throw error;
     return;
@@ -204,6 +214,7 @@ export async function updateExtractionResult(id: string, fullText: string, statu
   if (row) {
     row.fullText = fullText;
     row.extractionStatus = status;
+    row.locations = locations;
     row.updatedAt = new Date();
   }
 }

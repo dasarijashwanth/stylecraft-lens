@@ -30,6 +30,14 @@ interface ExtractedFactRow {
 
 interface Props {
   projectId: string;
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill — called
+  // right after an upload that found real facts (uploadProjectSourceDoc
+  // already fires the fill chain's first step server-side in this case; this
+  // callback just tells the PAGE-level poll driver to start watching for it,
+  // since that driver is mounted once per project, outside this tab, and
+  // survives switching away from Sources — see ProjectDetailPage's own
+  // fillState effect).
+  onSourceUploaded?: () => void;
 }
 
 const DOC_TYPES: { key: SourceDocRow["doc_type"]; label: string; hint: string }[] = [
@@ -90,7 +98,7 @@ async function fetchJson(url: string, init?: RequestInit) {
   return data;
 }
 
-export function SourceDocsTab({ projectId }: Props) {
+export function SourceDocsTab({ projectId, onSourceUploaded }: Props) {
   const [docs, setDocs] = useState<SourceDocRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadState, setUploadState] = useState<Record<string, SlotUploadState>>({});
@@ -102,6 +110,71 @@ export function SourceDocsTab({ projectId }: Props) {
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  // Automatic Source-Doc Fact Extraction & Cross-Document Fill, Part 2 — the
+  // NEW cross-document conflict view (genuinely new; the per-file panel
+  // above only ever shows one file's facts at a time, never a conflict
+  // between two). See app/api/projects/[id]/fact-conflicts.
+  const [conflicts, setConflicts] = useState<any[]>([]);
+  const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
+  // Part 3.6 — catalog back-fill: offer, never force.
+  const [catalogBackfill, setCatalogBackfill] = useState<{ catalogProductId: string | null; candidates: any[] }>({ catalogProductId: null, candidates: [] });
+  const [applyingCatalogField, setApplyingCatalogField] = useState<string | null>(null);
+
+  async function loadCatalogBackfill() {
+    try {
+      const data = await fetchJson(`/api/projects/${projectId}/catalog-backfill-candidates`);
+      setCatalogBackfill({ catalogProductId: data.catalogProductId, candidates: data.candidates || [] });
+    } catch {
+      // Best-effort, same as loadConflicts above.
+    }
+  }
+
+  async function applyCatalogBackfill(candidate: any) {
+    if (!catalogBackfill.catalogProductId) return;
+    setApplyingCatalogField(candidate.catalogField);
+    try {
+      await fetchJson(`/api/projects/${projectId}/catalog-backfill-candidates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ catalogProductId: catalogBackfill.catalogProductId, catalogField: candidate.catalogField, value: candidate.candidateValue }),
+      });
+      toast.success("Catalog record updated");
+      await loadCatalogBackfill();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update catalog record");
+    } finally {
+      setApplyingCatalogField(null);
+    }
+  }
+
+  async function loadConflicts() {
+    try {
+      const data = await fetchJson(`/api/projects/${projectId}/fact-conflicts`);
+      setConflicts(data.conflicts || []);
+    } catch {
+      // Best-effort — the conflict panel just stays empty/stale rather than
+      // surfacing a hard error; the underlying facts are still correct via
+      // the existing auto-resolve merge either way.
+    }
+  }
+
+  async function resolveConflict(fieldId: string, candidate: any) {
+    setResolvingConflict(fieldId);
+    try {
+      await fetchJson(`/api/projects/${projectId}/source-docs/${candidate.source_doc_id}/facts`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fieldId, value: candidate.value, rawText: candidate.raw_text, sourceLocation: candidate.source_location }),
+      });
+      toast.success(`Using "${candidate.value}" for ${fieldId}`);
+      await loadConflicts();
+      if (facts[candidate.source_doc_id]) await loadFacts(candidate.source_doc_id);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to resolve conflict");
+    } finally {
+      setResolvingConflict(null);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -116,7 +189,7 @@ export function SourceDocsTab({ projectId }: Props) {
   }
 
   useEffect(() => {
-    if (projectId) load();
+    if (projectId) { load(); loadConflicts(); loadCatalogBackfill(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -172,6 +245,7 @@ export function SourceDocsTab({ projectId }: Props) {
       const carried = result.carriedForwardCount > 0 ? ` (${result.carriedForwardCount} of your prior corrections carried forward)` : "";
       if (result.factsFound > 0) {
         toast.success(`Uploaded — found ${result.factsFound} fact${result.factsFound === 1 ? "" : "s"}${carried}`);
+        onSourceUploaded?.();
       } else if (result.extractionError) {
         toast.error(`Uploaded, but fact extraction had an error${carried} — use Retry extraction below to try again.`);
       } else {
@@ -179,6 +253,8 @@ export function SourceDocsTab({ projectId }: Props) {
       }
       setUploadState(prev => ({ ...prev, [docType]: IDLE_STATE }));
       await load();
+      await loadConflicts();
+      await loadCatalogBackfill();
       setExpandedDocId(result.document.id);
       await loadFacts(result.document.id);
     } catch (err: any) {
@@ -296,6 +372,67 @@ export function SourceDocsTab({ projectId }: Props) {
         Accepted: PDF, DOC, DOCX, XLS, XLSX, CSV — up to 15 MB. Drag a file onto a slot, or click Upload.
       </p>
 
+      {conflicts.length > 0 && (
+        <div className="rounded-xl border border-warning/30 bg-warning-bg overflow-hidden">
+          <div className="px-3 py-2 border-b border-warning/20">
+            <h3 className="text-xs font-bold text-warning">Fact Conflicts — {conflicts.length} field{conflicts.length === 1 ? "" : "s"} disagree across your uploaded documents</h3>
+            <p className="text-[10px] text-text-muted mt-0.5">Pick which value is correct — your choice wins everywhere this fact is used, and the other document&apos;s value is never used for this field again.</p>
+          </div>
+          <div className="divide-y divide-warning/20">
+            {conflicts.map((c: any) => (
+              <div key={c.field_id} className="p-3 space-y-1.5">
+                <div className="font-mono text-[10px] text-text-muted">{c.field_id}</div>
+                {c.candidates.map((cand: any) => {
+                  const docLabel = DOC_TYPES.find(d => d.key === cand.doc_type)?.label || cand.doc_type;
+                  return (
+                    <div key={cand.source_doc_id} className="flex items-center justify-between gap-3 pl-1">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-text-primary font-semibold">{cand.value}</span>
+                        <span className="ml-2 text-text-muted">— {docLabel}{cand.source_location ? ` (${cand.source_location})` : ""}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => resolveConflict(c.field_id, cand)}
+                        disabled={resolvingConflict === c.field_id}
+                        className="shrink-0 px-2 py-1 bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent font-bold rounded-md transition-colors disabled:opacity-50"
+                      >
+                        Use this value
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {catalogBackfill.candidates.length > 0 && (
+        <div className="rounded-xl border border-accent/30 bg-accent-bg overflow-hidden">
+          <div className="px-3 py-2 border-b border-accent/20">
+            <h3 className="text-xs font-bold text-accent">Catalog record has empty fields these sources can fill</h3>
+          </div>
+          <div className="divide-y divide-accent/20">
+            {catalogBackfill.candidates.map((c: any) => (
+              <div key={c.catalogField} className="flex items-center justify-between gap-3 p-3">
+                <div className="min-w-0 flex-1">
+                  <span className="text-text-muted">{c.catalogField === "target_price" ? "Target Price" : c.catalogField === "motor_branded" ? "Motor (branded name)" : "Motor Family"}:</span>
+                  <span className="ml-2 text-text-primary font-semibold">{String(c.candidateValue)}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => applyCatalogBackfill(c)}
+                  disabled={applyingCatalogField === c.catalogField}
+                  className="shrink-0 px-2 py-1 bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent font-bold rounded-md transition-colors disabled:opacity-50"
+                >
+                  Update catalog record?
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {DOC_TYPES.map(({ key, label, hint }) => {
         const versions = docs.filter(d => d.doc_type === key).sort((a, b) => b.version - a.version);
         const active = versions.find(d => d.is_active);
@@ -394,7 +531,21 @@ export function SourceDocsTab({ projectId }: Props) {
 
                 {expandedDocId === active.id && (
                   <div className="p-3 space-y-1.5 bg-surface-1 border-t border-border/40">
-                    {active.facts_extraction_status === "failed" ? (
+                    {active.extraction_status === "failed" ? (
+                      // A source doc can never sit "uploaded" with no facts
+                      // and no visible reason — this is content extraction
+                      // itself failing (unparseable file, or a scanned PDF
+                      // whose OCR vision fallback also failed), a DIFFERENT,
+                      // earlier failure than facts_extraction_status below
+                      // (which assumes content extraction succeeded). No
+                      // retry action exists for this today (there's no route
+                      // that re-runs content extraction against an already-
+                      // stored file) — re-uploading is the real fix.
+                      <div className="p-2 rounded-lg bg-danger-bg border border-danger/20">
+                        <p className="text-danger font-semibold">Couldn&apos;t read this file — content extraction failed.</p>
+                        <p className="text-text-muted mt-0.5">This can happen with a scanned/image-only PDF with no readable text, or a corrupted/unsupported file. Re-upload a text-based version (or a clearer scan) to this same slot.</p>
+                      </div>
+                    ) : active.facts_extraction_status === "failed" ? (
                       <div className="flex items-center justify-between gap-3 p-2 rounded-lg bg-danger-bg border border-danger/20">
                         <p className="text-danger">Extraction had an error — this document may still have real specs. Try again.</p>
                         <button
