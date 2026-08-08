@@ -19,6 +19,46 @@ import { sanitizeText } from "./sanitize";
 
 export type SourceDocFormat = "pdf" | "xlsx" | "docx" | "doc" | "xls" | "csv";
 
+// Root cause confirmed live via real Vercel production logs: "PDF
+// extraction failed: Error: Setting up fake worker failed: Cannot find
+// module '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'".
+// pdf-parse's PDFParse imports pdfjs-dist directly; Node has no real
+// Worker/browser environment, so pdfjs-dist always falls back to its "fake
+// worker" (main-thread) mode — but even that fallback does a DYNAMIC
+// `import(workerSrc)` at runtime (pdfjs-dist's own internal
+// PDFWorker._setupFakeWorkerGlobal) to load the worker module's exports.
+// Vercel's serverless output-file-tracing only bundles files reachable via
+// STATIC imports — a runtime-computed dynamic import path is invisible to
+// it, so pdf.worker.mjs was never included in the deployed function at all,
+// and every real PDF upload failed content extraction in production while
+// working perfectly locally (confirmed: the exact same file that fails on
+// the live site extracts cleanly here, full node_modules tree present).
+//
+// Fix: pre-load the worker module ourselves via a dynamic import (safe
+// regardless of whether the target/caller module system is ESM or CJS,
+// unlike a bare require() of an .mjs file) and assign it to
+// `globalThis.pdfjsWorker` BEFORE pdf-parse ever runs its own extraction.
+// pdfjs-dist's fake-worker setup checks `globalThis.pdfjsWorker?.
+// WorkerMessageHandler` FIRST and uses it directly if present — this is
+// pdfjs-dist's own documented escape hatch for exactly this Node/serverless
+// scenario; pdf-parse just doesn't wire it up automatically. Memoized so
+// the dynamic import only ever runs once per warm serverless instance.
+let pdfWorkerReadyPromise: Promise<void> | null = null;
+function ensurePdfWorkerReady(): Promise<void> {
+  if ((globalThis as any).pdfjsWorker) return Promise.resolve();
+  if (!pdfWorkerReadyPromise) {
+    // @ts-expect-error — pdfjs-dist ships no type declarations for this deep
+    // worker-entry subpath; the module itself resolves and exists at
+    // runtime (confirmed: node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs).
+    pdfWorkerReadyPromise = import("pdfjs-dist/legacy/build/pdf.worker.mjs")
+      .then((mod: any) => { (globalThis as any).pdfjsWorker = mod; })
+      .catch(err => {
+        console.warn("[tds-doc-extract] Failed to pre-load pdfjs-dist's worker module — PDF text extraction may fail:", err);
+      });
+  }
+  return pdfWorkerReadyPromise;
+}
+
 export interface ExtractedLocation {
   label: string; // e.g. "p.3", "Motor sheet, row 12"
   text: string;
@@ -115,6 +155,7 @@ const MAX_PDF_PAGES_FOR_TEXT_EXTRACTION = 60;
 
 export async function extractPdfContent(buffer: Buffer): Promise<ExtractedDocContent> {
   try {
+    await ensurePdfWorkerReady();
     const parser = new PDFParse({ data: new Uint8Array(buffer) });
     const result = await parser.getText({ first: MAX_PDF_PAGES_FOR_TEXT_EXTRACTION });
     await parser.destroy();
