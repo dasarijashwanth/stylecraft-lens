@@ -271,10 +271,27 @@ export async function deriveFactsForDoc(documentId: string, projectId: string, p
   const deterministicCandidates = extractDeterministicFacts(content.fullText);
   const resolvedFieldIds = deterministicallyResolvedFieldIds(deterministicCandidates);
 
-  const [{ candidates, aiCallFailed }, narrativeResult] = await Promise.all([
-    withDeadline(extractStructuredFacts(content, productName, resolvedFieldIds), budget, { candidates: [], aiCallFailed: true }),
-    withDeadline(extractNarrativeSignals(content, productName), budget, { candidates: [], aiCallFailed: false }),
-  ]);
+  // Deliberately SEQUENTIAL, not Promise.all — confirmed live via real
+  // Vercel production logs: running the spec-fact sweep and the narrative-
+  // fact sweep concurrently made two large (~40k-char-document) OpenAI
+  // calls compete for the same account's throughput at once, and the spec
+  // sweep consistently timed out (~42-45s, past its own 30s internal
+  // timeout) across every retry while the narrative sweep alone succeeded
+  // in 15-26s. This is the exact same failure mode lib/analysisEngine.ts's
+  // Phase 1/Phase 2 already hit and reverted from concurrent back to
+  // sequential for — two simultaneous large-context calls against the same
+  // OpenAI account contend for the same per-minute rate/throughput budget,
+  // making both individually slower and more likely to blow their timeout,
+  // which is worse than the extra latency of running them one after another.
+  const { candidates, aiCallFailed } = await withDeadline(
+    extractStructuredFacts(content, productName, resolvedFieldIds),
+    budget,
+    { candidates: [], aiCallFailed: true }
+  );
+  const remainingBudget = Math.max(0, FACTS_DERIVATION_DEADLINE_MS - (Date.now() - start));
+  const narrativeResult = remainingBudget > 0
+    ? await withDeadline(extractNarrativeSignals(content, productName), remainingBudget, { candidates: [], aiCallFailed: false })
+    : { candidates: [], aiCallFailed: false };
 
   const allCandidates: { field_id: string; value: string; raw_text: string; source_location?: string; fact_type: "grounded_field" | "narrative_signal"; confidence: "high" | "medium" }[] = [
     ...deterministicCandidates.map(c => ({ field_id: c.field_id, value: c.value, raw_text: c.raw_text, source_location: c.source_location, fact_type: c.fact_type, confidence: "high" as const })),
