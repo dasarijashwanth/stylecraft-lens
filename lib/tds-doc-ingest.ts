@@ -68,7 +68,20 @@ export const ALLOWED_SOURCE_DOC_TYPES: SourceDocType[] = ["tds", "spec_sheet", "
 // headroom for the Storage download (already accounted for via
 // routeStartTime) plus those final writes, instead of the previous ~10s.
 export const CONTENT_EXTRACTION_DEADLINE_MS = 40_000;
-export const FACTS_DERIVATION_DEADLINE_MS = 40_000;
+// Confirmed live via production logs: lib/openai.ts's own
+// createResponseWithRetry has a built-in retry-on-timeout (a full
+// `timeoutMs` first attempt, then a 2s wait, then one more up-to-10s short
+// retry) — worst case ~42s for a SINGLE extractStructuredFacts call whose
+// first attempt genuinely times out. A 40s budget here meant withDeadline
+// almost always won that race and returned the failure fallback BEFORE the
+// retry ever got a chance to succeed — guaranteeing a false "extraction had
+// an error" for any document whose first attempt ran long, not an
+// occasional edge case. The facts route's own maxDuration is 60s (it does
+// no Storage download, unlike the finalize route sharing
+// CONTENT_EXTRACTION_DEADLINE_MS above) — 50s leaves 10s of real headroom
+// for cold start + the DB read/write around this call, and comfortably
+// covers the ~42s worst case with room to spare.
+export const FACTS_DERIVATION_DEADLINE_MS = 50_000;
 
 // Exported for direct verification (scripts/verify-tds-doc-ingestion.ts) —
 // the real AI providers aren't reachable offline, so there's no way to make
