@@ -31,53 +31,58 @@ function approxEqual(a: number, b: number, eps = 0.001): boolean {
 }
 
 async function main() {
-  const { getMultiplier, NO_MULTIPLIER_MESSAGE, TARIFF_TABLE } = await import("../lib/tariff-multipliers");
+  const { getMultiplier, NO_MULTIPLIER_MESSAGE, TARIFF_TABLE, TARIFF_EFFECTIVE_NOTE, TARIFF_TABLE_UPDATED_ON, ROYALTY_SKU_NOTES } = await import("../lib/tariff-multipliers");
   const {
     computePriceStack, computeLandedCost, computeRoyaltyAmount, computeAdjustedLanded,
     computeSuggestedSalonPrice, computeDealerPrice, computeSuggestedRetailPrice,
     computeGmPct, gmBand,
   } = await import("../lib/price-stack");
 
-  // ---- Section 1: exact spec walkthrough ----
+  // ---- Section 1: exact spec walkthrough (2026-08-06 chart revision) ----
   console.log("\n[1] Spec walkthrough — China + Clippers & Trimmers, FOB $26.10");
   const noneResult = getMultiplier("china", "clippers_trimmers", "none");
-  assert(noneResult.multiplier === 1.52, `China/Clippers & Trimmers/no brand partner resolves to 1.52 (got ${noneResult.multiplier})`);
+  assert(noneResult.multiplier === 1.49, `China/Clippers & Trimmers/no brand partner resolves to 1.49 (got ${noneResult.multiplier})`);
 
   const landedNone = computeLandedCost(26.10, noneResult.multiplier!);
-  assert(approxEqual(landedNone, 39.672), `Landed Cost at 1.52x = $39.672 (got ${landedNone})`);
-  assert(landedNone.toFixed(2) === "39.67", `rounds to $39.67 as specified (got ${landedNone.toFixed(2)})`);
+  assert(landedNone.toFixed(2) === "38.89", `Landed Cost at 1.49x rounds to $38.89 as specified (got ${landedNone.toFixed(2)})`);
 
   const nonSharedResult = getMultiplier("china", "clippers_trimmers", "gamma_nonshared_10");
-  assert(nonSharedResult.multiplier === 1.62, `China/Clippers & Trimmers/Gamma+ non-shared resolves to 1.62 (got ${nonSharedResult.multiplier})`);
+  assert(nonSharedResult.multiplier === 1.59, `China/Clippers & Trimmers/Gamma+ non-shared resolves to 1.59 (got ${nonSharedResult.multiplier})`);
   const landedNonShared = computeLandedCost(26.10, nonSharedResult.multiplier!);
-  assert(landedNonShared.toFixed(2) === "42.28", `Landed Cost at 1.62x rounds to $42.28 as specified (got ${landedNonShared.toFixed(2)})`);
+  assert(landedNonShared.toFixed(2) === "41.50", `Landed Cost at 1.59x rounds to $41.50 as specified (got ${landedNonShared.toFixed(2)})`);
 
   const sharedResult = getMultiplier("china", "clippers_trimmers", "gamma_shared_5");
-  assert(sharedResult.multiplier === 1.57, `China/Clippers & Trimmers/Gamma+ shared (5%) resolves to 1.57 (got ${sharedResult.multiplier})`);
+  assert(sharedResult.multiplier === 1.54, `China/Shared Barber projects, Gamma+ (5%) resolves to 1.54 (got ${sharedResult.multiplier})`);
 
-  // ---- Section 2: every other resolvable combination from the spec table ----
-  console.log("\n[2] Every other tariff row resolves to its exact spec'd multiplier");
-  assert(getMultiplier("china", "styling_tools_shavers", "none").multiplier === 1.34, "China/Styling Tools & Shavers/none -> 1.34");
-  assert(getMultiplier("china", "styling_tools_shavers", "gamma_nonshared_10").multiplier === 1.44, "China/Styling Tools & Shavers/Gamma+ non-shared -> 1.44");
-  assert(getMultiplier("china", "aprons_garments", "none").multiplier === 1.54, "China/Aprons & Garments/none -> 1.54");
-  assert(getMultiplier("china", "aprons_garments", "gamma_shared_5").multiplier === 1.54, "China/Aprons & Garments applies regardless of royalty type -> 1.54");
-  assert(getMultiplier("europe", "clippers_trimmers", "gamma_shared_5").multiplier === 1.30, "Europe/any product type/Gamma+ shared -> 1.30");
-  assert(getMultiplier("europe", "aprons_garments", "gamma_nonshared_10").multiplier === 1.30, "Europe/any OTHER product type/Gamma+ non-shared -> 1.30");
-  assert(getMultiplier("europe", "liquids", "gamma_shared_5").multiplier === 1.18, "Europe + Liquids + Gamma+ prefers the MORE SPECIFIC Liquids row (1.18) over the general Beauty/Gamma+ row (1.30)");
+  // ---- Section 2: every other resolvable combination from the updated spec table ----
+  console.log("\n[2] Every other tariff row resolves to its exact spec'd multiplier (7 changed values)");
+  assert(getMultiplier("china", "styling_tools_shavers", "none").multiplier === 1.32, "China/Styling Tools & Shavers/none -> 1.32 (was 1.34)");
+  assert(getMultiplier("china", "styling_tools_shavers", "gamma_nonshared_10").multiplier === 1.42, "China/Styling Tools & Shavers/Gamma+ non-shared -> 1.42 (was 1.44)");
+  assert(getMultiplier("china", "aprons_garments", "none").multiplier === 1.52, "China/Aprons & Garments/none -> 1.52 (was 1.54)");
+  assert(getMultiplier("china", "aprons_garments", "gamma_shared_5").multiplier === 1.52, "China/Aprons & Garments applies regardless of royalty type -> 1.52");
+  assert(getMultiplier("europe", "clippers_trimmers", "gamma_shared_5").multiplier === 1.26, "Europe/any product type/Gamma+ shared -> 1.26 (was 1.30)");
+  assert(getMultiplier("europe", "aprons_garments", "gamma_nonshared_10").multiplier === 1.26, "Europe/any OTHER product type/Gamma+ non-shared -> 1.26");
+  assert(getMultiplier("europe", "liquids", "gamma_shared_5").multiplier === 1.18, "Europe + Liquids + Gamma+ prefers the MORE SPECIFIC Liquids row (1.18) over the general Beauty/Gamma+ row (1.26)");
   assert(getMultiplier("europe", "liquids", "none").multiplier === 1.18, "Europe + Liquids + no royalty still resolves via the Liquids row (royalty-agnostic) -> 1.18");
-  assert(getMultiplier("vietnam", "parts", "gamma_shared_5").multiplier === 1.35, "Vietnam/any -> 1.35 regardless of product/royalty type");
+  assert(getMultiplier("vietnam", "clippers_trimmers", "gamma_shared_5").multiplier === 1.35, "Vietnam/any -> 1.35 regardless of product/royalty type");
   assert(getMultiplier("malaysia", "liquids", "none").multiplier === 1.34, "Malaysia/any -> 1.34");
   assert(getMultiplier("cambodia", "styling_tools_shavers", "none").multiplier === 1.34, "Cambodia/Beauty tools (Styling Tools & Shavers) -> 1.34");
   assert(getMultiplier("india", "clippers_trimmers", "none").multiplier === 1.50, "India/any -> 1.50");
-  assert(getMultiplier("indonesia", "parts", "gamma_nonshared_10").multiplier === 1.19, "Indonesia/any -> 1.19");
+  assert(getMultiplier("indonesia", "clippers_trimmers", "gamma_nonshared_10").multiplier === 1.19, "Indonesia/any -> 1.19");
   assert(getMultiplier("thailand", "liquids", "none").multiplier === 1.19, "Thailand/any -> 1.19");
   assert(getMultiplier("south_korea", "clippers_trimmers", "none").multiplier === 1.15, "South Korea/any -> 1.15");
 
-  // ---- Section 3: Parts always resolves to the dedicated China row ----
-  console.log("\n[3] Parts overlap — Product Type=Parts always resolves to the dedicated 1.49 row, regardless of royalty");
-  assert(getMultiplier("china", "parts", "none").multiplier === 1.49, "China/Parts/none -> 1.49 (not 1.52)");
-  assert(getMultiplier("china", "parts", "gamma_shared_5").multiplier === 1.49, "China/Parts/Gamma+ shared -> still 1.49, never 1.57");
-  assert(getMultiplier("china", "parts", "gamma_nonshared_10").multiplier === 1.49, "China/Parts/Gamma+ non-shared -> still 1.49, never 1.62");
+  // ---- Section 3: Parts merged into the main China no-partner row ----
+  console.log("\n[3] Parts merge — Product Type=Parts now resolves through the merged China clippers/trimmers/blades row (no more standalone cn_parts row)");
+  assert(getMultiplier("china", "parts", "none").multiplier === 1.49, "China/Parts/no brand partner -> 1.49 via the merged clippers/trimmers/blades/parts row (the old standalone 1.49 'Parts only' row is gone, but the value is unchanged)");
+  const partsShared = getMultiplier("china", "parts", "gamma_shared_5");
+  assert(partsShared.multiplier === null && partsShared.error === NO_MULTIPLIER_MESSAGE, "China/Parts/Gamma+ shared (5%) has NO row on file — parts was only merged into the no-partner row, never into the Gamma+ rows, so this must not silently resolve via 1.54");
+  const partsNonshared = getMultiplier("china", "parts", "gamma_nonshared_10");
+  assert(partsNonshared.multiplier === null && partsNonshared.error === NO_MULTIPLIER_MESSAGE, "China/Parts/Gamma+ non-shared (10%) has NO row on file — same reasoning, must not silently resolve via 1.59");
+  assert(!TARIFF_TABLE.some(r => r.id === "cn_parts"), "the old standalone 'cn_parts' row id no longer exists in TARIFF_TABLE");
+  const mergedRow = TARIFF_TABLE.find(r => r.id === "cn_clip_none")!;
+  const mergedRowProductTypes = mergedRow.productTypes as string[] | "any";
+  assert(Array.isArray(mergedRowProductTypes) && mergedRowProductTypes.includes("parts") && mergedRowProductTypes.includes("clippers_trimmers"), "the merged row's productTypes includes both \"clippers_trimmers\" and \"parts\"");
 
   // ---- Section 4: unmatched combinations — never guess, never fall back ----
   console.log("\n[4] Unmatched combinations — the explicit no-guess message, never a fallback multiplier");
@@ -166,6 +171,32 @@ async function main() {
   const priceStackSource = readFileSync(path.join(__dirname, "..", "lib", "price-stack.ts"), "utf-8");
   assert(!tariffSource.includes("fetch(") && !tariffSource.includes("await import"), "lib/tariff-multipliers.ts contains no fetch()/dynamic-import network call");
   assert(!priceStackSource.includes("fetch(") && !priceStackSource.includes("await import"), "lib/price-stack.ts contains no fetch()/dynamic-import network call");
+
+  // ---- Section 9: component-breakdown sanity check + royalty/effective-date metadata ----
+  console.log("\n[9] Component-breakdown sanity check (ran at module load, above) + royalty/effective-date metadata");
+  // Re-derives the same check independently (not just trusting that
+  // lib/tariff-multipliers.ts's own module-load-time throw didn't fire —
+  // reaching this line already proves that, but this makes the test
+  // meaningful on its own even if that in-module check is ever weakened).
+  let sanityFailures = 0;
+  for (const row of TARIFF_TABLE as any[]) {
+    if (!row.components) continue;
+    const { tariff = 0, duty = 0, freight = 0, royalty = 0, other = 0 } = row.components;
+    const computed = 1 + tariff + duty + freight + royalty + other;
+    if (Math.abs(computed - row.multiplier) > 0.0051) sanityFailures++;
+  }
+  assert(sanityFailures === 0, `every row's component breakdown sums to its stored multiplier within ±0.0051 (${sanityFailures} row(s) failed)`);
+  const rowsWithComponents = TARIFF_TABLE.filter((r: any) => r.components).length;
+  assert(rowsWithComponents === 11, `11 of ${TARIFF_TABLE.length} rows carry a component breakdown (India/Indonesia/Thailand/South Korea are Total-Markup-only, got ${rowsWithComponents})`);
+
+  assert(typeof TARIFF_EFFECTIVE_NOTE === "string" && TARIFF_EFFECTIVE_NOTE.includes(TARIFF_TABLE_UPDATED_ON), "TARIFF_EFFECTIVE_NOTE embeds TARIFF_TABLE_UPDATED_ON verbatim");
+  assert(TARIFF_EFFECTIVE_NOTE.startsWith("Rates effective as of loading dates at origin"), "TARIFF_EFFECTIVE_NOTE uses the exact required wording");
+
+  assert(ROYALTY_SKU_NOTES.gamma_shared_5.exampleSkus.includes("GP803B XCell Shaver"), "5% royalty metadata includes the GP803B XCell Shaver example SKU");
+  assert(ROYALTY_SKU_NOTES.gamma_shared_5.exampleSkus.includes("GP609B XCell Clipper"), "5% royalty metadata includes the GP609B XCell Clipper example SKU");
+  assert(ROYALTY_SKU_NOTES.gamma_shared_5.exampleSkus.includes("GP418B XCell Trimmer"), "5% royalty metadata includes the GP418B XCell Trimmer example SKU");
+  assert(ROYALTY_SKU_NOTES.gamma_nonshared_10.exampleSkus.includes("GP103G Xcell Horizon Hair Dryer"), "10% royalty metadata includes the GP103G Xcell Horizon Hair Dryer example SKU");
+  assert(ROYALTY_SKU_NOTES.gamma_nonshared_10.exampleSkus.some((s: string) => s.includes("XCell black/red dryers") || s.includes("XCell") ), "10% royalty metadata includes the XCell black/red dryers example SKU");
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

@@ -50,7 +50,7 @@ import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
 import { useGlassMode } from "@/stores/backgroundStageStore";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
-import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTIONS, ROYALTY_PCT_BY_TYPE, type Country, type ProductType, type RoyaltyType } from "@/lib/tariff-multipliers";
+import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTIONS, ROYALTY_PCT_BY_TYPE, TARIFF_EFFECTIVE_NOTE, type Country, type ProductType, type RoyaltyType } from "@/lib/tariff-multipliers";
 import { computePriceStack } from "@/lib/price-stack";
 
 type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck" | "sources";
@@ -1015,6 +1015,7 @@ function TariffPriceStackEditor({ value, onChange }: { value: TariffPriceStackDa
           </div>
         </div>
       )}
+      <p className="text-[10px] text-text-muted italic">{TARIFF_EFFECTIVE_NOTE}</p>
     </div>
   );
 }
@@ -1039,17 +1040,20 @@ function TariffPriceStackSummary({ tps }: { tps: TariffPriceStackData }) {
     salonPriceOverride: tps.salon_price_override ?? null, retailPriceOverride: tps.retail_price_override ?? null,
   });
   return (
-    <MagicBentoCard className="p-4 flex items-center justify-between gap-4">
-      <div className="space-y-0.5">
-        <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Tariff &amp; Landed Cost</span>
-        <p className="text-[11px] text-text-secondary font-mono tabular-nums">
-          Multiplier <strong className="text-accent">{mult.multiplier.toFixed(2)}×</strong> · Landed {fmtUsd(stack.landedCost)} · Adjusted Landed {fmtUsd(stack.adjustedLanded)}
-        </p>
+    <MagicBentoCard className="p-4 space-y-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-0.5">
+          <span className="text-[10px] text-text-muted uppercase font-bold tracking-wider">Tariff &amp; Landed Cost</span>
+          <p className="text-[11px] text-text-secondary font-mono tabular-nums">
+            Multiplier <strong className="text-accent">{mult.multiplier.toFixed(2)}×</strong> · Landed {fmtUsd(stack.landedCost)} · Adjusted Landed {fmtUsd(stack.adjustedLanded)}
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[9px] text-text-muted uppercase font-bold">Target Retail Price</div>
+          <div className={`text-lg font-black font-mono tabular-nums ${gmBandClass(stack.gmRetailBand)}`}>{fmtUsd(stack.retailPrice)}</div>
+        </div>
       </div>
-      <div className="text-right shrink-0">
-        <div className="text-[9px] text-text-muted uppercase font-bold">Target Retail Price</div>
-        <div className={`text-lg font-black font-mono tabular-nums ${gmBandClass(stack.gmRetailBand)}`}>{fmtUsd(stack.retailPrice)}</div>
-      </div>
+      <p className="text-[10px] text-text-muted italic">{TARIFF_EFFECTIVE_NOTE}</p>
     </MagicBentoCard>
   );
 }
