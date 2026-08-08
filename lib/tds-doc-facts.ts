@@ -84,11 +84,21 @@ ${content.fullText.slice(0, MAX_EXTRACTION_TEXT_CHARS)}
 
 Return ONLY valid JSON: { "facts": [{ "field_id": "...", "value": "...", "raw_text": "..." }] } — omit any field not literally found, never guess a value.`;
 
+  // Confirmed live via production logs: at timeoutMs:30_000,
+  // createResponseWithRetry's own built-in retry-on-timeout (the requested
+  // timeoutMs, then a 2s wait, then one more up-to-10s short retry) let a
+  // single OpenAI attempt consume ~42s worst case — leaving callAiForJson's
+  // Gemini fallback (the thing that's supposed to catch exactly this case)
+  // with no real time left inside the caller's own overall budget, so it
+  // never even got attempted. A smaller timeout here still gives OpenAI a
+  // real shot (worst case ~24s including its own retry) while reserving
+  // genuine time for Gemini afterward — confirmed live that Gemini
+  // routinely completes a similarly-sized extraction in 15-26s.
   const raw = await callAiForJson<{ facts?: ExtractedFactCandidate[] }>(
     systemInstruction,
     `Product: ${productName}`,
     "TDS-Doc-Fact-Extraction",
-    { timeoutMs: 30_000 }
+    { timeoutMs: 12_000 }
   );
 
   // callAiForJson (lib/ai-json-call.ts) returns null only when EVERY
