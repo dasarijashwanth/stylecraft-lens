@@ -79,6 +79,55 @@ async function main() {
     console.log(`  (all buckets found: ${buckets?.map(b => b.name).join(", ") || "none"})`);
   }
 
+  // GTM Multi-Template work — Section 54: gtm_workbook_templates.industry/
+  // .field_inspection, projects.gtm_template_override.
+  console.log("\n--- Section 54 (GTM Multi-Template) ---");
+  const { data: templateRows, error: industryColError } = await supabase
+    .from("gtm_workbook_templates")
+    .select("id, name, industry, is_active, field_inspection");
+  if (industryColError) {
+    console.log(`✗ gtm_workbook_templates.industry/.field_inspection columns: ${industryColError.message}`);
+    ok = false;
+  } else {
+    console.log(`✓ gtm_workbook_templates.industry/.field_inspection columns exist`);
+    for (const row of templateRows || []) {
+      console.log(`  - "${row.name}" -> industry="${row.industry}", active=${row.is_active}, has_inspection=${!!row.field_inspection}`);
+    }
+    // Every row defaulted to industry='barber' when the column was added —
+    // a pre-existing beauty-named row (uploaded before this migration ran)
+    // needs a manual one-off correction, since ADD COLUMN backfills the
+    // DEFAULT for existing rows rather than inferring it from the name.
+    const misclassified = (templateRows || []).filter(r => /beauty/i.test(r.name || "") && r.industry !== "beauty");
+    if (misclassified.length > 0) {
+      ok = false;
+      console.log(`✗ ${misclassified.length} row(s) look like a beauty template but still have industry='barber' (defaulted on ALTER TABLE) — fix with:`);
+      for (const row of misclassified) {
+        console.log(`    UPDATE gtm_workbook_templates SET industry = 'beauty' WHERE id = '${row.id}';`);
+      }
+    } else {
+      console.log(`✓ no beauty-named template rows are misclassified as industry='barber'`);
+    }
+    const activeByIndustry: Record<string, number> = {};
+    for (const row of templateRows || []) {
+      if (row.is_active) activeByIndustry[row.industry] = (activeByIndustry[row.industry] || 0) + 1;
+    }
+    const overActive = Object.entries(activeByIndustry).filter(([, n]) => n > 1);
+    if (overActive.length > 0) {
+      ok = false;
+      console.log(`✗ more than one active template in the same industry: ${JSON.stringify(activeByIndustry)} — the scoped unique index should have prevented this`);
+    } else {
+      console.log(`✓ at most one active template per industry (${JSON.stringify(activeByIndustry)})`);
+    }
+  }
+
+  const { error: overrideColError } = await supabase.from("projects").select("gtm_template_override").limit(1);
+  if (overrideColError) {
+    console.log(`✗ projects.gtm_template_override column: ${overrideColError.message}`);
+    ok = false;
+  } else {
+    console.log(`✓ projects.gtm_template_override column exists`);
+  }
+
   console.log(ok ? "\nAll checks passed." : "\nSome checks failed — see above.");
   process.exit(ok ? 0 : 1);
 }
