@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase";
 import { parseGtmWorkbookTemplate } from "@/lib/gtm-workbook-template-parser";
-import { createGtmWorkbookTemplateFromStoragePath } from "@/lib/db/gtm-workbook-templates";
+import { createGtmWorkbookTemplateFromStoragePath, GtmTemplateIndustry } from "@/lib/db/gtm-workbook-templates";
+import { buildGtmTemplateFieldInspection } from "@/lib/gtm-workbook-inspection";
 
 export const maxDuration = 30;
 
@@ -27,10 +28,11 @@ export async function POST(req: NextRequest) {
     const session = await getAuthSession();
     requireAdmin(session.role);
 
-    const { path, name, fileName } = await req.json();
+    const { path, name, fileName, industry } = await req.json();
     if (!path || !TEMPLATE_PATH_RE.test(path)) {
       return NextResponse.json({ error: "Invalid storage path" }, { status: 400 });
     }
+    const resolvedIndustry: GtmTemplateIndustry = industry === "beauty" ? "beauty" : "barber";
 
     const { data, error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).download(path);
     if (error) throw error;
@@ -46,6 +48,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Missing required sheet(s): ${sheetSummary.missingRequiredSheets.join(", ")}` }, { status: 400 });
     }
 
+    // Part 1.2's "template inspection on upload" — only meaningful for a
+    // beauty upload (barber IS the reference, nothing to diff it against).
+    const fieldInspection = resolvedIndustry === "beauty" ? buildGtmTemplateFieldInspection(buffer) : null;
+
     const template = await createGtmWorkbookTemplateFromStoragePath({
       name: name || fileName || "Untitled template",
       filePath: path,
@@ -53,6 +59,8 @@ export async function POST(req: NextRequest) {
       fileSizeBytes: buffer.length,
       sheetSummary,
       uploadedBy: session.email,
+      industry: resolvedIndustry,
+      fieldInspection,
     });
 
     return NextResponse.json({ template });

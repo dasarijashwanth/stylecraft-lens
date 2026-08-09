@@ -59,6 +59,10 @@ export interface MockProject {
   // Raw {asin,url,addedAt} input only, for re-run pre-fill — see
   // lib/db/analyses.ts's related_products for the ENRICHED per-analysis data.
   relatedProducts?: any[];
+  // GTM Multi-Template work — null (default) auto-routes the workbook export
+  // to whichever template matches the product's tool type family; 'barber'/
+  // 'beauty' pins it regardless of the resolved family (mixed-collection override).
+  gtmTemplateOverride?: "barber" | "beauty" | null;
 }
 
 export interface MockAnalysis {
@@ -248,6 +252,14 @@ export interface MockGtmWorkbookTemplate {
   uploadedBy: string | null;
   uploadedAt: Date;
   updatedAt: Date;
+  // GTM Multi-Template work — which industry this template serves; exactly
+  // one row per industry may have isActive:true (enforced in application
+  // code here, a real scoped unique index in Supabase — see
+  // lib/db/gtm-workbook-templates.ts).
+  industry: "barber" | "beauty";
+  // Part 1.2's "template inspection on upload" output for a beauty upload —
+  // null for barber (barber IS the reference template, nothing to diff).
+  fieldInspection: any | null;
 }
 
 // Brand Voice Guide work — versioned, brand-scoped voice/tone/terminology

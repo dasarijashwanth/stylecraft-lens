@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
-import { createGtmWorkbookTemplate, listGtmWorkbookTemplates } from "@/lib/db/gtm-workbook-templates";
+import { createGtmWorkbookTemplate, listGtmWorkbookTemplates, GtmTemplateIndustry } from "@/lib/db/gtm-workbook-templates";
 import { parseGtmWorkbookTemplate } from "@/lib/gtm-workbook-template-parser";
+import { buildGtmTemplateFieldInspection } from "@/lib/gtm-workbook-inspection";
 
 // Same zip-bomb-defense reasoning as deck-templates' own cap — a real
 // 12-tab workbook runs well under this; admin-only upload narrows the risk
@@ -38,6 +39,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const name = (formData.get("name") as string) || file?.name || "Untitled template";
+    const resolvedIndustry: GtmTemplateIndustry = formData.get("industry") === "beauty" ? "beauty" : "barber";
     if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     if (file.size > MAX_TEMPLATE_SIZE_BYTES) {
       return NextResponse.json({ error: `Template file too large (max ${MAX_TEMPLATE_SIZE_BYTES / 1024 / 1024}MB)` }, { status: 400 });
@@ -49,12 +51,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Missing required sheet(s): ${sheetSummary.missingRequiredSheets.join(", ")}` }, { status: 400 });
     }
 
+    // Part 1.2's "template inspection on upload" — only meaningful for a
+    // beauty upload (barber IS the reference, nothing to diff it against).
+    const fieldInspection = resolvedIndustry === "beauty" ? buildGtmTemplateFieldInspection(buffer) : null;
+
     const template = await createGtmWorkbookTemplate({
       name,
       fileBuffer: buffer,
       fileName: file.name,
       sheetSummary,
       uploadedBy: session.email,
+      industry: resolvedIndustry,
+      fieldInspection,
     });
 
     return NextResponse.json({ template });

@@ -11,6 +11,8 @@ import { listCatalogProducts } from "@/lib/db/catalog-products";
 import { matchCatalogProductByName, resolveHeaderSku } from "@/lib/our-product-position";
 import { getActiveGtmWorkbookTemplate, getGtmWorkbookTemplateFileBuffer } from "@/lib/db/gtm-workbook-templates";
 import { renderGtmWorkbook, WorkbookFields } from "@/lib/gtm-workbook-data-mapper";
+import { resolveGtmFamily } from "@/lib/gtm-field-schema";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 const PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -143,9 +145,14 @@ export async function POST(req: NextRequest) {
       const project = await getProject(document.project_id, session.orgId);
       if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-      const template = await getActiveGtmWorkbookTemplate();
+      // GTM Multi-Template work — same resolution as export-xlsx/route.ts.
+      const toolTypes = await listToolTypes();
+      const family = resolveGtmFamily({ toolType: (project as any).toolType, gtmTemplateOverride: (project as any).gtmTemplateOverride }, toolTypes);
+      const resolvedIndustry = family === "beauty" ? "beauty" : "barber";
+
+      const template = await getActiveGtmWorkbookTemplate(resolvedIndustry);
       if (!template) {
-        return NextResponse.json({ error: "No active GTM workbook template configured — an admin needs to upload one first." }, { status: 400 });
+        return NextResponse.json({ error: `No active ${resolvedIndustry} GTM workbook template configured — an admin needs to upload one first.` }, { status: 400 });
       }
 
       const [docFields, catalogProducts, templateBuffer, contentFormDocument] = await Promise.all([
@@ -168,7 +175,8 @@ export async function POST(req: NextRequest) {
         headerSku,
         collection: matched?.collection ?? null,
         upc: matched?.upc ?? null,
-      });
+        sku: (project as any).sku ?? null,
+      }, resolvedIndustry);
 
       const productLabel = sanitizeFilename(project.productName || project.name);
       const fileName = `${productLabel}${headerSku ? ` - ${sanitizeFilename(headerSku)}` : ""} — Go to Market.xlsx`;

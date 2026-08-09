@@ -53,6 +53,7 @@ export async function PATCH(
     if (body.pricePoint !== undefined) updateData.pricePoint = body.pricePoint || null;
     if (body.sku !== undefined) updateData.sku = body.sku || null;
     if (body.relatedProducts !== undefined) updateData.relatedProducts = body.relatedProducts;
+    if (body.gtmTemplateOverride !== undefined) updateData.gtmTemplateOverride = body.gtmTemplateOverride || null;
     if (body.savedDefaults !== undefined) updateData.savedDefaults = body.savedDefaults;
     if (body.latestAnalysisId !== undefined) updateData.latestAnalysisId = body.latestAnalysisId;
     if (body.latestReportId !== undefined) updateData.latestReportId = body.latestReportId;

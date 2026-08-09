@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { getDocumentByProject, getDocumentFields } from "@/lib/db/documents";
-import { GTM_FIELD_SCHEMA, visibleGtmSchema } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, visibleGtmSchema, resolveGtmFamily } from "@/lib/gtm-field-schema";
 import { isRealAnswer, buildFillReport } from "@/lib/field-answer-state";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 // Looks up a project's GTM document by project id — the UI only knows the
 // project it's on, not the document's own id, until one exists. Ownership
@@ -31,7 +32,9 @@ export async function GET(req: NextRequest) {
     // Excludes an empty legacyOptional field (e.g. Axis Shield when a
     // product has none) from the denominator, same as the UI's own
     // completion display — see lib/gtm-field-schema.ts's visibleGtmSchema.
-    const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, byId);
+    const toolTypes = await listToolTypes();
+    const family = resolveGtmFamily({ toolType: (project as any).toolType, gtmTemplateOverride: (project as any).gtmTemplateOverride }, toolTypes);
+    const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, byId, family);
     const completedCount = fields.filter(f => isRealAnswer(f.answer)).length;
     const fillReport = buildFillReport(byId, visibleSchema);
 

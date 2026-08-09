@@ -1807,3 +1807,33 @@ CREATE TABLE IF NOT EXISTS document_fill_state (
 );
 ALTER TABLE document_fill_state ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations for document_fill_state" ON document_fill_state FOR ALL USING (true) WITH CHECK (true);
+
+-- 54. GTM WORKBOOK TEMPLATES: MULTI-TEMPLATE (BARBER + BEAUTY) — a second
+-- real template ("... Go to Market — BEAUTY — BLANK.xlsx") is now uploaded
+-- alongside the original BARBER one, and BOTH must stay active
+-- simultaneously (export auto-selects by the product's industry family).
+-- `industry` scopes which template a product routes to; the old GLOBAL
+-- "only one active row" index is replaced with one scoped per industry —
+-- same precedent as brand_voice_guides' (brand, is_active) scoped index
+-- (Section 42) — so activating a beauty template never deactivates the
+-- barber one. The existing barber row backfills to industry='barber' via
+-- the column default; no data migration needed.
+ALTER TABLE gtm_workbook_templates ADD COLUMN IF NOT EXISTS industry VARCHAR(20) NOT NULL DEFAULT 'barber';
+-- field_inspection: the Part 1.2 "template inspection on upload" output for
+-- a beauty-industry upload — { sheetLabels: {[tabName]: string[]}, diff:
+-- {shared, candidateOnly, referenceOnly} per tab } — diffed against the
+-- barber template's own known labels at upload time, shown in Settings so
+-- an admin can see exactly what did/didn't map before relying on the
+-- export. NULL for barber uploads (barber IS the reference, nothing to
+-- diff it against).
+ALTER TABLE gtm_workbook_templates ADD COLUMN IF NOT EXISTS field_inspection JSONB;
+DROP INDEX IF EXISTS gtm_workbook_templates_one_active_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS gtm_workbook_templates_one_active_per_industry_idx
+  ON gtm_workbook_templates(industry) WHERE is_active = true;
+
+-- projects.gtm_template_override — Part 3.4's "mixed collections... route by
+-- TOOL TYPE's industry family, with a visible override on the project."
+-- NULL (the default/common case) = auto-route from the product's tool
+-- type's family (lib/db/tool-types.ts); 'barber'/'beauty' pins the export
+-- to that template regardless of the resolved family.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS gtm_template_override VARCHAR(20);

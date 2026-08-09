@@ -55,6 +55,9 @@ export interface ProjectRecord {
   // web-search skip in lib/gtm-generate.ts/lib/web-search-fallback.ts.
   productUrl?: string | null;
   asin?: string | null;
+  // GTM Multi-Template work — mixed-collection override ('barber'|'beauty'),
+  // see lib/gtm-field-schema.ts's resolveGtmFamily.
+  gtmTemplateOverride?: string | null;
 }
 
 // Core Consumer's 3 fixed options map 1:1 onto the project's own

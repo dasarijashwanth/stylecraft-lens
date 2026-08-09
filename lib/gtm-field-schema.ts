@@ -51,6 +51,43 @@ export interface GtmField {
   // when empty, rather than always showing an empty row. See
   // visibleGtmSchema() below.
   legacyOptional?: boolean;
+  // GTM Multi-Template work — omitted means shared/common (every product
+  // sees it, matching today's behavior exactly). 'clipper_trimmer_shaver'
+  // marks a field the real BARBER workbook template has and the real
+  // BEAUTY template does NOT (Blades/Lever/Guards/Charging — confirmed via
+  // live inspection of both uploaded templates); 'beauty' marks a field
+  // that's the reverse (Curling Iron/Flat Iron/Blow Dryer/Electrical &
+  // Power/Control Settings specs — present only in the beauty template).
+  // Orthogonal to primary_criterion (a Hair Dryer is family:beauty but
+  // primary_criterion:motor) — see structurallyInapplicableFieldIds in
+  // lib/gtm-generate.ts, which reads BOTH.
+  family?: "clipper_trimmer_shaver" | "beauty";
+}
+
+export type GtmFamily = "clipper_trimmer_shaver" | "beauty";
+
+// GTM Multi-Template work — the single source of truth for "which family
+// applies to this product," reused everywhere a decision depends on it: the
+// in-app field schema (visibleGtmSchema), the generation pipeline's N/A
+// gating (structurallyInapplicableFieldIds), and workbook export template
+// selection. `gtmTemplateOverride` (a project-level "Export using: Barber /
+// Beauty" pin for mixed-collection products, e.g. a shaver marketed inside
+// a beauty line) always wins over the tool type's own family when set;
+// otherwise resolves from the matched tool type's `family` column
+// (lib/db/tool-types.ts) — never from `project.industry`, which this
+// codebase has repeatedly found unsuitable for branching (only 2
+// substring-overlapping values, see lib/legacy-brand-registry.ts's own
+// warning comment). Returns undefined when neither an override nor a
+// resolvable tool type exists — callers treat that as "don't filter/gate on
+// family," identical to today's pre-multi-template behavior.
+export function resolveGtmFamily(
+  project: { toolType?: string | null; gtmTemplateOverride?: string | null },
+  toolTypes: { type_key: string; family: string | null }[]
+): GtmFamily | undefined {
+  if (project.gtmTemplateOverride === "barber") return "clipper_trimmer_shaver";
+  if (project.gtmTemplateOverride === "beauty") return "beauty";
+  const match = toolTypes.find(t => t.type_key === project.toolType);
+  return (match?.family as GtmFamily | null | undefined) ?? undefined;
 }
 
 // Narrative fields — the rest of the schema defaults to "grounded".
@@ -159,6 +196,7 @@ interface FieldExtra {
   // hard-coded Owner column for that tab), shown in the in-app Owner
   // dropdown the same way internal-kind fields already show their owner.
   owner?: string;
+  family?: "clipper_trimmer_shaver" | "beauty";
 }
 
 function field(id: string, section: string, question: string, extra?: FieldExtra): GtmField {
@@ -239,74 +277,133 @@ export const GTM_FIELD_SCHEMA: GtmField[] = [
   // Technology below).
   field("product_description", "Tool Description", "Product Description"),
 
-  // Motor
+  // Motor — shared; the real BEAUTY template's own Motor block only carries
+  // Motor Type/RPM/Noise (split into a db value + description) and drops
+  // Run Time/Recharge Time/Speed entirely (confirmed via live inspection of
+  // the uploaded beauty template) — those 3 simply have no beauty export
+  // row (see lib/gtm-workbook-data-mapper.ts's beauty Step list), not a
+  // structural N/A here (a motorized beauty product like a dryer can still
+  // have a genuine run-time/speed value worth capturing in-app).
   field("motor_type", "Motor", "Motor Type"),
   field("motor_rpm", "Motor", "RPM"),
   field("motor_run_time", "Motor", "Run Time"),
   field("motor_recharge_time", "Motor", "Recharge Time"),
   field("motor_speed", "Motor", "Speed"),
   field("motor_noise_level", "Motor", "Noise level", { uiControl: "select", options: ["Ultra Quiet", "Low", "Moderate"] }),
+  field("motor_noise_level_db", "Motor", "Noise Level (dB)", { family: "beauty" }),
 
   // Heat/Plate Technology — the parallel section for motorless styling
   // tools (flat iron/curling iron/hot brush, see lib/db/tool-types.ts's
   // primary_criterion column). Present in the schema for every product
   // like Motor is; resolves to "Not listed"/N/A for tool types where it
   // doesn't apply, the same way Motor already does for non-motorized ones.
-  field("plate_material", "Heat/Plate Technology", "Plate Material"),
-  field("heater_type", "Heat/Plate Technology", "Heater Type"),
-  field("max_temp_class", "Heat/Plate Technology", "Max Temp"),
+  // plate_material/plate_size map to the beauty template's real "Flat
+  // Irons: / Plates / Plate size" rows. heater_type/max_temp_class have NO
+  // corresponding row in the real beauty template (confirmed via
+  // inspection) — kept anyway per the ticket's own Part 2.3 ("feeds both
+  // the beauty GTM sections AND the existing motorless primary-criterion
+  // Heat Technology matching system"), just unmapped in the workbook export
+  // (flagged, not silently dropped — see the beauty Step list's comment).
+  field("plate_material", "Heat/Plate Technology", "Plate Material", { family: "beauty" }),
+  field("plate_size", "Heat/Plate Technology", "Plate Size", { family: "beauty" }),
+  field("heater_type", "Heat/Plate Technology", "Heater Type", { family: "beauty" }),
+  field("max_temp_class", "Heat/Plate Technology", "Max Temp", { family: "beauty" }),
 
-  // Blades
-  field("blade_name", "Blades", "Blade Name"),
-  field("fixed_blade", "Blades", "Fixed Blade"),
-  field("cutting_blade", "Blades", "Cutting Blade", { helperText: "Select the closest match, or choose Other and describe it in Notes." }),
+  // Curling Irons — real beauty template section, absent from barber.
+  field("barrel_material", "Curling Irons", "Barrel Material", { family: "beauty" }),
+  field("barrel_size", "Curling Irons", "Barrel Size", { family: "beauty" }),
+  field("barrel_length", "Curling Irons", "Barrel Length", { family: "beauty" }),
+
+  // Blow Dryer — real beauty template section, absent from barber.
+  field("heat_settings_count", "Blow Dryer", "# of Heat Settings", { family: "beauty" }),
+  field("speed_settings_count", "Blow Dryer", "# of Speed Settings", { family: "beauty" }),
+
+  // Electrical & Power — real beauty template section, absent from barber
+  // (barber's electrical facts live under Charging instead, a different
+  // set of concerns — charger light/base/cord color, not device voltage).
+  field("electrical_voltage", "Electrical & Power", "Voltage", { family: "beauty" }),
+  field("dual_voltage", "Electrical & Power", "Dual Voltage", { family: "beauty" }),
+  field("wattage", "Electrical & Power", "Wattage", { family: "beauty" }),
+  field("swivel_cord", "Electrical & Power", "Swivel Cord", { family: "beauty" }),
+  field("power_cord_length", "Electrical & Power", "Power Cord Length", { family: "beauty" }),
+
+  // Control Settings — real beauty template section, absent from barber.
+  field("control_heat_range", "Control Settings", "Heat Range", { family: "beauty" }),
+  field("control_speed_setting", "Control Settings", "Speed", { family: "beauty" }),
+  field("control_temp_range", "Control Settings", "Temp Range", { family: "beauty" }),
+  field("control_color", "Control Settings", "Color", { family: "beauty" }),
+  field("control_lock_feature", "Control Settings", "Lock Feature", { family: "beauty" }),
+  field("control_off_on", "Control Settings", "Off/On", { family: "beauty" }),
+  field("control_cool_shot", "Control Settings", "Cool Shot", { family: "beauty" }),
+  field("control_auto_shut_off", "Control Settings", "Auto Shut Off", { family: "beauty" }),
+  field("control_auto_release_heat_timer", "Control Settings", "Auto Release (Heat Timer)", { family: "beauty" }),
+  field("control_heat_up_time", "Control Settings", "Heat Up Time", { family: "beauty" }),
+
+  // Blades — real barber template section; the real beauty template has no
+  // equivalent rows at all (confirmed via inspection).
+  field("blade_name", "Blades", "Blade Name", { family: "clipper_trimmer_shaver" }),
+  field("fixed_blade", "Blades", "Fixed Blade", { family: "clipper_trimmer_shaver" }),
+  field("cutting_blade", "Blades", "Cutting Blade", { helperText: "Select the closest match, or choose Other and describe it in Notes.", family: "clipper_trimmer_shaver" }),
 
   // Lids / Customizable Parts — renamed to match the official GTM workbook
   // template's own section header (cosmetic label only, GTM_SECTIONS
-  // derives from this automatically).
+  // derives from this automatically). SHARED — the real beauty template has
+  // its own "CUSTOMIZABLE PARTS / Qty / Colors" rows with identical labels
+  // (confirmed via inspection), so this section is not family-tagged.
   field("lids_qty", "Lids / Customizable Parts", "Qty"),
   field("lids_colors", "Lids / Customizable Parts", "Colors"),
 
-  // Lever
-  field("lever_type", "Lever", "Type"),
-  field("lever_qty", "Lever", "Qty"),
-  field("lever_color", "Lever", "Color"),
+  // Lever — real barber template section; absent from beauty.
+  field("lever_type", "Lever", "Type", { family: "clipper_trimmer_shaver" }),
+  field("lever_qty", "Lever", "Qty", { family: "clipper_trimmer_shaver" }),
+  field("lever_color", "Lever", "Color", { family: "clipper_trimmer_shaver" }),
 
-  // Guards
-  field("guards_type", "Guards", "Type"),
-  field("guards_qty", "Guards", "Qty"),
-  field("guards_color", "Guards", "Color"),
+  // Guards — real barber template section; absent from beauty.
+  field("guards_type", "Guards", "Type", { family: "clipper_trimmer_shaver" }),
+  field("guards_qty", "Guards", "Qty", { family: "clipper_trimmer_shaver" }),
+  field("guards_color", "Guards", "Color", { family: "clipper_trimmer_shaver" }),
 
-  // Charging
-  field("charging_light_color", "Charging", "Light Color"),
-  field("charging_base_color", "Charging", "Base Color"),
-  field("charging_cord_color", "Charging", "Cord Color"),
-  field("charging_cord_length", "Charging", "Cord Length"),
-  field("charging_port", "Charging", "Charging Port"),
-  field("charging_voltage", "Charging", "Voltage"),
-  field("charging_logo_color", "Charging", "Logo Color"),
-  field("charging_led_function", "Charging", "LED Function"),
+  // Charging — real barber template section; absent from beauty (beauty's
+  // own electrical facts live under Electrical & Power above instead).
+  field("charging_light_color", "Charging", "Light Color", { family: "clipper_trimmer_shaver" }),
+  field("charging_base_color", "Charging", "Base Color", { family: "clipper_trimmer_shaver" }),
+  field("charging_cord_color", "Charging", "Cord Color", { family: "clipper_trimmer_shaver" }),
+  field("charging_cord_length", "Charging", "Cord Length", { family: "clipper_trimmer_shaver" }),
+  field("charging_port", "Charging", "Charging Port", { family: "clipper_trimmer_shaver" }),
+  field("charging_voltage", "Charging", "Voltage", { family: "clipper_trimmer_shaver" }),
+  field("charging_logo_color", "Charging", "Logo Color", { family: "clipper_trimmer_shaver" }),
+  field("charging_led_function", "Charging", "LED Function", { family: "clipper_trimmer_shaver" }),
 
-  // Included in Box
-  field("screw_driver_color", "Included in Box", "Screw Driver Color"),
-  field("screw_driver_brand", "Included in Box", "Screw Driver Brand"),
-  field("screw_driver_other", "Included in Box", "Screw Driver Other"),
-  field("stretch_bracket_color", "Included in Box", "Stretch Bracket Color"),
+  // Included in Box — the hand-tailored barber-specific accessory fields
+  // below (screwdriver/cam follower/cleaning brush/oil bottle — clipper
+  // servicing accessories) are family-tagged; the real beauty template's
+  // own Included in Box block has its own different items instead (Travel
+  // Bag/Case, Heat Glove, Extra Filters, attachments list — added below).
+  field("screw_driver_color", "Included in Box", "Screw Driver Color", { family: "clipper_trimmer_shaver" }),
+  field("screw_driver_brand", "Included in Box", "Screw Driver Brand", { family: "clipper_trimmer_shaver" }),
+  field("screw_driver_other", "Included in Box", "Screw Driver Other", { family: "clipper_trimmer_shaver" }),
+  field("stretch_bracket_color", "Included in Box", "Stretch Bracket Color", { family: "clipper_trimmer_shaver" }),
   // legacyOptional — the official GTM workbook template has zero Axis
   // Shield rows (confirmed against the real file); still generated
   // normally when a product genuinely has real data, but hidden from the
   // UI/completion-% when empty rather than always showing an empty row.
-  field("axis_shield_qty", "Included in Box", "Axis Shield Qty", { legacyOptional: true }),
-  field("axis_shield_color", "Included in Box", "Axis Shield Color", { legacyOptional: true }),
-  field("axis_shield_material", "Included in Box", "Axis Shield Material", { legacyOptional: true }),
-  field("axis_shield_description", "Included in Box", "Axis Shield Description", { legacyOptional: true }),
-  field("cam_follower_qty", "Included in Box", "Cam Follower Qty"),
-  field("cam_follower_color", "Included in Box", "Cam Follower Color"),
-  field("cleaning_brush_qty", "Included in Box", "Cleaning Brush Qty"),
-  field("cleaning_brush_color", "Included in Box", "Cleaning Brush Color"),
-  field("oil_bottle_qty", "Included in Box", "Oil Bottle Qty"),
-  field("extra_screws_qty", "Included in Box", "Extra Screws Qty"),
-  field("extra_screws_color", "Included in Box", "Extra Screws Color"),
+  field("axis_shield_qty", "Included in Box", "Axis Shield Qty", { legacyOptional: true, family: "clipper_trimmer_shaver" }),
+  field("axis_shield_color", "Included in Box", "Axis Shield Color", { legacyOptional: true, family: "clipper_trimmer_shaver" }),
+  field("axis_shield_material", "Included in Box", "Axis Shield Material", { legacyOptional: true, family: "clipper_trimmer_shaver" }),
+  field("axis_shield_description", "Included in Box", "Axis Shield Description", { legacyOptional: true, family: "clipper_trimmer_shaver" }),
+  field("cam_follower_qty", "Included in Box", "Cam Follower Qty", { family: "clipper_trimmer_shaver" }),
+  field("cam_follower_color", "Included in Box", "Cam Follower Color", { family: "clipper_trimmer_shaver" }),
+  field("cleaning_brush_qty", "Included in Box", "Cleaning Brush Qty", { family: "clipper_trimmer_shaver" }),
+  field("cleaning_brush_color", "Included in Box", "Cleaning Brush Color", { family: "clipper_trimmer_shaver" }),
+  field("oil_bottle_qty", "Included in Box", "Oil Bottle Qty", { family: "clipper_trimmer_shaver" }),
+  field("extra_screws_qty", "Included in Box", "Extra Screws Qty", { family: "clipper_trimmer_shaver" }),
+  field("extra_screws_color", "Included in Box", "Extra Screws Color", { family: "clipper_trimmer_shaver" }),
+  // Real beauty template's own Included in Box items (confirmed via
+  // inspection) — absent from barber.
+  field("travel_bag_case", "Included in Box", "Travel Bag/Case", { family: "beauty" }),
+  field("heat_glove", "Included in Box", "Heat Glove", { family: "beauty" }),
+  field("extra_filters", "Included in Box", "Extra Filters", { family: "beauty" }),
+  field("attachments_list", "Included in Box", "Attachments", { family: "beauty" }),
   // Generic aggregate from Amazon's whats_in_the_box[] — kept alongside the
   // hand-tailored fields above (which are precise per-component slots for
   // this catalog's clipper products) rather than folded into them, since a
@@ -386,11 +483,21 @@ export const GTM_SECTIONS = Array.from(new Set(GTM_FIELD_SCHEMA.map(f => f.secti
 // row simply never renders) and by every completion-percentage call site
 // (so an empty legacy field never drags down the denominator). A product
 // that genuinely has real Axis Shield data still shows/counts it normally.
-export function visibleGtmSchema<T extends { id: string; legacyOptional?: boolean }>(
+// GTM Multi-Template work — also hides any field whose `family` doesn't
+// match the resolved product's family (Blades/Lever/Guards/Charging for a
+// beauty product; Curling Iron/Flat Iron/Electrical & Power/Control
+// Settings for a barber product), never counted toward completion % either
+// — same "never shown, never guessed" treatment as legacyOptional, just
+// keyed off family instead of an empty answer. `resolvedFamily` omitted
+// (undefined) keeps today's behavior exactly (every field visible) — every
+// existing call site that hasn't resolved a family yet is unaffected.
+export function visibleGtmSchema<T extends { id: string; legacyOptional?: boolean; family?: "clipper_trimmer_shaver" | "beauty" }>(
   schema: T[],
-  fields: Record<string, { answer?: string | null } | undefined>
+  fields: Record<string, { answer?: string | null } | undefined>,
+  resolvedFamily?: "clipper_trimmer_shaver" | "beauty" | null
 ): T[] {
   return schema.filter(f => {
+    if (f.family && resolvedFamily && f.family !== resolvedFamily) return false;
     if (!f.legacyOptional) return true;
     const answer = (fields[f.id]?.answer ?? "").toString().trim();
     return answer !== "" && answer.toUpperCase() !== "N/A";

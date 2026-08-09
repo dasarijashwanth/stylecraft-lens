@@ -4,11 +4,12 @@ import { getProject } from "@/lib/db/projects";
 import { getProjectReports } from "@/lib/db/reports";
 import { getOrCreateDocument, getDocumentFields, saveDocumentFields, getTdsFieldsForProject, setDocumentVoiceGuide, setDocumentSourceDocVersions } from "@/lib/db/documents";
 import { getLatestOutput } from "@/lib/project-outputs";
-import { GTM_FIELD_SCHEMA, visibleGtmSchema } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, visibleGtmSchema, resolveGtmFamily } from "@/lib/gtm-field-schema";
 import { generateAllFields, GtmSources } from "@/lib/gtm-generate";
 import { isRealAnswer } from "@/lib/field-answer-state";
 import { resolveBrandForProduct, getActiveVoiceGuide } from "@/lib/brand-voice";
 import { getUploadedTdsContext } from "@/lib/gtm-uploaded-tds";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 export const maxDuration = 60;
 
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
         targetMarket: project.targetMarket,
         productUrl: (project as any).productUrl,
         asin: (project as any).asin,
+        gtmTemplateOverride: (project as any).gtmTemplateOverride,
       },
       salesKit,
       tds,
@@ -86,7 +88,9 @@ export async function POST(req: NextRequest) {
     const savedFields = await getDocumentFields(document.id);
     const byId: Record<string, { answer?: string | null }> = {};
     for (const f of savedFields) byId[f.field_id] = { answer: f.answer };
-    const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, byId);
+    const toolTypes = await listToolTypes();
+    const family = resolveGtmFamily({ toolType: (project as any).toolType, gtmTemplateOverride: (project as any).gtmTemplateOverride }, toolTypes);
+    const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, byId, family);
     const completedCount = savedFields.filter(f => isRealAnswer(f.answer)).length;
 
     return NextResponse.json({

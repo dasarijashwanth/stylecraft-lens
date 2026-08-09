@@ -6,6 +6,8 @@ import { listCatalogProducts } from "@/lib/db/catalog-products";
 import { matchCatalogProductByName, resolveHeaderSku } from "@/lib/our-product-position";
 import { getActiveGtmWorkbookTemplate, getGtmWorkbookTemplateFileBuffer } from "@/lib/db/gtm-workbook-templates";
 import { renderGtmWorkbook, WorkbookFields } from "@/lib/gtm-workbook-data-mapper";
+import { resolveGtmFamily } from "@/lib/gtm-field-schema";
+import { listToolTypes } from "@/lib/db/tool-types";
 
 export const maxDuration = 30;
 
@@ -33,9 +35,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const project = await getProject(document.project_id, session.orgId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const template = await getActiveGtmWorkbookTemplate();
+    // GTM Multi-Template work — resolves which industry's template this
+    // export uses: the project's own override always wins (mixed-collection
+    // pin), else the matched tool type's family (never project.industry —
+    // see lib/gtm-field-schema.ts's resolveGtmFamily for why).
+    const toolTypes = await listToolTypes();
+    const family = resolveGtmFamily({ toolType: (project as any).toolType, gtmTemplateOverride: (project as any).gtmTemplateOverride }, toolTypes);
+    const resolvedIndustry = family === "beauty" ? "beauty" : "barber";
+
+    const template = await getActiveGtmWorkbookTemplate(resolvedIndustry);
     if (!template) {
-      return NextResponse.json({ error: "No active GTM workbook template configured — an admin needs to upload one first." }, { status: 400 });
+      return NextResponse.json({ error: `No active ${resolvedIndustry} GTM workbook template configured — an admin needs to upload one first.` }, { status: 400 });
     }
 
     const [docFields, catalogProducts, templateBuffer, contentFormDocument] = await Promise.all([
@@ -62,7 +72,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       headerSku,
       collection: matched?.collection ?? null,
       upc: matched?.upc ?? null,
-    });
+      sku: (project as any).sku ?? null,
+    }, resolvedIndustry);
 
     // Formula-cell overwrites (BOX ONLY's #REF!/mis-pointed cross-sheet
     // refs) are logged, never silently repaired-in-place — per spec, we
@@ -88,6 +99,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        // GTM Multi-Template work — records which template industry actually
+        // rendered this export, and whether it came from the project's own
+        // override or the auto-resolved tool-type family (Part 3.3).
+        "X-Gtm-Template-Industry": resolvedIndustry,
+        "X-Gtm-Template-Source": (project as any).gtmTemplateOverride ? "override" : "auto",
       },
     });
   } catch (err: any) {

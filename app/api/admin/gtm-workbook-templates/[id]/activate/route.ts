@@ -16,7 +16,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const existing = await getGtmWorkbookTemplateById(params.id);
     if (!existing) return NextResponse.json({ error: "Template not found" }, { status: 404 });
 
-    await setActiveGtmWorkbookTemplate(params.id);
+    await setActiveGtmWorkbookTemplate(params.id, existing.industry);
     const updated = await getGtmWorkbookTemplateById(params.id);
     return NextResponse.json({ template: updated });
   } catch (err: any) {

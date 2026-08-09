@@ -363,7 +363,13 @@ async function main() {
   );
 
   console.log(`\n${passes} passed, ${failures} failed`);
-  if (failures > 0) process.exit(1);
+  // GTM Multi-Template work — generateProductFaqs now internally resolves
+  // the product's family (lib/gtm-product-faqs.ts), which transitively
+  // imports lib/db/tool-types.ts -> lib/memoryDb.ts. memoryDb's constructor
+  // starts a real setInterval (autosave), which keeps a plain Node script
+  // alive forever unless it exits explicitly — previously a non-issue here
+  // since nothing in this script's dependency graph touched memoryDb.
+  process.exit(failures > 0 ? 1 : 0);
 }
 
 main().catch(err => {

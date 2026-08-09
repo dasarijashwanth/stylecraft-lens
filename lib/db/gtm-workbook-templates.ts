@@ -17,6 +17,8 @@ export interface GtmWorkbookSheetSummary {
   missingRequiredSheets: string[];
 }
 
+export type GtmTemplateIndustry = "barber" | "beauty";
+
 export interface GtmWorkbookTemplateRow {
   id: string;
   name: string;
@@ -28,6 +30,8 @@ export interface GtmWorkbookTemplateRow {
   uploaded_by: string | null;
   uploaded_at: string;
   updated_at: string;
+  industry: GtmTemplateIndustry;
+  field_inspection: any | null;
 }
 
 function emptySheetSummary(): GtmWorkbookSheetSummary {
@@ -46,6 +50,8 @@ function mockToRow(row: MockGtmWorkbookTemplate): GtmWorkbookTemplateRow {
     uploaded_by: row.uploadedBy,
     uploaded_at: row.uploadedAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
+    industry: row.industry,
+    field_inspection: row.fieldInspection,
   };
 }
 
@@ -55,6 +61,8 @@ export async function createGtmWorkbookTemplate(input: {
   fileName: string;
   sheetSummary: GtmWorkbookSheetSummary;
   uploadedBy?: string | null;
+  industry: GtmTemplateIndustry;
+  fieldInspection?: any | null;
 }): Promise<GtmWorkbookTemplateRow> {
   const filePath = `${Date.now()}-${input.fileName.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
 
@@ -75,6 +83,8 @@ export async function createGtmWorkbookTemplate(input: {
           sheet_summary: input.sheetSummary,
           is_active: false,
           uploaded_by: input.uploadedBy ?? null,
+          industry: input.industry,
+          field_inspection: input.fieldInspection ?? null,
         })
         .select()
         .single();
@@ -97,6 +107,8 @@ export async function createGtmWorkbookTemplate(input: {
     uploadedBy: input.uploadedBy ?? null,
     uploadedAt: now,
     updatedAt: now,
+    industry: input.industry,
+    fieldInspection: input.fieldInspection ?? null,
   };
   memoryDb.gtmWorkbookTemplates.push(row);
   return mockToRow(row);
@@ -115,6 +127,8 @@ export async function createGtmWorkbookTemplateFromStoragePath(input: {
   fileSizeBytes: number;
   sheetSummary: GtmWorkbookSheetSummary;
   uploadedBy?: string | null;
+  industry: GtmTemplateIndustry;
+  fieldInspection?: any | null;
 }): Promise<GtmWorkbookTemplateRow> {
   const { data, error } = await supabaseAdmin
     .from("gtm_workbook_templates")
@@ -126,6 +140,8 @@ export async function createGtmWorkbookTemplateFromStoragePath(input: {
       sheet_summary: input.sheetSummary,
       is_active: false,
       uploaded_by: input.uploadedBy ?? null,
+      industry: input.industry,
+      field_inspection: input.fieldInspection ?? null,
     })
     .select()
     .single();
@@ -158,29 +174,39 @@ export async function getGtmWorkbookTemplateById(id: string): Promise<GtmWorkboo
   return row ? mockToRow(row) : null;
 }
 
-export async function getActiveGtmWorkbookTemplate(): Promise<GtmWorkbookTemplateRow | null> {
+// GTM Multi-Template work — scoped to `industry` so BOTH a barber and a
+// beauty template can be active simultaneously (a real scoped partial
+// unique index enforces exactly one active row PER industry — see
+// supabase_schema.sql Section 54 — not one active row globally like before).
+// Defaults to "barber" only for backward-compat call sites not yet updated
+// for multi-template — every real caller now passes an explicit industry.
+export async function getActiveGtmWorkbookTemplate(industry: GtmTemplateIndustry = "barber"): Promise<GtmWorkbookTemplateRow | null> {
   if (isSupabaseConfigured) {
-    const { data } = await supabaseAdmin.from("gtm_workbook_templates").select("*").eq("is_active", true).maybeSingle();
+    const { data } = await supabaseAdmin.from("gtm_workbook_templates").select("*").eq("is_active", true).eq("industry", industry).maybeSingle();
     return data;
   }
 
-  const row = memoryDb.gtmWorkbookTemplates.find(t => t.isActive);
+  const row = memoryDb.gtmWorkbookTemplates.find(t => t.isActive && t.industry === industry);
   return row ? mockToRow(row) : null;
 }
 
-// Clears is_active on every other row, then sets it on `id` — same
-// low-concurrency-tolerant, two-sequential-statement style as
-// setActiveDeckTemplate (an admin-only, rare action, not a hot path).
-export async function setActiveGtmWorkbookTemplate(id: string): Promise<void> {
+// Clears is_active on every OTHER row of the SAME industry, then sets it on
+// `id` — scoped so activating a beauty template never deactivates the
+// barber one (or vice versa). Same low-concurrency-tolerant,
+// two-sequential-statement style as setActiveDeckTemplate (an admin-only,
+// rare action, not a hot path).
+export async function setActiveGtmWorkbookTemplate(id: string, industry: GtmTemplateIndustry): Promise<void> {
   if (isSupabaseConfigured) {
-    const { error: clearError } = await supabaseAdmin.from("gtm_workbook_templates").update({ is_active: false }).eq("is_active", true);
+    const { error: clearError } = await supabaseAdmin.from("gtm_workbook_templates").update({ is_active: false }).eq("is_active", true).eq("industry", industry);
     if (clearError) throw clearError;
     const { error: setError } = await supabaseAdmin.from("gtm_workbook_templates").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", id);
     if (setError) throw setError;
     return;
   }
 
-  for (const t of memoryDb.gtmWorkbookTemplates) t.isActive = false;
+  for (const t of memoryDb.gtmWorkbookTemplates) {
+    if (t.industry === industry) t.isActive = false;
+  }
   const row = memoryDb.gtmWorkbookTemplates.find(t => t.id === id);
   if (row) {
     row.isActive = true;

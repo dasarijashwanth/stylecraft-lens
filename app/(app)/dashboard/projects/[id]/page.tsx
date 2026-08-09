@@ -39,7 +39,7 @@ import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
 import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { SourceDocsTab } from "@/components/project/SourceDocsTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
-import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS, visibleGtmSchema } from "@/lib/gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS, visibleGtmSchema, resolveGtmFamily } from "@/lib/gtm-field-schema";
 import { CONTENT_FORM_SCHEMA, CONTENT_FORM_SECTIONS } from "@/lib/content-form-field-schema";
 import { ComparisonChartPicker, type ComparisonChartSlot } from "@/components/analyze/ComparisonChartPicker";
 import { TDS_FIELD_SCHEMA, TDS_SECTIONS } from "@/lib/tds-field-schema";
@@ -493,7 +493,7 @@ export default function ProjectDetailPage() {
             <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} marketingDirectionEnabled={marketingDirectionEnabled} contentFormEnabled={contentFormEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
-          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} fillStatus={fillState?.status} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} />
+          <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} fillStatus={fillState?.status} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} projectToolType={project?.toolType} projectGtmTemplateOverride={project?.gtmTemplateOverride} onGtmTemplateOverrideChange={(v: string | null) => setProject((p: any) => (p ? { ...p, gtmTemplateOverride: v } : p))} toolTypes={toolTypes} />
         </div>
       </div>
 
@@ -1679,6 +1679,10 @@ function ProductKnowledgeSection({
   fillStatus,
   projectSku,
   onSkuChange,
+  projectToolType,
+  projectGtmTemplateOverride,
+  onGtmTemplateOverrideChange,
+  toolTypes,
 }: {
   projectId: string;
   pipelineStatus?: string;
@@ -1691,6 +1695,14 @@ function ProductKnowledgeSection({
   fillStatus?: string;
   projectSku?: string | null;
   onSkuChange?: (sku: string) => void;
+  // GTM Multi-Template work — resolves which family's fields (Blades/Lever/
+  // Guards/Charging vs. Curling Iron/Flat Iron/Electrical & Power/Control
+  // Settings) actually render in this grid — see lib/gtm-field-schema.ts's
+  // resolveGtmFamily.
+  projectToolType?: string | null;
+  projectGtmTemplateOverride?: string | null;
+  onGtmTemplateOverrideChange?: (value: string | null) => void;
+  toolTypes?: ToolTypeRow[];
 }) {
   const isGlass = useGlassMode();
   const [documentId, setDocumentId] = useState<string | null>(null);
@@ -1737,6 +1749,31 @@ function ProductKnowledgeSection({
     setSkuDraft(value);
     if (debounceTimers.current["__sku"]) clearTimeout(debounceTimers.current["__sku"]);
     debounceTimers.current["__sku"] = setTimeout(() => saveSku(value), 800);
+  }
+
+  // GTM Multi-Template work — "Export using: Auto / Barber / Beauty" pin for
+  // mixed-collection products (e.g. a shaver marketed inside a beauty line).
+  // A plain select, saved immediately (no debounce — discrete choice, not
+  // free text) via the same PATCH /api/projects/[id] route saveSku uses.
+  const [overrideSaving, setOverrideSaving] = useState(false);
+  async function handleGtmTemplateOverrideChange(value: string) {
+    const nextOverride = value === "auto" ? null : value;
+    setOverrideSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gtmTemplateOverride: nextOverride }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to save export template override");
+      onGtmTemplateOverrideChange?.(nextOverride);
+      toast.success(nextOverride ? `Export will always use the ${nextOverride === "barber" ? "Barber" : "Beauty"} template` : "Export will auto-select the template from the product's tool type");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save export template override");
+    } finally {
+      setOverrideSaving(false);
+    }
   }
 
   async function loadDocument() {
@@ -1802,7 +1839,11 @@ function ProductKnowledgeSection({
   // Excludes empty legacyOptional fields (e.g. Axis Shield when a product
   // has none) from both the completion count and its denominator, so a
   // product without those parts never shows as permanently incomplete.
-  const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, fields);
+  // GTM Multi-Template work — also hides the other family's fields
+  // (Blades/Lever/Guards/Charging vs. Curling Iron/Flat Iron/Electrical &
+  // Power/Control Settings), same treatment.
+  const resolvedFamily = resolveGtmFamily({ toolType: projectToolType, gtmTemplateOverride: projectGtmTemplateOverride }, toolTypes || []);
+  const visibleSchema = visibleGtmSchema(GTM_FIELD_SCHEMA, fields, resolvedFamily);
   const completedCount = visibleSchema.reduce((n, f) => n + (isFieldComplete(fields[f.id]?.answer) ? 1 : 0), 0);
 
   function handleFieldChange(fieldId: string, value: string) {
@@ -2044,6 +2085,17 @@ function ProductKnowledgeSection({
         </div>
         {hasDocument && (
           <div className="flex items-center gap-2">
+            <select
+              value={projectGtmTemplateOverride || "auto"}
+              onChange={e => handleGtmTemplateOverrideChange(e.target.value)}
+              disabled={overrideSaving}
+              title="Which workbook template Download XLSX / Save to Drive uses — Auto follows the product's tool type"
+              className="px-2 py-1.5 border border-border hover:border-border-strong bg-surface-2 text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <option value="auto">Export using: Auto</option>
+              <option value="barber">Export using: Barber</option>
+              <option value="beauty">Export using: Beauty</option>
+            </select>
             {completedCount < visibleSchema.length && (
               <button
                 type="button"

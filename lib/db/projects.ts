@@ -71,6 +71,11 @@ function toProjectShape(row: any) {
     asin: row.asin,
     sku: row.sku,
     relatedProducts: row.related_products ?? [],
+    // GTM Multi-Template work — null (default) auto-routes the workbook
+    // export/schema to the tool type's own family; 'barber'/'beauty' pins
+    // it for a mixed-collection product. See lib/gtm-field-schema.ts's
+    // resolveGtmFamily.
+    gtmTemplateOverride: row.gtm_template_override ?? null,
     savedDefaults: row.saved_defaults,
     latestAnalysisId: row.latest_analysis_id,
     latestReportId: row.latest_report_id,
@@ -271,6 +276,7 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   asin: "asin",
   sku: "sku",
   relatedProducts: "related_products",
+  gtmTemplateOverride: "gtm_template_override",
   savedDefaults: "saved_defaults",
   latestAnalysisId: "latest_analysis_id",
   latestReportId: "latest_report_id",

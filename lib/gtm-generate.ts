@@ -13,7 +13,7 @@
 // packaging specs, approved pricing) skip the AI/web/derived/category
 // tiers entirely and terminate at "Awaiting internal input" instead.
 import { callAiForFields, coerceAiAnswer } from "./ai-json-call";
-import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GtmField, GtmFieldAnswer, GtmFieldSource } from "./gtm-field-schema";
+import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GtmField, GtmFieldAnswer, GtmFieldSource, GtmFamily, resolveGtmFamily } from "./gtm-field-schema";
 import { deriveFieldsFromSources, ProjectRecord, motorLabel } from "./gtm-derive";
 import { applyTier6Inference, CatalogLineupRow, CompetitorSpecSource, BrandNameHintInput, ComparisonChartCatalogRow } from "./gtm-tier6-inference";
 import { getCategoryDefault, CATEGORY_DEFAULT_LABEL_PREFIX } from "./category-defaults";
@@ -133,11 +133,30 @@ const ACCESSORY_NA_INCLUDED_IN_BOX_FIELD_IDS = [
   "extra_screws_qty", "extra_screws_color",
 ];
 
-export function structurallyInapplicableFieldIds(primaryCriterion: string | null | undefined, productKind?: string | null): Set<string> {
+// GTM Multi-Template work — the real BARBER and BEAUTY workbook templates
+// each have whole sections the other doesn't (confirmed via live inspection
+// of both uploaded files): barber has Blades/Lever/Guards/Charging + a
+// barber-specific Included-in-Box accessory set; beauty has Curling Irons/
+// Blow Dryer/Electrical & Power/Control Settings + Heat/Plate Technology's
+// full field set + its own Included-in-Box items. Every one of those
+// fields is already tagged with GtmField.family (lib/gtm-field-schema.ts) —
+// reusing that tag here is a direct generalization of this function's own
+// existing pattern (structural N/A on a KNOWN, definite mismatch only), not
+// a new mechanism. Orthogonal to primaryCriterion/productKind below — all
+// three axes compose (a Hair Dryer keeps Motor via primaryCriterion, keeps
+// Blow Dryer/Electrical & Power via family, loses Blades/Charging via family).
+const CLIPPER_ONLY_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.family === "clipper_trimmer_shaver").map(f => f.id);
+const BEAUTY_ONLY_FIELD_IDS = GTM_FIELD_SCHEMA.filter(f => f.family === "beauty").map(f => f.id);
+
+export function structurallyInapplicableFieldIds(primaryCriterion: string | null | undefined, productKind?: string | null, family?: GtmFamily | null): Set<string> {
   const ids = new Set<string>();
   if (primaryCriterion) {
     if (primaryCriterion !== "motor") MOTOR_SECTION_FIELD_IDS.forEach(id => ids.add(id));
     if (primaryCriterion !== "heat_technology") HEAT_TECH_SECTION_FIELD_IDS.forEach(id => ids.add(id));
+  }
+  if (family) {
+    if (family !== "clipper_trimmer_shaver") CLIPPER_ONLY_FIELD_IDS.forEach(id => ids.add(id));
+    if (family !== "beauty") BEAUTY_ONLY_FIELD_IDS.forEach(id => ids.add(id));
   }
   if (productKind && productKind !== "tool") {
     LIDS_SECTION_FIELD_IDS.forEach(id => ids.add(id));
@@ -390,8 +409,9 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // category defaults) ever revisits these fields; see
   // structurallyInapplicableFieldIds above.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
+  const family = resolveGtmFamily(sources.project, toolTypes);
   const { productKind, collection, brand } = await resolveCatalogProductKind(sources);
-  const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion, productKind);
+  const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion, productKind, family);
   const pipelineSchema = schema.filter(f => !structuralNaIds.has(f.id));
 
   // Brand Voice Guide — resolved once per generation run (not once per
@@ -561,8 +581,9 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // real answer, so a regenerate of one of these skips AI/web entirely,
   // same as the full-document pipeline. See structurallyInapplicableFieldIds.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
+  const family = resolveGtmFamily(sources.project, toolTypes);
   const { productKind, collection, brand } = await resolveCatalogProductKind(sources);
-  if (structurallyInapplicableFieldIds(primaryCriterion, productKind).has(fieldId)) {
+  if (structurallyInapplicableFieldIds(primaryCriterion, productKind, family).has(fieldId)) {
     return { answer: "N/A", source: "none" };
   }
   const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));

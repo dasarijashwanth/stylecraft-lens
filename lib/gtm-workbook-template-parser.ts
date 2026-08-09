@@ -67,3 +67,116 @@ export function parseGtmWorkbookTemplate(buffer: Buffer): GtmWorkbookSheetSummar
   const zip = new PizZip(buffer);
   return buildSheetSummary(zip);
 }
+
+// ---- GTM Multi-Template work — Part 1.2 "template inspection on upload" ----
+// Small self-contained cell/row readers, deliberately NOT imported from
+// lib/gtm-workbook-render.ts (which itself imports mapSheetNamesToParts from
+// THIS file) — sharing them would create a circular import. Same "each file
+// keeps its own narrow XML helpers" precedent this file's own `attr()`
+// already follows relative to gtm-workbook-render.ts's separate copy.
+function xmlUnescapeText(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
+    .replace(/&amp;/g, "&");
+}
+
+function parseSharedStringsForInspection(zip: PizZip): string[] {
+  const xml = zip.file("xl/sharedStrings.xml")?.asText();
+  if (!xml) return [];
+  const result: string[] = [];
+  const siRegex = /<si>([\s\S]*?)<\/si>/g;
+  let m: RegExpExecArray | null;
+  while ((m = siRegex.exec(xml))) {
+    const texts = Array.from(m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)).map(x => xmlUnescapeText(x[1]));
+    result.push(texts.join(""));
+  }
+  return result;
+}
+
+function readInspectionCellText(rowXml: string, sharedStrings: string[], addr: string): string {
+  const match = rowXml.match(new RegExp(`<c r="${addr}"[^>]*?(?:/>|>[\\s\\S]*?</c>)`));
+  if (!match) return "";
+  const tag = match[0];
+  const type = attr(tag, "t");
+  if (type === "s") {
+    const idxMatch = tag.match(/<v>(\d+)<\/v>/);
+    return idxMatch ? sharedStrings[parseInt(idxMatch[1], 10)] ?? "" : "";
+  }
+  if (type === "inlineStr") {
+    return Array.from(tag.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)).map(m2 => xmlUnescapeText(m2[1])).join("");
+  }
+  const vMatch = tag.match(/<v>([\s\S]*?)<\/v>/);
+  return vMatch ? xmlUnescapeText(vMatch[1]) : "";
+}
+
+export interface InspectedLabel {
+  row: number;
+  text: string;
+}
+
+// Every non-empty label found in `labelColumn`, in row order — the
+// inspection counterpart to gtm-workbook-render.ts's findRowByLabel (which
+// searches FOR one label instead of listing all of them).
+export function inspectGtmWorkbookLabels(zip: PizZip, sheetName: string, labelColumn: string): InspectedLabel[] {
+  const parts = mapSheetNamesToParts(zip);
+  const part = parts[sheetName];
+  if (!part) return [];
+  const sheetXml = zip.file(part)?.asText();
+  if (!sheetXml) return [];
+
+  const sharedStrings = parseSharedStringsForInspection(zip);
+  const out: InspectedLabel[] = [];
+  const rowRegex = /<row r="(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/row>)/g;
+  let m: RegExpExecArray | null;
+  while ((m = rowRegex.exec(sheetXml))) {
+    const rowNum = parseInt(m[1], 10);
+    const text = readInspectionCellText(m[0], sharedStrings, `${labelColumn}${rowNum}`).trim();
+    if (text) out.push({ row: rowNum, text });
+  }
+  return out;
+}
+
+export interface LabelDiff {
+  shared: string[];
+  candidateOnly: string[];
+  referenceOnly: string[];
+}
+
+function normalizeForDiff(s: string): string {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+// Prefix-tolerant match — mirrors gtm-workbook-render.ts's findRowByLabel
+// exactly (`normalized === target || normalized.startsWith(target)`, tried
+// in both directions here since either side could be the shorter one). The
+// reference labels passed in are themselves SHORT SEARCH PREFIXES (e.g.
+// "Primary Goal", not the real template's full multi-line cell text "Primary
+// Goal \n(ex: Drive trial, awareness...)") — an exact-string diff would
+// therefore mark almost every real field as mismatched even when it's the
+// exact row findRowByLabel would happily resolve at export time.
+function labelsMatch(a: string, b: string): boolean {
+  const na = normalizeForDiff(a);
+  const nb = normalizeForDiff(b);
+  return na === nb || na.startsWith(nb) || nb.startsWith(na);
+}
+
+// Plain, deterministic diff (no fuzzy/ML matching, just prefix tolerance)
+// between a newly-inspected template's labels and a reference template's
+// known (search-prefix) labels — surfaces exactly what's shared,
+// candidate-only (new to this template), and reference-only (present in
+// the reference but missing here) for an admin to review before trusting
+// the export. A genuine rename (e.g. beauty's "Collection" vs barber's
+// "New Line or Current Collection?", which share no common prefix) still
+// shows up as one entry in each of candidateOnly/referenceOnly —
+// informational, not auto-resolved.
+export function diffTemplateLabels(candidateLabels: string[], referenceLabels: string[]): LabelDiff {
+  return {
+    shared: candidateLabels.filter(l => referenceLabels.some(r => labelsMatch(l, r))),
+    candidateOnly: candidateLabels.filter(l => !referenceLabels.some(r => labelsMatch(l, r))),
+    referenceOnly: referenceLabels.filter(r => !candidateLabels.some(l => labelsMatch(l, r))),
+  };
+}

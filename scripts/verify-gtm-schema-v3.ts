@@ -156,7 +156,12 @@ async function main() {
   assert(noopPlan.toDelete.length === 0 && !noopPlan.trademarkOwnerFix, "an already-migrated document is a safe no-op (re-run safety)");
 
   console.log(`\n${passes} passed, ${failures} failed`);
-  if (failures > 0) process.exit(1);
+  // Pre-existing latent issue, unrelated to this file's own logic: this
+  // script dynamically imports lib/gtm-generate.ts, which imports
+  // lib/db/tool-types.ts -> lib/memoryDb.ts. memoryDb's constructor starts
+  // a real setInterval (autosave) that keeps a plain Node script alive
+  // forever unless it exits explicitly.
+  process.exit(failures > 0 ? 1 : 0);
 }
 
 main().catch(err => {

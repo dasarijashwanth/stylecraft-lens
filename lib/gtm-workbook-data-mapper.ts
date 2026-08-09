@@ -36,6 +36,10 @@ export interface GtmWorkbookMapperInput {
   headerSku: string | null; // resolved via lib/our-product-position.ts's resolveHeaderSku
   collection: string | null; // resolved via matchCatalogProductByName
   upc: string | null; // resolved via matchCatalogProductByName, or null -> "Awaiting internal input"
+  // GTM Multi-Template work — the real BEAUTY template's BOX ONLY tab has
+  // its own "SKU" row (absent from barber's BOX ONLY) — the project's own
+  // SKU (lib/db/projects.ts), same source headerSku is derived from.
+  sku?: string | null;
 }
 
 export interface WorkbookRepair {
@@ -157,6 +161,109 @@ const PRODUCT_KNOWLEDGE_STEPS: Step[] = [
   { kind: "field", label: "Included:", fieldId: "included_summary" },
 ];
 
+// ---- Product Knowledge — BEAUTY variant. Confirmed via live inspection of
+// the real uploaded beauty template that its Product Knowledge tab shares
+// an IDENTICAL row order with barber's from Core Consumer through Care
+// Directions (only "Collection" replaces barber's longer "New Line or
+// Current Collection?" label — same field, renamed on the template — and an
+// extra "COMPS" header row appears before "Comps for Buying Guide", handled
+// below), then diverges completely: no Blades/Lever/Guards/Charging at all,
+// replaced with Curling Irons/Flat Irons/Blow Dryer/(restricted) Motor/
+// Electrical & Power/Customizable Parts (identical to barber's Lids)/
+// Control Settings/beauty Included-in-Box items. See lib/gtm-field-
+// schema.ts's family-tagged fields this list targets.
+const PRODUCT_KNOWLEDGE_STEPS_BEAUTY: Step[] = [
+  { kind: "field", label: "Core Consumer", fieldId: "core_consumer" },
+  { kind: "field", label: "Why are we creating this item?", fieldId: "why_creating_item" },
+  { kind: "field", label: "What is the positioning statement?", fieldId: "positioning_statement" },
+  { kind: "field", label: "Product Name Origin", fieldId: "product_name_origin" },
+  { kind: "field", label: "How does this product name tie to the story?", fieldId: "name_story_tie" },
+  { kind: "field", label: "Collection", fieldId: "new_line_or_current" },
+  { kind: "field", label: "New Technology?", fieldId: "new_technology" },
+  { kind: "field", label: "Approved Pricing", fieldId: "approved_pricing" },
+  { kind: "field", label: "Good Better Best -Lineup", fieldId: "good_better_best" },
+  { kind: "field", label: "Good Better Best -Performance", fieldId: "good_better_best_performance" },
+  { kind: "field", label: "Hair Type", fieldId: "hair_type" },
+  { kind: "group", label: "Features (full list)", fieldIdPrefix: "features_full_list", total: 10, offset: 0 },
+  { kind: "field", label: "Up-sell (Sales play opportunity)", fieldId: "up_sell" },
+  { kind: "combinedRow", label: "Cross Sell Products", fieldIds: Array.from({ length: 5 }, (_, i) => `cross_sell_${i + 1}`) },
+  { kind: "field", label: "Reason to Buy", fieldId: "reason_to_buy" },
+  { kind: "field", label: "Expert Tip", fieldId: "expert_tip" },
+  { kind: "field", label: "Comparison Chart WEB ONLY", fieldId: "comparison_chart_web_only", writeNotes: false },
+  // Bare section-header row, no value cell of its own (confirmed via
+  // inspection) — an explicit skipRow so a future template change surfaces
+  // as an `unmapped` warning instead of silent drift, same discipline as
+  // Marketing Direction's "CHANNEL STRATEGY..." skipRow below.
+  { kind: "skipRow", label: "COMPS" },
+  { kind: "field", label: "Comps for Buying Guide", fieldId: "comps_buying_guide" },
+  { kind: "field", label: "Trademark Symbol", fieldId: "trademark_symbol" },
+  { kind: "field", label: "Warranty", fieldId: "warranty" },
+  { kind: "field", label: "Certification Needed", fieldId: "certification_needed" },
+  { kind: "field", label: "Rating Label", fieldId: "rating_label" },
+  { kind: "field", label: "Dieline", fieldId: "dieline" },
+  { kind: "field", label: "Box Type", fieldId: "box_type" },
+  { kind: "field", label: "Product LxWxH", fieldId: "product_lwh" },
+  { kind: "field", label: "Product Weight", fieldId: "product_weight" },
+  { kind: "field", label: "Box LxWxH", fieldId: "box_lwh" },
+  { kind: "field", label: "Measurement By", fieldId: "measurement_by" },
+  { kind: "field", label: "Box Weight", fieldId: "box_weight" },
+  { kind: "field", label: "Pallet Tier (Total)", fieldId: "pallet_tier_total" },
+  { kind: "field", label: "Pallets High", fieldId: "pallets_high" },
+  { kind: "field", label: "Product Title", fieldId: "product_title" },
+  { kind: "field", label: "Material", fieldId: "material" },
+  { kind: "group", label: "Top 6 Features in Priority Order", fieldIdPrefix: "top_6_features", total: 6, offset: 0 },
+  { kind: "group", label: "6 Icons for the Features", fieldIdPrefix: "feature_icons", total: 6, offset: 0 },
+  { kind: "field", label: "Care Directions", fieldId: "care_directions" },
+  // ---- Beauty-only suffix (confirmed via live inspection; no barber
+  // equivalent past this point) ----
+  { kind: "skipRow", label: "Curling Irons:" },
+  { kind: "field", label: "Barrel Material", fieldId: "barrel_material" },
+  { kind: "field", label: "Barrel Size", fieldId: "barrel_size" },
+  { kind: "field", label: "Barrel Length", fieldId: "barrel_length" },
+  { kind: "skipRow", label: "Flat Irons:" },
+  { kind: "field", label: "Plates", fieldId: "plate_material" },
+  { kind: "field", label: "Plate size", fieldId: "plate_size" },
+  { kind: "skipRow", label: "Blow Dryer:" },
+  { kind: "field", label: "# of Heat Settings", fieldId: "heat_settings_count" },
+  { kind: "field", label: "# of Speed Settings", fieldId: "speed_settings_count" },
+  // Real beauty Motor block only has these 4 rows (Run Time/Recharge Time/
+  // Speed have no row here — confirmed via inspection; those fields still
+  // exist in-app, just unmapped in the beauty export).
+  { kind: "field", label: "Motor Type", fieldId: "motor_type" },
+  { kind: "field", label: "RPM", fieldId: "motor_rpm" },
+  { kind: "field", label: "Noise level db", fieldId: "motor_noise_level_db" },
+  { kind: "field", label: "Noise level Description", fieldId: "motor_noise_level" },
+  { kind: "field", label: "Voltage", fieldId: "electrical_voltage" },
+  { kind: "field", label: "Dual Voltage", fieldId: "dual_voltage" },
+  { kind: "field", label: "Wattage", fieldId: "wattage" },
+  { kind: "field", label: "Swivel Cord", fieldId: "swivel_cord" },
+  { kind: "field", label: "Power Cord Length", fieldId: "power_cord_length" },
+  // "CUSTOMIZABLE PARTS / Qty / Colors" — identical labels to barber's own
+  // Lids section (SHARED field ids, confirmed via inspection).
+  { kind: "field", label: "Qty", fieldId: "lids_qty" },
+  { kind: "field", label: "Colors", fieldId: "lids_colors" },
+  { kind: "field", label: "Heat Range", fieldId: "control_heat_range" },
+  { kind: "field", label: "Speed", fieldId: "control_speed_setting" },
+  { kind: "field", label: "Temp Range", fieldId: "control_temp_range" },
+  { kind: "field", label: "Color", fieldId: "control_color" },
+  { kind: "field", label: "Lock Feature", fieldId: "control_lock_feature" },
+  { kind: "field", label: "Off/On", fieldId: "control_off_on" },
+  { kind: "field", label: "Cool Shot", fieldId: "control_cool_shot" },
+  { kind: "field", label: "Auto Shut Off", fieldId: "control_auto_shut_off" },
+  { kind: "field", label: "Auto Release", fieldId: "control_auto_release_heat_timer" },
+  { kind: "field", label: "Heat Up Time", fieldId: "control_heat_up_time" },
+  { kind: "field", label: "Travel Bag/Case", fieldId: "travel_bag_case" },
+  { kind: "field", label: "Heat Glove", fieldId: "heat_glove" },
+  { kind: "field", label: "Extra Filters", fieldId: "extra_filters" },
+  { kind: "field", label: "List Attachments below", fieldId: "attachments_list" },
+  // Real template's final row ("Distribted By:", a typo) has no data model
+  // yet — genuinely unmapped, per the ticket's own "list for confirmation
+  // rather than silently drop" instruction. No Step entry: the forward scan
+  // simply never searches for it, so it surfaces nowhere and writes nothing
+  // (a deliberate no-op, not a bug) — flagged here in this comment as the
+  // one open item from the inspection this file is built from.
+];
+
 // ---- BOX ONLY (Item=A, Owner=B, Copy=C, Notes=D) — most values re-export
 // an existing Product Knowledge/catalog fact rather than needing their own
 // storage; see supplyBoxOnlyFields() below for how those get folded in
@@ -172,6 +279,35 @@ const BOX_ONLY_STEPS: Step[] = [
   { kind: "field", label: "Includes", fieldId: "included_summary" },
   { kind: "field", label: "Certifications", fieldId: "certification_needed" },
   { kind: "field", label: "Charger Voltage", fieldId: "charging_voltage" },
+];
+
+// ---- BOX ONLY — BEAUTY variant. Confirmed via inspection: shares Product
+// Name/Collection Name/Main Statement/Features/Icons/Includes/UPC/Warranty/
+// Certifications with barber (same field ids reused), adds Product
+// Description, a "SKU" row (barber has none), and reuses the beauty-only
+// "Consumer Facing Feature Bullets - LONG" group (identical label/helper
+// text to Final Copy's own — real content duplication in the template
+// itself, not a mapping error). "Charger Voltage" maps to the beauty
+// Electrical & Power section's Voltage field, not barber's charging_voltage
+// (different concept — see lib/gtm-field-schema.ts). Several real rows
+// (Three Call Outs, Infographic Details, Made In, Social Handles, Copyright
+// Year, Distributed By) have no existing field/content decision behind them
+// — genuinely unmapped, left with no Step entry rather than guessed, per
+// the ticket's own instruction.
+const BOX_ONLY_STEPS_BEAUTY: Step[] = [
+  { kind: "field", label: "Product Name", fieldId: "box_product_name" },
+  { kind: "field", label: "SKU", fieldId: "box_sku" },
+  { kind: "field", label: "Collection Name", fieldId: "box_collection_name" },
+  { kind: "field", label: "Product Description", fieldId: "product_description" },
+  { kind: "field", label: "Main Statement", fieldId: "box_main_statement" },
+  { kind: "group", label: "Features (6 Max)", fieldIdPrefix: "box_feature", total: 6, offset: 1 },
+  { kind: "group", label: "Icons (6 Max)", fieldIdPrefix: "feature_icons", total: 6, offset: 1 },
+  { kind: "group", label: "Consumer Facing Feature Bullets - LONG", fieldIdPrefix: "bullet_long", total: 6, offset: 0 },
+  { kind: "field", label: "Includes", fieldId: "included_summary" },
+  { kind: "field", label: "UPC", fieldId: "box_upc" },
+  { kind: "field", label: "Warranty", fieldId: "warranty" },
+  { kind: "field", label: "Charger Voltage", fieldId: "electrical_voltage" },
+  { kind: "field", label: "Certifications", fieldId: "certification_needed" },
 ];
 
 // ---- Product FAQ (Item=A, Value=B) — Q:/A: pairs are matched by position
@@ -353,6 +489,9 @@ function supplyBoxOnlyFields(input: GtmWorkbookMapperInput): WorkbookFields {
     box_product_name: { answer: answerOf(input.fields, "product_title") },
     box_collection_name: { answer: input.collection || "" },
     box_upc: { answer: input.upc || "Awaiting internal input" },
+    // Beauty-only BOX ONLY row (see BOX_ONLY_STEPS_BEAUTY) — harmless no-op
+    // for barber, whose BOX_ONLY_STEPS never references box_sku.
+    box_sku: { answer: input.sku || "Awaiting internal input" },
   };
 }
 
@@ -366,16 +505,24 @@ function applyProductTitleHeaderSku(fields: WorkbookFields, headerSku: string | 
   return { ...fields, product_title: { ...fields.product_title, answer: `${title} — ${headerSku}` } };
 }
 
-export function renderGtmWorkbook(templateBuffer: Buffer, input: GtmWorkbookMapperInput): GtmWorkbookRenderResult {
+// GTM Multi-Template work — Marketing Direction/Product FAQ/Final Copy are
+// confirmed (via live inspection of both uploaded templates) to share
+// IDENTICAL row order/labels between barber and beauty, so they need no
+// per-industry variant; only Product Knowledge and BOX ONLY genuinely
+// diverge (see the _BEAUTY arrays above).
+export function renderGtmWorkbook(templateBuffer: Buffer, input: GtmWorkbookMapperInput, industry: "barber" | "beauty" = "barber"): GtmWorkbookRenderResult {
   const workbook = openGtmWorkbook(templateBuffer);
   const repairs: WorkbookRepair[] = [];
   const unmapped: { sheet: string; label: string }[] = [];
 
+  const productKnowledgeSteps = industry === "beauty" ? PRODUCT_KNOWLEDGE_STEPS_BEAUTY : PRODUCT_KNOWLEDGE_STEPS;
+  const boxOnlySteps = industry === "beauty" ? BOX_ONLY_STEPS_BEAUTY : BOX_ONLY_STEPS;
+
   const pkFields = applyProductTitleHeaderSku(input.fields, input.headerSku);
-  applySteps(workbook, "Product Knowledge", "A", "C", "D", PRODUCT_KNOWLEDGE_STEPS, pkFields, repairs, unmapped);
+  applySteps(workbook, "Product Knowledge", "A", "C", "D", productKnowledgeSteps, pkFields, repairs, unmapped);
 
   const boxFields = supplyBoxOnlyFields(input);
-  applySteps(workbook, "BOX ONLY", "A", "C", null, BOX_ONLY_STEPS, boxFields, repairs, unmapped);
+  applySteps(workbook, "BOX ONLY", "A", "C", null, boxOnlySteps, boxFields, repairs, unmapped);
 
   applySteps(workbook, "Marketing Direction", "A", "C", "D", MARKETING_DIRECTION_STEPS, input.fields, repairs, unmapped);
 
@@ -408,4 +555,23 @@ export function renderGtmWorkbook(templateBuffer: Buffer, input: GtmWorkbookMapp
   applySteps(workbook, "Product FAQ", "A", "B", null, FAQ_LABELED_STEPS, input.fields, repairs, unmapped);
 
   return { buffer: generateGtmWorkbookBuffer(workbook), repairs, unmapped };
+}
+
+// GTM Multi-Template work — the BARBER template's own known labels, used as
+// the "reference" side of a newly-uploaded (beauty) template's upload-time
+// inspection diff (lib/gtm-workbook-inspection.ts). Barber is the reference
+// because it's today's already-proven, already-integrated template.
+function stepsToLabels(steps: Step[]): string[] {
+  return steps.map(s => s.label);
+}
+
+export function getReferenceLabelsForSheet(sheetName: string): string[] {
+  switch (sheetName) {
+    case "Product Knowledge": return stepsToLabels(PRODUCT_KNOWLEDGE_STEPS);
+    case "BOX ONLY": return stepsToLabels(BOX_ONLY_STEPS);
+    case "Marketing Direction": return stepsToLabels(MARKETING_DIRECTION_STEPS);
+    case "Product FAQ": return stepsToLabels(FAQ_LABELED_STEPS);
+    case "Final Copy": return stepsToLabels(FINAL_COPY_STEPS);
+    default: return [];
+  }
 }

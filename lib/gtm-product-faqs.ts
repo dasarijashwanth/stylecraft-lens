@@ -8,11 +8,12 @@
 // Anthropic/Claude was removed from this codebase after its account ran
 // out of credit balance and isn't reintroduced for this one feature.
 import { callAiForJson } from "./ai-json-call";
-import { GtmFieldAnswer } from "./gtm-field-schema";
+import { GtmFieldAnswer, resolveGtmFamily } from "./gtm-field-schema";
 import { isRealAnswer } from "./field-answer-state";
 import type { GtmSources } from "./gtm-generate";
 import { getToneDirective } from "./brand-voice";
 import { checkVoiceCompliance, buildVoiceCorrectionInstruction } from "./ai-generation-guard";
+import { listToolTypes } from "./db/tool-types";
 
 // The GTM fields that count as "grounded facts" for FAQ writing — features,
 // motor, blades, guards, charging, care, warranty/certification — matching
@@ -71,15 +72,29 @@ interface FaqPair {
   answer: string;
 }
 
+// GTM Multi-Template work — the barber wording ("blade care/maintenance and
+// replacement, compatibility (blades/guards/ecosystem)") makes no sense for
+// a beauty product (no blades/guards). Swapped for heat/plate-safety
+// wording per the ticket's Part 3.2. Both variants keep the same
+// battery/charging + warranty/who-it's-for + differentiation coverage —
+// only the tool-specific maintenance clause changes.
+function faqCoverageTopics(family: "clipper_trimmer_shaver" | "beauty" | undefined): string {
+  if (family === "beauty") {
+    return "1-2 usage/technique questions, battery/charging, heat/plate safety and temperature guidance, plate/barrel care and maintenance, warranty/support, who it's for (pro vs home), noise/comfort where relevant, and 1-2 differentiation questions a buyer comparing it to competitors would ask (informed by the category review themes below — never name competitor brands in answers; frame as category comparisons)";
+  }
+  return "1-2 usage/technique questions, battery/charging, blade care/maintenance and replacement, compatibility (blades/guards/ecosystem), warranty/support, who it's for (pro vs home), noise/comfort where relevant, and 1-2 differentiation questions a buyer comparing it to competitors would ask (informed by the category review themes below — never name competitor brands in answers; frame as category comparisons)";
+}
+
 async function callFaqGeneration(
   productName: string,
   factsBlock: string,
   reviewThemes: string[],
   voiceBlock: string,
   tdsGroundingBlock: string = "",
-  retryInstruction?: string
+  retryInstruction?: string,
+  family?: "clipper_trimmer_shaver" | "beauty"
 ): Promise<FaqPair[]> {
-  const systemInstruction = `Write 10 consumer/barber FAQs for ${productName}. Cover, at minimum: 1-2 usage/technique questions, battery/charging, blade care/maintenance and replacement, compatibility (blades/guards/ecosystem), warranty/support, who it's for (pro vs home), noise/comfort where relevant, and 1-2 differentiation questions a buyer comparing it to competitors would ask (informed by the category review themes below — never name competitor brands in answers; frame as category comparisons). Answers: 2-4 sentences, factual, grounded ONLY in the facts below. Each question must read like a real customer question.
+  const systemInstruction = `Write 10 consumer FAQs for ${productName}. Cover, at minimum: ${faqCoverageTopics(family)}. Answers: 2-4 sentences, factual, grounded ONLY in the facts below. Each question must read like a real customer question.
 
 FACTS:
 ${factsBlock}
@@ -166,9 +181,14 @@ export async function generateProductFaqs(
   const reviewThemes = competitors
     .flatMap(c => [...(c.top_positive_review_themes || []), ...(c.top_negative_review_themes || [])])
     .slice(0, 10);
+  // GTM Multi-Template work — resolved once here (not threaded through the
+  // route/caller) since GtmSources already carries everything resolveGtmFamily
+  // needs; a beauty product gets heat/plate-safety topics instead of
+  // blade-care ones — see faqCoverageTopics above.
+  const family = resolveGtmFamily(sources.project, await listToolTypes());
 
   if (factsBlock) {
-    const faqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, tdsGroundingBlock);
+    const faqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, tdsGroundingBlock, undefined, family);
     const voiceChecks = faqs.map(f => checkVoiceCompliance(f.answer, "support"));
     faqs.forEach((f, i) => { f.answer = voiceChecks[i].text; });
 
@@ -183,7 +203,7 @@ export async function generateProductFaqs(
         violatingIndices.some(v => v.voice.length > 0) &&
           buildVoiceCorrectionInstruction(violatingIndices.flatMap(v => v.voice)),
       ].filter(Boolean).join(" ");
-      const retryFaqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, tdsGroundingBlock, combinedInstructions);
+      const retryFaqs = await callFaqGeneration(productName, factsBlock, reviewThemes, voiceBlock, tdsGroundingBlock, combinedInstructions, family);
       violatingIndices.forEach(v => {
         const replacement = retryFaqs[v.i];
         if (!replacement) return;

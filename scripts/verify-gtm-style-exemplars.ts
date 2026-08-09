@@ -165,7 +165,11 @@ async function main() {
   assert(resolveHeaderSku("Some Ad-Hoc Product Nobody Catalogued", catalogForSku, null) === null, "no catalog match and no project sku resolves to null (no header suffix at all)");
 
   console.log(`\n${passes} passed, ${failures} failed`);
-  if (failures > 0) process.exit(1);
+  // Pre-existing latent issue, unrelated to this file's own logic: a
+  // dynamic import in this script pulls in lib/memoryDb.ts (transitively),
+  // whose constructor starts a real setInterval (autosave) that keeps a
+  // plain Node script alive forever unless it exits explicitly.
+  process.exit(failures > 0 ? 1 : 0);
 }
 
 main().catch(err => {
