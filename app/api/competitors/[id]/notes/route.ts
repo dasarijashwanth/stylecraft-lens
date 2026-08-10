@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
+import { isSupabaseConfigured } from "@/lib/supabase";
 
 export async function POST(
   request: Request,
@@ -12,14 +13,32 @@ export async function POST(
     const { id: competitorId } = params;
     const body = await request.json();
     const { content } = body;
-    
+
     if (!content || typeof content !== "string" || content.trim() === "") {
       return NextResponse.json(
         { error: "VALIDATION_FAILED", message: "Note content cannot be empty" },
         { status: 400 }
       );
     }
-    
+
+    // Security-audit-discovered feature gap (not itself a vulnerability —
+    // it already failed closed): competitor notes were only ever built
+    // against Prisma/memoryDb, and no `competitor_notes` table exists in
+    // Supabase (this app's real production store). In Supabase-configured
+    // mode, `prisma.competitor.findUnique` below always throws (lib/db.ts's
+    // Proxy), falling through to memoryDb — an empty, non-persistent,
+    // per-serverless-instance array with no relation to the real Supabase
+    // competitor rows, so the ownership check correctly 404s today rather
+    // than silently "succeeding" into a note that vanishes on the next
+    // cold start. Returning an honest, explicit error here instead of
+    // letting that fallback quietly pretend to work.
+    if (isSupabaseConfigured) {
+      return NextResponse.json(
+        { error: "NOT_IMPLEMENTED", message: "Competitor notes aren't available yet in this deployment." },
+        { status: 501 }
+      );
+    }
+
     try {
       // 1. Try PostgreSQL
       const competitor = await prisma.competitor.findUnique({

@@ -9,6 +9,7 @@ import { isNewsUpdatesEnabled } from "@/lib/feature-flags";
 import { logCall } from "@/lib/obs";
 import type { ToolType } from "@/lib/tool-type-taxonomy";
 import { listToolTypes } from "@/lib/db/tool-types";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Duplicated deliberately (matches app/api/amazon/reviews-analysis/[asin]/
 // route.ts's own copy) rather than sharing a module — a tiny, DB-touching
@@ -87,7 +88,17 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     // No per-user ownership concept on this shared, ASIN-keyed cache —
     // middleware.ts already blocks anonymous /api/** requests; this is
     // defense-in-depth consistency with the rest of the codebase.
-    await getAuthSession();
+    const session = await getAuthSession();
+
+    // Security audit fix — same reasoning as the reviews-analysis sibling
+    // route: ?refresh=true bypasses the 24h cache and costs a real OpenAI
+    // web_search call.
+    if (forceRefresh) {
+      const rateLimit = await checkRateLimit({ eventType: "product_news_refresh", userId: session.userId, maxAttempts: 20, windowMinutes: 60 });
+      if (rateLimit.limited) {
+        return NextResponse.json({ error: "RATE_LIMITED", message: `Too many forced refreshes — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+      }
+    }
 
     // Defense-in-depth: components/analyze/CompetitorCard.tsx already
     // doesn't call this route at all when the flag is off — this guard

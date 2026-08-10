@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getAuthSession } from "@/lib/auth";
 import { addCatalogProduct, updateCatalogProduct } from "@/lib/db/catalog-products";
 import { NormalizedCatalogRow } from "@/lib/catalog-import";
@@ -14,6 +15,37 @@ interface ConfirmRow {
   existingId?: string;
 }
 
+// Security audit fix — this route (already admin-gated) previously trusted
+// the client-submitted JSON body's row shape with only a presence check on
+// 4 fields (`!row?.name || ...`) — no type check on any field, no length
+// caps on free-text columns, nothing stopping a hand-crafted request from
+// writing malformed data (e.g. targetPrice as a non-numeric string) that
+// bypasses whatever the /import preview step actually computed. Kept
+// intentionally lenient on industry/targetMarket (real string, not a
+// strict enum) since this ingests legacy/historical spreadsheet data that
+// doesn't always match the newer 2-value enum used by the analyze form.
+const ConfirmRowSchema = z.object({
+  row: z.looseObject({
+    name: z.string().min(1).max(255),
+    industry: z.string().min(1).max(100),
+    targetMarket: z.string().min(1).max(50),
+    toolType: z.string().min(1).max(100),
+    targetPrice: z.number().nullable().optional(),
+    description: z.string().max(2000).nullable().optional(),
+    motorFamily: z.string().max(100).nullable().optional(),
+    motorBranded: z.string().max(200).nullable().optional(),
+    heatTechFamily: z.string().max(100).nullable().optional(),
+    heatTechBranded: z.string().max(200).nullable().optional(),
+    brand: z.string().max(200).nullable().optional(),
+    sku: z.string().max(100).nullable().optional(),
+    upc: z.string().max(20).nullable().optional(),
+    importFlags: z.array(z.string().max(50)).max(20).optional(),
+    source: z.string().max(100).optional(),
+  }).passthrough(),
+  existingId: z.string().max(100).optional(),
+});
+const ConfirmBodySchema = z.object({ rows: z.array(ConfirmRowSchema).max(5000) });
+
 // Applies exactly the rows the admin reviewed and kept checked in the
 // import preview (app/api/admin/catalog-products/import) — an existingId
 // present means update that row, absent means insert a new one. Rows the
@@ -24,10 +56,12 @@ export async function POST(request: Request) {
   try {
     const session = await getAuthSession();
     requireAdmin(session.role);
-    const { rows } = await request.json() as { rows: ConfirmRow[] };
-    if (!Array.isArray(rows)) {
-      return NextResponse.json({ error: "rows must be an array" }, { status: 400 });
+    const body = await request.json();
+    const validation = ConfirmBodySchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json({ error: "VALIDATION_FAILED", message: "Invalid row data", details: validation.error.flatten() }, { status: 400 });
     }
+    const rows = validation.data.rows as ConfirmRow[];
 
     let inserted = 0;
     let updated = 0;

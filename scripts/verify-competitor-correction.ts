@@ -78,20 +78,30 @@ async function main() {
   assert(resolveAsinFromInput("https://www.amazon.com/gp/product/B0NEWGOOD1") === "B0NEWGOOD1", "a /gp/product/ URL resolves to its ASIN");
   assert(resolveAsinFromInput("not an asin or url") === null, "unrecognizable input resolves to null, never a guess");
 
-  console.log("\n[2] buildCorrectionSignals — 2+ independent corrections block, exactly 1 penalizes");
+  console.log("\n[2] buildCorrectionSignals — 2+ independent (DISTINCT-USER) corrections block, exactly 1 penalizes");
   {
+    // Security-audit fix regression coverage: "independent" means 2+
+    // DISTINCT users, not 2+ raw rows — a single account submitting two
+    // corrections against the same ASIN must never hard-block it (see
+    // lib/analysisEngine.ts's buildCorrectionSignals header comment).
     const now = new Date().toISOString();
     const fixture: any[] = [
-      { old_asin: "B0BLOCKED01", reason: "wrong_product", tool_type: "trimmer" },
-      { old_asin: "B0BLOCKED01", reason: "discontinued", tool_type: "trimmer" },
-      { old_asin: "B0PENALIZED", reason: "wrong_product", tool_type: "trimmer" },
-      { old_asin: "B0IGNOREDXX", reason: "wrong_model", tool_type: "trimmer" },
-    ].map(c => ({ ...c, id: "x", analysis_id: null, project_id: null, motor_family: null, heat_tech_family: null, price_band: null, old_title: null, new_asin: "B0X", new_title: null, note: null, user_id: null, expired_at: null, created_at: now }));
+      { id: "corr_1", old_asin: "B0BLOCKED01", reason: "wrong_product", tool_type: "trimmer", user_id: "user_a" },
+      { id: "corr_2", old_asin: "B0BLOCKED01", reason: "discontinued", tool_type: "trimmer", user_id: "user_b" },
+      { id: "corr_3", old_asin: "B0PENALIZED", reason: "wrong_product", tool_type: "trimmer", user_id: "user_c" },
+      { id: "corr_4", old_asin: "B0IGNOREDXX", reason: "wrong_model", tool_type: "trimmer", user_id: "user_d" },
+      // Same account submitting two corrections against ITS OWN previously-
+      // reported ASIN must NOT reach the block threshold on its own.
+      { id: "corr_5", old_asin: "B0SINGLEUSR", reason: "wrong_product", tool_type: "trimmer", user_id: "user_e" },
+      { id: "corr_6", old_asin: "B0SINGLEUSR", reason: "discontinued", tool_type: "trimmer", user_id: "user_e" },
+    ].map(c => ({ ...c, analysis_id: null, project_id: null, motor_family: null, heat_tech_family: null, price_band: null, old_title: null, new_asin: "B0X", new_title: null, note: null, expired_at: null, created_at: now }));
     const signals = buildCorrectionSignals(fixture);
-    assert(signals.blockedAsins.has("B0BLOCKED01"), "an ASIN with 2 independent wrong_product/discontinued corrections is blocked");
+    assert(signals.blockedAsins.has("B0BLOCKED01"), "an ASIN with 2 DISTINCT-user wrong_product/discontinued corrections is blocked");
     assert(signals.penalizedAsins.has("B0PENALIZED"), "an ASIN with exactly 1 correction is penalized, not blocked");
     assert(!signals.blockedAsins.has("B0PENALIZED"), "a penalized ASIN is never also blocked");
     assert(!signals.blockedAsins.has("B0IGNOREDXX") && !signals.penalizedAsins.has("B0IGNOREDXX"), "a wrong_model correction (not wrong_product/discontinued) contributes to neither signal");
+    assert(!signals.blockedAsins.has("B0SINGLEUSR"), "2 corrections from the SAME single user never hard-block (poisoning fix)");
+    assert(signals.penalizedAsins.has("B0SINGLEUSR"), "...but it's still penalized, same as any other single-source signal");
   }
 
   console.log("\n[3] buildCorrectionsGuidance — prior-rejection/preference text, capped to 10 entries");

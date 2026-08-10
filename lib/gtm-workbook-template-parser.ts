@@ -6,6 +6,7 @@
 // renumber these). Same "regex over raw XML, no full parse" discipline as
 // lib/deck-template-parser.ts's getPresentationOrderSlides.
 import PizZip from "pizzip";
+import { assertZipSafe } from "./zip-safety";
 
 export interface GtmWorkbookSheetSummary {
   sheetNames: string[];
@@ -63,8 +64,12 @@ export function buildSheetSummary(zip: PizZip): GtmWorkbookSheetSummary {
 
 // Called at upload/finalize time — a template missing any of the 3 required
 // sheets is rejected before it's ever stored as a candidate active template.
+// Security audit fix — assertZipSafe (thrown ZipBombError propagates to the
+// caller's try/catch, which the upload/finalize routes already have) runs
+// before buildSheetSummary ever reads any entry's content.
 export function parseGtmWorkbookTemplate(buffer: Buffer): GtmWorkbookSheetSummary {
   const zip = new PizZip(buffer);
+  assertZipSafe(zip);
   return buildSheetSummary(zip);
 }
 

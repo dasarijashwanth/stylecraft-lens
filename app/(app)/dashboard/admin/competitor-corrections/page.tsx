@@ -36,12 +36,20 @@ const REASON_LABELS: Record<string, string> = {
 
 // Same counting rule as lib/analysisEngine.ts's buildCorrectionSignals —
 // mirrored here purely for DISPLAY (what effect a correction currently
-// has), never fed back into scoring itself.
+// has), never fed back into scoring itself. Security-audit fix: "2+
+// INDEPENDENT corrections" means 2+ DISTINCT users, not 2+ raw rows (a
+// single account submitting two corrections against the same ASIN no
+// longer hard-blocks it) — this display must count the same way the real
+// engine does, or it misleads an admin about what's actually happening.
 function computeEffect(all: Correction[], c: Correction): string {
   if (c.expired_at) return "No current effect (expired)";
   if (c.reason === "wrong_product" || c.reason === "discontinued") {
-    const activeCount = all.filter(x => !x.expired_at && (x.reason === "wrong_product" || x.reason === "discontinued") && x.old_asin === c.old_asin).length;
-    return activeCount >= 2 ? "Blocked" : "Penalized";
+    const distinctUsers = new Set(
+      all
+        .filter(x => !x.expired_at && (x.reason === "wrong_product" || x.reason === "discontinued") && x.old_asin === c.old_asin)
+        .map(x => x.user_id || `anon:${x.id}`)
+    );
+    return distinctUsers.size >= 2 ? "Blocked" : "Penalized";
   }
   if (c.reason === "better_competitor") return "Preferred";
   return "No current effect";
@@ -69,7 +77,15 @@ export default function CompetitorCorrectionsAdminPage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  // Security audit fix (Low, consistency) — gate on the resolved role like
+  // every other admin page does, instead of firing unconditionally on
+  // mount. The server route already independently enforces requireAdmin
+  // (a non-admin's fetch always 403'd, so this was never a real data leak)
+  // — this just aligns the client with the rest of the admin dashboard for
+  // defense-in-depth consistency.
+  useEffect(() => {
+    if (user && (user.role === "OWNER" || user.role === "ADMIN")) load();
+  }, [user]);
 
   async function handleToggle(id: string, action: "expire" | "reactivate") {
     setBusyId(id);

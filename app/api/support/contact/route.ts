@@ -106,7 +106,10 @@ export async function POST(req: NextRequest) {
     const adminResult = await sendSupportAdminEmail(record);
     await updateEmailStatus(record.id, adminResult.status, adminResult.error ?? null);
 
-    const ackResult = await sendSupportAckEmail(record);
+    // Security audit fix — always ack to the real, session-authenticated
+    // email, never the client-editable "contact email" field (see
+    // sendSupportAckEmail's own header comment).
+    const ackResult = await sendSupportAckEmail(record, session.email);
     await updateAckEmailStatus(record.id, ackResult.status);
 
     return NextResponse.json({ ok: true, id: record.id, emailStatus: adminResult.status });

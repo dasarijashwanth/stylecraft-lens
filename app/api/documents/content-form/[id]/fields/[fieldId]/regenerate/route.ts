@@ -10,12 +10,20 @@ import { listCatalogProducts } from "@/lib/db/catalog-products";
 import { matchCatalogProductByName } from "@/lib/our-product-position";
 import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock } from "@/lib/brand-voice";
 import { getUploadedTdsContext, buildTdsGroundingBlock } from "@/lib/gtm-uploaded-tds";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 45;
 
 export async function POST(req: NextRequest, { params }: { params: { id: string; fieldId: string } }) {
   try {
     const session = await getAuthSession();
+
+    // Security audit fix — same reasoning as the GTM field-regenerate sibling.
+    const rateLimit = await checkRateLimit({ eventType: "content_form_field_regenerate", userId: session.userId, maxAttempts: 60, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: `Too many field regenerations — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+    }
+
     const document = await getDocumentById(params.id);
     if (!document) return NextResponse.json({ error: "Document not found" }, { status: 404 });
 

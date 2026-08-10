@@ -636,11 +636,43 @@ export async function linkReportToProject(reportId: string, projectId: string, u
   }
 }
 
+// Security audit fix — the route (app/api/reports/[id]/route.ts PATCH)
+// used to pass the ENTIRE client-supplied request body straight into
+// `.update(updates)` with no column allowlist. Since the WHERE clause only
+// scopes by (id, user_id) — not by which COLUMNS are being set — a caller
+// updating their OWN report could reassign its `analysis_id`/`project_id`
+// FK columns to point at another org's real analysis/project uuid, then a
+// follow-up GET's join (`getReport`, below) would return that victim data
+// embedded in the attacker's own report response — a mass-assignment IDOR.
+// Fixed by allowlisting exactly the columns any legitimate caller ever
+// sends (confirmed by grepping every PATCH call site in the app: the
+// report-editing pages only ever send one of the 4 content-blob keys, or
+// `{status: "EXPORTED"}`) — `analysis_id`/`project_id`/`user_id`/`org_id`
+// are never client-settable via this route, full stop.
+const REPORT_UPDATABLE_FIELDS = new Set([
+  "title",
+  "status",
+  "competitive_analysis",
+  "pricing_analysis",
+  "go_to_market",
+  "content_form",
+]);
+
+function pickReportUpdatableFields(updates: any): Record<string, any> {
+  const safe: Record<string, any> = {};
+  for (const [key, value] of Object.entries(updates || {})) {
+    if (REPORT_UPDATABLE_FIELDS.has(key)) safe[key] = value;
+  }
+  return safe;
+}
+
 export async function updateReport(reportId: string, userId: string, updates: any, orgId?: string) {
+  const safeUpdates = pickReportUpdatableFields(updates);
+
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("reports")
-      .update(updates)
+      .update(safeUpdates)
       .eq("id", reportId)
       .eq("user_id", userId)
       .select()
@@ -653,8 +685,11 @@ export async function updateReport(reportId: string, userId: string, updates: an
   // Translate the Supabase-shaped snake_case relational keys into the
   // internal camelCase fields used by Prisma/memoryDb. Content-blob keys
   // (competitive_analysis, pricing_analysis, go_to_market, content_form)
-  // and title/status pass through unchanged.
-  const { project_id, analysis_id, ...rest } = updates;
+  // and title/status pass through unchanged. project_id/analysis_id are
+  // never in `safeUpdates` (see REPORT_UPDATABLE_FIELDS above), so `rest`
+  // below can never carry them — the destructure is kept only so this
+  // fallback's shape still matches the Prisma model's own field names.
+  const { project_id, analysis_id, ...rest } = safeUpdates;
   const prismaData: any = { ...rest };
   if (project_id !== undefined) prismaData.projectId = project_id;
 

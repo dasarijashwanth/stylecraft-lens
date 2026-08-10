@@ -17,6 +17,7 @@
 import PizZip from "pizzip";
 import { DeckTokenKind, DeckTokenOccurrence } from "./deck-types";
 import { normalizeSplitTokenRuns } from "./deck-run-merge";
+import { assertZipSafe } from "./zip-safety";
 
 export interface ParsedDeckToken {
   token: string;
@@ -163,6 +164,9 @@ function addOccurrence(
 
 export async function parseDeckTemplate(fileBuffer: Buffer): Promise<ParsedDeckTemplate> {
   const zip = new PizZip(fileBuffer);
+  // Security audit fix — see lib/zip-safety.ts's header comment. Admin-only
+  // upload narrows likelihood but not the underlying flaw.
+  assertZipSafe(zip);
   const slides = getPresentationOrderSlides(zip);
 
   // Repair any {{token}} PowerPoint split across multiple XML runs BEFORE

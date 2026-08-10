@@ -142,7 +142,22 @@ export async function sendSupportAdminEmail(m: SupportMessageRow): Promise<{ sta
 }
 
 // Best-effort, single attempt — never blocks the user's success response.
-export async function sendSupportAckEmail(m: SupportMessageRow): Promise<{ status: "sent" | "failed"; error?: string }> {
+//
+// Security audit fix — `m.email` is a client-supplied "contact email" field
+// (the submitter can freely type any address, a legitimate "reply to a
+// different address" feature per the form's own "We reply directly to your
+// email" copy) — but automatically SENDING to it made this an unauthenticated
+// email relay: any signed-in account (even a low-trust one) could target an
+// arbitrary third party with an attacker-chosen topic/message, delivered as
+// a legitimate-looking automated confirmation from this app's real sending
+// domain, rate-limited only to 5/hour. `verifiedRecipientEmail` (the
+// caller's REAL, session-authenticated email — never client-supplied) is
+// used instead when provided, so the automated ack always lands on an
+// account the sender actually controls; the "reply to a different address"
+// intent still works via sendSupportAdminEmail's `replyTo` below, which
+// requires a human support staffer to actually choose to reply there, not
+// an automated system-fired send to an arbitrary target.
+export async function sendSupportAckEmail(m: SupportMessageRow, verifiedRecipientEmail?: string): Promise<{ status: "sent" | "failed"; error?: string }> {
   const { subject, html, text } = buildAckEmail(m);
-  return sendWithRetry({ to: m.email, subject, html, text }, 1);
+  return sendWithRetry({ to: verifiedRecipientEmail || m.email, subject, html, text }, 1);
 }

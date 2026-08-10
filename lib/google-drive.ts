@@ -97,10 +97,19 @@ export async function uploadToDrive({
           fields: "id, webViewLink",
         });
         return { fileId: updated.data.id!, webViewLink: updated.data.webViewLink! };
-      } catch (updateErr) {
+      } catch (updateErr: any) {
         // The file may have been deleted/moved out from under us in Drive —
         // fall through to creating a fresh one rather than failing outright.
-        console.warn("Drive file update failed, creating a new file instead:", updateErr);
+        // Security audit fix — never log the raw error object: googleapis'
+        // GaxiosError carries the full outgoing request (incl. the live
+        // Bearer access token derived from the one shared GOOGLE_REFRESH_
+        // TOKEN this whole app's Drive integration uses) as an enumerable
+        // own property, which Node's default console.warn formatting would
+        // print in full. Only safe, non-credential fields.
+        console.warn("Drive file update failed, creating a new file instead:", {
+          message: updateErr?.message,
+          status: updateErr?.status || updateErr?.code,
+        });
       }
     }
 
@@ -126,7 +135,12 @@ export async function uploadToDrive({
       webViewLink: file.data.webViewLink!,
     };
   } catch (err: any) {
-    console.warn("Google Drive live upload error, using fallback URL:", err);
+    // Security audit fix — see the identical comment above; never log the
+    // raw SDK error object (could carry a live access token).
+    console.warn("Google Drive live upload error, using fallback URL:", {
+      message: err?.message,
+      status: err?.status || err?.code,
+    });
     return {
       fileId: `fallback_drive_${Date.now()}`,
       webViewLink: `https://drive.google.com/file/d/fallback_${Date.now()}/view?usp=sharing`

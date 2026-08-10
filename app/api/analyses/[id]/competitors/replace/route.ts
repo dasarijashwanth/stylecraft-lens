@@ -3,6 +3,7 @@ import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
 import { replaceCompetitor, resolveAsinFromInput } from "@/lib/analysisEngine";
 import { CompetitorReplaceSchema } from "@/lib/validations";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Executes a confirmed ASIN swap: forced-fresh Rainforest refetch, in-place
 // rebuild of exactly this competitor (lib/analysisEngine.ts's
@@ -24,6 +25,17 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     if (existing.user_id !== session.userId) {
       return NextResponse.json({ error: "FORBIDDEN", message: "Not your analysis" }, { status: 403 });
+    }
+
+    // Security audit fix — forces a fresh Rainforest refetch (real API
+    // cost) and writes a competitor_corrections row every call; that table
+    // is a cross-org shared signal (see lib/analysisEngine.ts's
+    // buildCorrectionSignals fix), so this also bounds how fast one
+    // account can contribute correction volume even after the
+    // distinct-user-count fix closes the single-account hard-block path.
+    const rateLimit = await checkRateLimit({ eventType: "competitor_replace", userId: session.userId, maxAttempts: 30, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: `Too many competitor replacements — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
     }
 
     const { oldAsin, asinOrUrl, reason, note } = validation.data;

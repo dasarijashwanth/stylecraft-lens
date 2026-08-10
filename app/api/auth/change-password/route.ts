@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { validatePassword } from "@/lib/password-policy";
 import { logAuthEvent } from "@/lib/db/auth-events";
 import { getClientIp } from "@/lib/request-ip";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Shared by both the forced /change-password redirect (Shell.tsx, when
 // profiles.must_change_password is true) and the real "Change Password"
@@ -23,6 +24,16 @@ export async function POST(request: NextRequest) {
     const validation = validatePassword(newPassword);
     if (!validation.ok) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+
+    // Security audit fix — the current-password re-verification below had
+    // no rate limit or lockout of its own (unlike login's same underlying
+    // signInWithPassword primitive), so a stolen/left-open session could
+    // be used to brute-force the real account password with zero app-level
+    // backoff or audit trail.
+    const rateLimit = await checkRateLimit({ eventType: "change_password_verify", userId: user.id, maxAttempts: 5, windowMinutes: 15 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: `Too many attempts — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
     }
 
     // Re-verify the current password before allowing a change — cheap,

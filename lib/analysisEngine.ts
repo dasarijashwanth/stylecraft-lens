@@ -100,22 +100,30 @@ export interface CorrectionSignals {
 // discovery-time signals — "ASINs replaced with reason 'Wrong product
 // entirely' or 'Discontinued' are excluded from future candidate pools...
 // 2+ independent corrections -> hard exclude; 1 correction -> heavy score
-// penalty" (never both at once for the same ASIN). Counted per-ASIN
-// regardless of WHICH analysis/tool-type-instance reported it — the same
-// wrong pick reported twice by two different users/analyses is exactly
-// the "independently corrected twice" case that earns a hard exclude.
+// penalty" (never both at once for the same ASIN). "Independent" means
+// from 2+ DISTINCT users — this table has no org scoping (corrections are
+// deliberately a cross-org shared signal, keyed only by tool_type) and no
+// approval gate before taking effect, so counting raw ROWS instead of
+// distinct users let any single account hard-block a real competitor's
+// ASIN for every org's future analyses by submitting two corrections
+// against it themselves (a security-audit finding, fixed here — see
+// SECURITY_REPORT.md). A correction with no user_id (memoryDb/legacy rows)
+// counts as its own always-distinct bucket rather than being silently
+// dropped, so this can't be gamed by omitting it either.
 // Exported for the same offline-verify reason as buildPhase1Prompt below.
 export function buildCorrectionSignals(corrections: CompetitorCorrectionRow[]): CorrectionSignals {
-  const counts = new Map<string, number>();
+  const usersByAsin = new Map<string, Set<string>>();
   for (const corr of corrections) {
     if (corr.reason !== "wrong_product" && corr.reason !== "discontinued") continue;
     const asin = corr.old_asin.toUpperCase();
-    counts.set(asin, (counts.get(asin) || 0) + 1);
+    const userKey = corr.user_id || `anon:${corr.id}`;
+    if (!usersByAsin.has(asin)) usersByAsin.set(asin, new Set());
+    usersByAsin.get(asin)!.add(userKey);
   }
   const blockedAsins = new Set<string>();
   const penalizedAsins = new Set<string>();
-  counts.forEach((count, asin) => {
-    if (count >= 2) blockedAsins.add(asin);
+  usersByAsin.forEach((users, asin) => {
+    if (users.size >= 2) blockedAsins.add(asin);
     else penalizedAsins.add(asin);
   });
   return { blockedAsins, penalizedAsins, corrections };

@@ -10,6 +10,7 @@
 // fixed hosts and don't need this).
 import dns from "node:dns/promises";
 import net from "node:net";
+import { Agent } from "undici";
 
 export class SsrfBlockedError extends Error {}
 
@@ -50,7 +51,16 @@ function isPrivateIp(ip: string): boolean {
   return true; // unrecognized format -> fail closed
 }
 
-async function assertUrlIsSafe(urlString: string): Promise<URL> {
+interface SafeUrlResult {
+  url: URL;
+  // The exact IP address(es) validated as safe, to be PINNED for the
+  // actual connection below — see the TOCTOU comment on safeFetch's main
+  // loop for why this matters. Empty when the hostname itself was a
+  // literal IP (nothing to pin beyond the URL's own hostname).
+  pinnedAddresses: { address: string; family: 4 | 6 }[];
+}
+
+async function assertUrlIsSafe(urlString: string): Promise<SafeUrlResult> {
   let parsed: URL;
   try {
     parsed = new URL(urlString);
@@ -67,24 +77,50 @@ async function assertUrlIsSafe(urlString: string): Promise<URL> {
     throw new SsrfBlockedError(`Blocked hostname: ${hostname}`);
   }
 
-  // A literal IP in the URL needs no DNS lookup.
+  // A literal IP in the URL needs no DNS lookup, and nothing to pin — the
+  // connection can only ever go to the one address already in the URL.
   if (net.isIP(hostname)) {
     if (isPrivateIp(hostname)) throw new SsrfBlockedError(`Blocked private/reserved IP: ${hostname}`);
-    return parsed;
+    return { url: parsed, pinnedAddresses: [] };
   }
 
-  let addresses: string[];
+  let results: { address: string; family: number }[];
   try {
-    const results = await dns.lookup(hostname, { all: true });
-    addresses = results.map(r => r.address);
+    results = await dns.lookup(hostname, { all: true });
   } catch {
     throw new SsrfBlockedError(`DNS resolution failed for ${hostname}`);
   }
-  if (addresses.length === 0) throw new SsrfBlockedError(`No addresses resolved for ${hostname}`);
-  for (const addr of addresses) {
-    if (isPrivateIp(addr)) throw new SsrfBlockedError(`Blocked private/reserved IP for ${hostname}: ${addr}`);
+  if (results.length === 0) throw new SsrfBlockedError(`No addresses resolved for ${hostname}`);
+  for (const r of results) {
+    if (isPrivateIp(r.address)) throw new SsrfBlockedError(`Blocked private/reserved IP for ${hostname}: ${r.address}`);
   }
-  return parsed;
+  return { url: parsed, pinnedAddresses: results.map(r => ({ address: r.address, family: r.family === 6 ? 6 : 4 })) };
+}
+
+// TOCTOU / DNS-rebinding fix — assertUrlIsSafe resolves and validates the
+// hostname, but the runtime's own fetch() would otherwise perform a
+// SECOND, completely independent DNS resolution when it actually opens the
+// connection. An attacker controlling the target's DNS (a "rebinding"
+// domain answering a safe IP on the first query, then a private/metadata
+// IP on the very next one) could pass validation here and still have the
+// real request land on the internal address moments later. Pinning the
+// dispatcher's own `lookup` to the address(es) already validated above
+// closes that gap — Node's global fetch still handles TLS SNI/certificate
+// hostname verification normally (this only overrides DNS resolution, not
+// the hostname used for the connection/handshake), so a legitimate HTTPS
+// target's certificate still validates correctly.
+function pinnedDispatcher(pinnedAddresses: { address: string; family: 4 | 6 }[]): Agent | undefined {
+  if (pinnedAddresses.length === 0) return undefined;
+  return new Agent({
+    connect: {
+      lookup: (_hostname, options, callback) => {
+        const wantFamily = options.family === 6 ? 6 : options.family === 4 ? 4 : undefined;
+        const matching = wantFamily ? pinnedAddresses.filter(a => a.family === wantFamily) : pinnedAddresses;
+        const pool = matching.length > 0 ? matching : pinnedAddresses;
+        callback(null, pool.map(a => ({ address: a.address, family: a.family })));
+      },
+    },
+  });
 }
 
 async function capResponseSize(res: Response, maxBytes: number): Promise<Response> {
@@ -128,22 +164,54 @@ export async function safeFetch(urlString: string, opts: SafeFetchOptions = {}):
 
   let currentUrl = urlString;
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    await assertUrlIsSafe(currentUrl);
+    const { pinnedAddresses } = await assertUrlIsSafe(currentUrl);
+    const dispatcher = pinnedDispatcher(pinnedAddresses);
 
-    const res = await fetch(currentUrl, {
-      ...init,
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // Each hop mints its own per-request Agent (pinned to that hop's own
+    // validated address) — it MUST be explicitly closed once this hop is
+    // done with it, or its underlying socket/connection-pool handle is
+    // left dangling. Closing only after the body is fully consumed below
+    // (capResponseSize reads it) — closing earlier would tear down the
+    // connection mid-read.
+    const closeDispatcher = async (): Promise<void> => {
+      if (!dispatcher) return;
+      try {
+        await dispatcher.close();
+      } catch {
+        // best-effort — never fail the real request over cleanup
+      }
+    };
 
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location");
-      if (!location) return capResponseSize(res, maxResponseBytes);
-      currentUrl = new URL(location, currentUrl).toString();
-      continue;
+    try {
+      const res = await fetch(currentUrl, {
+        ...init,
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+        ...(dispatcher ? { dispatcher } : {}),
+      } as RequestInit);
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) {
+          const result = await capResponseSize(res, maxResponseBytes);
+          await closeDispatcher();
+          return result;
+        }
+        // Redirecting to the next hop — this response's body is never
+        // read; release it before moving on.
+        await res.body?.cancel().catch(() => {});
+        await closeDispatcher();
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+
+      const result = await capResponseSize(res, maxResponseBytes);
+      await closeDispatcher();
+      return result;
+    } catch (err) {
+      await closeDispatcher();
+      throw err;
     }
-
-    return capResponseSize(res, maxResponseBytes);
   }
   throw new SsrfBlockedError("Too many redirects");
 }

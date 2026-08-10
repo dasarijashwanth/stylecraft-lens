@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { listToolTypes, addToolType } from "@/lib/db/tool-types";
 import { textSimilarity } from "@/lib/text-similarity";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Read-only GET, no admin gate — mirrors app/api/motor-families/route.ts's
 // exact shape: the analyze/new-project forms need this to populate the Tool
@@ -43,17 +44,30 @@ const DUPLICATE_SIMILARITY_THRESHOLD = 0.5;
 // proceed once shown the close match.
 export async function POST(req: NextRequest) {
   try {
-    await getAuthSession();
+    const session = await getAuthSession();
+
+    // Security audit fix — deliberately NOT an admin gate (unchanged from
+    // the existing by-design behavior above), but this writes a permanent
+    // row into a global, cross-tenant taxonomy table with no rate limit at
+    // all before this fix — any single account could spam it. A generous
+    // per-hour cap preserves the intended "any user can add an unlisted
+    // type inline" UX while bounding abuse.
+    const rateLimit = await checkRateLimit({ eventType: "tool_type_create", userId: session.userId, maxAttempts: 20, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: `Too many new tool types added — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+    }
 
     const { label, aliases, family, confirmDuplicate } = await req.json();
     const trimmedLabel = String(label || "").trim();
-    if (trimmedLabel.length < 3) {
-      return NextResponse.json({ error: "Name must be at least 3 characters" }, { status: 400 });
+    if (trimmedLabel.length < 3 || trimmedLabel.length > 100) {
+      return NextResponse.json({ error: "Name must be between 3 and 100 characters" }, { status: 400 });
     }
     if (family !== "clipper_trimmer_shaver" && family !== "beauty") {
       return NextResponse.json({ error: "family must be 'clipper_trimmer_shaver' or 'beauty'" }, { status: 400 });
     }
-    const cleanAliases: string[] = Array.isArray(aliases) ? aliases.map((a: any) => String(a).trim()).filter(Boolean) : [];
+    const cleanAliases: string[] = Array.isArray(aliases)
+      ? aliases.map((a: any) => String(a).trim()).filter(Boolean).slice(0, 20).map(a => a.slice(0, 100))
+      : [];
 
     const existing = await listToolTypes();
     if (!confirmDuplicate) {

@@ -16,6 +16,7 @@ import { PDFParse } from "pdf-parse";
 import { createResponseWithRetry, hasOpenAIKey, OPENAI_MODEL } from "./openai";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "./gemini";
 import { sanitizeText } from "./sanitize";
+import { assertZipSafe } from "./zip-safety";
 
 export type SourceDocFormat = "pdf" | "xlsx" | "docx" | "doc" | "xls" | "csv";
 
@@ -217,6 +218,19 @@ function sheetToText(sheetName: string, rows: any[][]): string {
 
 export async function extractXlsxContent(buffer: Buffer): Promise<ExtractedDocContent> {
   try {
+    // Security audit fix — a real .xlsx is a zip; XLSX.read() below fully
+    // decompresses every entry with no size ceiling of its own. Reachable
+    // by any project member (source-doc upload), not just admins — check
+    // via PizZip's central-directory metadata (no real decompression yet)
+    // before handing the buffer to XLSX.read() at all. This function is
+    // ALSO reused for legacy .xls (pre-OOXML binary BIFF format, NOT a
+    // zip at all — SheetJS's XLSX.read() natively handles both), so only
+    // run the zip check when the buffer actually looks like one (magic
+    // bytes "PK") — a legacy .xls buffer has nothing to zip-bomb-check and
+    // would otherwise fail PizZip's own "not a valid zip" parse error.
+    if (buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b) {
+      assertZipSafe(buffer);
+    }
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const locations: ExtractedLocation[] = [];
 
@@ -296,6 +310,8 @@ function extractDocxTables(xml: string): string[] {
 export async function extractDocxContent(buffer: Buffer): Promise<ExtractedDocContent> {
   try {
     const zip = new PizZip(buffer);
+    // Security audit fix — see extractXlsxContent's identical comment.
+    assertZipSafe(zip);
     const documentXml = zip.file("word/document.xml")?.asText();
     if (!documentXml) return { fullText: "", locations: [], extractionStatus: "failed", extractionMethod: "failed" };
 

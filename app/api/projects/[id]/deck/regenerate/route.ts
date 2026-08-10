@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { generateProjectDeck } from "@/lib/deck-generate";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 55; // rendering + a possible condense AI call, comfortably under the 60s ceiling
 
@@ -13,6 +14,14 @@ export const maxDuration = 55; // rendering + a possible condense AI call, comfo
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
+
+    // Security audit fix — deck rendering + a possible AI "condense" call
+    // per request, previously unrated.
+    const rateLimit = await checkRateLimit({ eventType: "deck_regenerate", userId: session.userId, maxAttempts: 20, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: `Too many deck regenerations — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+    }
+
     const project = await getProject(params.id, session.orgId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 

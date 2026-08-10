@@ -37,7 +37,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const formData = await req.formData();
     const file = formData.get("file") as File;
-    const purpose = (formData.get("purpose") as string) ?? "family_artwork";
+    // Security audit fix — unlike every other upload path in this app,
+    // `purpose` was interpolated into the Storage object key with zero
+    // sanitization (the only real caller always sends "family_artwork",
+    // but a direct API call could set any string, including one containing
+    // `/`, producing an arbitrary nested key under this project's own
+    // prefix). Same character-strip discipline as `file.name` below.
+    const rawPurpose = (formData.get("purpose") as string) || "family_artwork";
+    const purpose = rawPurpose.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) || "family_artwork";
 
     if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
 

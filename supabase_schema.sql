@@ -1837,3 +1837,66 @@ CREATE UNIQUE INDEX IF NOT EXISTS gtm_workbook_templates_one_active_per_industry
 -- type's family (lib/db/tool-types.ts); 'barber'/'beauty' pins the export
 -- to that template regardless of the resolved family.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS gtm_template_override VARCHAR(20);
+
+-- 55. CRITICAL SECURITY FIX — RLS regression on 15 tables added after Section 17
+-- Section 17 (above) empirically confirmed and fixed a fully-permissive RLS
+-- policy on the original 26 tables — anon/authenticated had zero-restriction
+-- read/write via the public Supabase anon key (which ships in the browser
+-- bundle by NEXT_PUBLIC_ convention), completely bypassing this app's own
+-- auth/authorization. A pre-launch adversarial audit (2026-08-09) found that
+-- EVERY table created in a section AFTER Section 17 reintroduced the exact
+-- same `FOR ALL USING (true) WITH CHECK (true)` policy — Section 17's fix was
+-- never made into a rule future sections had to follow, so 15 tables slipped
+-- back into the identical, already-once-fixed hole. Two of the tables added
+-- in this same later window (auth_events, feature_flags) got it right
+-- (RLS enabled, deliberately zero policies) — proving the safe pattern was
+-- known, just not applied consistently.
+--
+-- Impact before this fix: any unauthenticated visitor, using only the public
+-- anon key extracted from this app's own shipped JS bundle, could read/write
+-- via Supabase's REST API directly — bypassing getAuthSession(), middleware.ts,
+-- and every ownership check in this codebase entirely:
+--   - uploaded_source_docs / extracted_facts: every project's uploaded TDS/
+--     spec-sheet/sales-kit full text and structured facts, across every org.
+--   - catalog_products, scoring_profiles, competitor_corrections,
+--     brand_voice_guides, gtm_workbook_templates, tool_types,
+--     branded_motor_names, heat_tech_families, branded_heat_tech_names,
+--     brand_name_hints, collections, marketing_defaults, document_fill_state:
+--     shared config every tenant's analyses/generation depend on — readable
+--     AND writable (an attacker could vandalize pricing/taxonomy/brand data
+--     for every user of the app).
+--
+-- Fix is identical in shape and equally safe (zero functional impact) as
+-- Section 17's: every real query against these 15 tables already goes
+-- through `supabaseAdmin` (service-role, bypasses RLS) in their lib/db/*.ts
+-- modules — confirmed via a full grep, no code path anywhere uses the plain
+-- anon `supabase` client for a `.from(table)` call on any of these tables.
+-- Dropping the permissive policy while RLS stays ENABLED denies anon/
+-- authenticated by default, exactly like the original 26.
+DROP POLICY IF EXISTS "Allow all operations for branded_motor_names" ON branded_motor_names;
+DROP POLICY IF EXISTS "Allow all operations for tool_types" ON tool_types;
+DROP POLICY IF EXISTS "Allow all operations for scoring_profiles" ON scoring_profiles;
+DROP POLICY IF EXISTS "Allow all operations for heat_tech_families" ON heat_tech_families;
+DROP POLICY IF EXISTS "Allow all operations for branded_heat_tech_names" ON branded_heat_tech_names;
+DROP POLICY IF EXISTS "Allow all operations for competitor_corrections" ON competitor_corrections;
+DROP POLICY IF EXISTS "Allow all operations for catalog_products" ON catalog_products;
+DROP POLICY IF EXISTS "Allow all operations for brand_name_hints" ON brand_name_hints;
+DROP POLICY IF EXISTS "Allow all operations for collections" ON collections;
+DROP POLICY IF EXISTS "Allow all operations for gtm_workbook_templates" ON gtm_workbook_templates;
+DROP POLICY IF EXISTS "Allow all operations for brand_voice_guides" ON brand_voice_guides;
+DROP POLICY IF EXISTS "Allow all operations for uploaded_source_docs" ON uploaded_source_docs;
+DROP POLICY IF EXISTS "Allow all operations for extracted_facts" ON extracted_facts;
+DROP POLICY IF EXISTS "Allow all operations for marketing_defaults" ON marketing_defaults;
+DROP POLICY IF EXISTS "Allow all operations for document_fill_state" ON document_fill_state;
+-- (All 15 tables now have RLS enabled with zero policies, matching Section
+-- 17's 26 — anon/authenticated get zero rows on every operation;
+-- supabaseAdmin/service-role is unaffected. IMPORTANT FOR FUTURE SECTIONS:
+-- when adding a new table, do NOT add a permissive `USING (true)` policy —
+-- either add no policy at all (RLS enabled, zero policies = deny by
+-- default, the correct choice for any table only ever queried via
+-- supabaseAdmin) or a real per-row policy scoped to auth.uid()/org — never
+-- copy the `CREATE POLICY ... USING (true) WITH CHECK (true)` pattern that
+-- appears earlier in this file for the ORIGINAL 26 tables' now-superseded
+-- definitions; those lines are dead/overridden by this section and Section
+-- 17, kept only so `CREATE TABLE IF NOT EXISTS` blocks stay runnable
+-- top-to-bottom on a fresh database.

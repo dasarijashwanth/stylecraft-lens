@@ -9,11 +9,26 @@
 // query-layer filtering already existed, it just needed real distinct ids
 // to filter by.
 //
-// Idempotent, mirrors scripts/create-admin-user.ts exactly: re-running
-// resets the password but never overwrites an existing must_change_password
-// flag once the person has changed it themselves.
+// Idempotent, mirrors scripts/create-admin-user.ts exactly: re-running only
+// resets an existing user's password with explicit opt-in
+// (TEAM_RESET_PASSWORD=true), and doing so always re-flags
+// must_change_password so a reset-to-a-known-value password is never left
+// silently in place with no forced re-change prompt.
 //
-// Run with: npx tsx scripts/create-team-users.ts
+// Security audit fix — this script used to hardcode a real temporary
+// password ("123456789" — notably ALSO on this app's own
+// lib/password-policy.ts common-password blocklist) shared across 5 real
+// team mailboxes, and always overwrote an existing user's password on
+// every re-run regardless of whether they'd already changed it. TEAM_TEMP_
+// PASSWORD is now REQUIRED (no fallback) for the same reason
+// create-admin-user.ts's ADMIN_PASSWORD has none — a hardcoded credential
+// in the script itself is a permanent, always-readable secret regardless
+// of whether .env.local is gitignored.
+//
+// Run with: TEAM_TEMP_PASSWORD=... npx tsx scripts/create-team-users.ts
+// To reset EXISTING users' passwords: also set TEAM_RESET_PASSWORD=true
+// Never run this with its output piped to a CI log or shared terminal —
+// the temp password is printed to stdout for the operator to hand out.
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
@@ -48,7 +63,17 @@ if (!supabaseUrl || !supabaseServiceKey) {
   process.exit(1);
 }
 
-const TEMP_PASSWORD = "123456789";
+const TEMP_PASSWORD = process.env.TEAM_TEMP_PASSWORD;
+const RESET_PASSWORD = process.env.TEAM_RESET_PASSWORD === "true";
+
+if (!TEMP_PASSWORD) {
+  console.error("Error: TEAM_TEMP_PASSWORD must be set (no hardcoded default — see this file's header comment).");
+  process.exit(1);
+}
+if (TEMP_PASSWORD.length < 10) {
+  console.error("Error: TEAM_TEMP_PASSWORD must be at least 10 characters (matches this app's own password policy, lib/password-policy.ts).");
+  process.exit(1);
+}
 
 const TEAM_EMAILS = [
   "support@stylecraftus.com",
@@ -85,12 +110,16 @@ async function ensureUser(email: string) {
   const existing = await findUserByEmail(email);
 
   if (existing) {
-    console.log(`${email} already exists (${existing.id}) — resetting password, leaving must_change_password untouched.`);
-    const { error: updateErr } = await supabase.auth.admin.updateUserById(existing.id, {
-      password: TEMP_PASSWORD,
-      email_confirm: true,
-    });
-    if (updateErr) throw updateErr;
+    if (RESET_PASSWORD) {
+      console.log(`${email} already exists (${existing.id}) — TEAM_RESET_PASSWORD=true, resetting password and re-flagging must_change_password.`);
+      const { error: updateErr } = await supabase.auth.admin.updateUserById(existing.id, {
+        password: TEMP_PASSWORD,
+        email_confirm: true,
+      });
+      if (updateErr) throw updateErr;
+    } else {
+      console.log(`${email} already exists (${existing.id}) — leaving password untouched (set TEAM_RESET_PASSWORD=true to reset it).`);
+    }
 
     const { data: profile } = await supabase.from("profiles").select("id").eq("id", existing.id).maybeSingle();
     if (!profile) {
@@ -100,7 +129,9 @@ async function ensureUser(email: string) {
       if (profileErr) throw profileErr;
       console.log(`  Created missing profile row for ${email}.`);
     } else {
-      const { error: profileErr } = await supabase.from("profiles").update({ email, name, role: "MEMBER" }).eq("id", existing.id);
+      const profileUpdate: Record<string, any> = { email, name, role: "MEMBER" };
+      if (RESET_PASSWORD) profileUpdate.must_change_password = true;
+      const { error: profileErr } = await supabase.from("profiles").update(profileUpdate).eq("id", existing.id);
       if (profileErr) throw profileErr;
     }
     return;

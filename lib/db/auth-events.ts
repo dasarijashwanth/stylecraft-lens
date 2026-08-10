@@ -17,7 +17,26 @@ export type AuthEventType =
   | "permission_denied"
   | "admin_change"
   | "analysis_create"
-  | "generation_start";
+  | "generation_start"
+  // Security audit — extends per-user rate limiting beyond the two
+  // pipeline entry points above to every route that can trigger a real
+  // OpenAI/Gemini/Rainforest call on repeat/loop, and to a few
+  // no-AI-cost-but-still-spammable public-write routes.
+  | "gtm_field_regenerate"
+  | "content_form_field_regenerate"
+  | "gtm_refill_sources"
+  | "content_form_refill_sources"
+  | "deck_regenerate"
+  | "reviews_refresh"
+  | "product_news_refresh"
+  | "analysis_continue"
+  | "pipeline_continue"
+  | "screenshot_upload_url"
+  | "faq_vote"
+  | "faq_search_miss"
+  | "tool_type_create"
+  | "change_password_verify"
+  | "competitor_replace";
 
 export interface AuthEventInput {
   eventType: AuthEventType;

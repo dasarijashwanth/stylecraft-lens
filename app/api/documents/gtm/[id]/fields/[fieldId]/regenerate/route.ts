@@ -6,12 +6,23 @@ import { getDocumentById, updateDocumentField, getTdsFieldsForProject, getDocume
 import { getLatestOutput } from "@/lib/project-outputs";
 import { generateSingleField, GtmSources } from "@/lib/gtm-generate";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 45;
 
 export async function POST(req: NextRequest, { params }: { params: { id: string; fieldId: string } }) {
   try {
     const session = await getAuthSession();
+
+    // Security audit fix — a single real OpenAI call per request, callable
+    // in a tight loop across every field of every project the caller owns;
+    // was the app's largest unrated AI-spend surface (only "start an
+    // analysis"/"create a project" were rate-limited before this).
+    const rateLimit = await checkRateLimit({ eventType: "gtm_field_regenerate", userId: session.userId, maxAttempts: 60, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: `Too many field regenerations — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+    }
+
     const document = await getDocumentById(params.id);
     if (!document) return NextResponse.json({ error: "Document not found" }, { status: 404 });
 

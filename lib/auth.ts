@@ -41,7 +41,21 @@ export const hasClerkKeys =
   process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY !== "pk_..." &&
   process.env.CLERK_SECRET_KEY !== "sk_...";
 
-export async function getAuthSession(): Promise<UserSession> {
+// Security audit fix — `mustChangePassword` was previously only ever
+// enforced client-side (components/layout/Shell.tsx's redirect to
+// /change-password): a real, valid session obtained via a just-reset
+// temporary password (e.g. scripts/create-admin-user.ts/create-team-
+// users.ts) could call ANY API route directly (curl/Postman/a script),
+// completely bypassing that redirect, for as long as the real owner
+// hadn't yet logged in through the browser to trigger it. Every route
+// already calls getAuthSession() before doing anything, and the profile
+// row (which carries must_change_password) is already fetched as part of
+// that same call — so this closes the gap at zero extra query cost.
+// `allowPendingPasswordChange` exists for the one legitimate exception:
+// GET /api/auth/session, which must report the TRUE session (including a
+// pending password change) so the client-side redirect this was always
+// meant to reinforce — not replace — still has something to react to.
+export async function getAuthSession(opts?: { allowPendingPasswordChange?: boolean }): Promise<UserSession> {
   // Real Supabase Auth — the actual live identity provider for this app
   // (Supabase is always configured in the deployed app, so this is the
   // path that actually runs there; the Clerk/dev-bypass/mock chain below
@@ -83,7 +97,7 @@ export async function getAuthSession(): Promise<UserSession> {
     // and the competitors routes already enforce (they were previously
     // real but moot, since every real account shared the same literal).
     const isAdminRole = profile.role === "OWNER" || profile.role === "ADMIN";
-    return {
+    const session: UserSession = {
       userId: isAdminRole ? "dev_user_id" : user.id,
       orgId: isAdminRole ? "dev_org_id" : user.id,
       email: profile.email,
@@ -94,6 +108,15 @@ export async function getAuthSession(): Promise<UserSession> {
       mustChangePassword: profile.must_change_password,
       faqBannerDismissedAt: profile.faq_banner_dismissed_at ?? null,
     };
+
+    if (session.mustChangePassword && !opts?.allowPendingPasswordChange) {
+      throw Object.assign(
+        new Error("Your password must be changed before you can do this — go to Change Password first."),
+        { status: 403, code: "PASSWORD_CHANGE_REQUIRED" }
+      );
+    }
+
+    return session;
   }
 
   // SECURITY GUARD: everything below this line is a local-development

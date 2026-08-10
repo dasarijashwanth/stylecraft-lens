@@ -7,6 +7,7 @@ import { insertProvenance } from "@/lib/db/section-provenance";
 import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
 import { isBuyerSentimentEnabled } from "@/lib/feature-flags";
+import { checkRateLimit } from "@/lib/rate-limit";
 import type { ToolType } from "@/lib/tool-type-taxonomy";
 
 // Best-effort — analysisId is already threaded into this route for
@@ -90,7 +91,19 @@ export async function GET(req: NextRequest, { params }: { params: { asin: string
     // No per-user ownership concept on this shared, ASIN-keyed cache —
     // middleware.ts already blocks anonymous /api/** requests; this is
     // defense-in-depth consistency with the rest of the codebase.
-    await getAuthSession();
+    const session = await getAuthSession();
+
+    // Security audit fix — ?refresh=true bypasses the 24h cache and forces
+    // a fresh, credit-costing Rainforest+AI resolution; was previously
+    // unrated, letting any authenticated user loop over ASINs to burn
+    // real spend essentially unbounded. Normal cached reads (no refresh)
+    // stay unrated since they're cheap and already TTL-bounded.
+    if (forceRefresh) {
+      const rateLimit = await checkRateLimit({ eventType: "reviews_refresh", userId: session.userId, maxAttempts: 20, windowMinutes: 60 });
+      if (rateLimit.limited) {
+        return NextResponse.json({ error: "RATE_LIMITED", message: `Too many forced refreshes — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+      }
+    }
     // Read once, applied consistently to both the cache-hit and fresh-
     // compute branches below — masks the response only, never the stored
     // row, so old cached sentiment (from before the flag existed) reappears

@@ -70,6 +70,11 @@ jobs:
       - run: |
           for f in scripts/verify-html-escaping.ts scripts/verify-csv-injection-guard.ts \
                    scripts/verify-file-magic-bytes.ts scripts/verify-rate-limit.ts \
-                   scripts/verify-price-band.ts scripts/verify-review-tiers.ts; do
+                   scripts/verify-price-band.ts scripts/verify-review-tiers.ts \
+                   scripts/verify-zip-safety.ts scripts/verify-report-update-whitelist.ts \
+                   scripts/verify-competitor-correction.ts scripts/verify-tds-doc-ingestion.ts \
+                   scripts/verify-deck-template-parser.ts scripts/verify-gtm-workbook-export.ts \
+                   scripts/verify-gtm-multi-template.ts scripts/verify-deck-render.ts \
+                   scripts/verify-competitor-scoring.ts; do
             if [ -f "$f" ]; then echo "=== $f ==="; npx tsx "$f" || exit 1; fi
           done
