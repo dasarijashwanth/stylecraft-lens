@@ -18,6 +18,7 @@ import {
   Loader2
 } from "lucide-react";
 import { toast } from "sonner";
+import BackgroundStage from "@/components/scroll/BackgroundStage";
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -118,10 +119,11 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-bg text-text-primary px-4">
-      
+    <div className="relative flex flex-col items-center justify-center min-h-screen bg-bg text-text-primary px-4 overflow-hidden">
+      <BackgroundStage />
+
       {/* Step dots indicator at top */}
-      <div className="flex items-center gap-2 mb-8 select-none">
+      <div className="relative z-[1] flex items-center gap-2 mb-8 select-none">
         {[1, 2, 3, 4, 5].map((s) => (
           <div
             key={s}

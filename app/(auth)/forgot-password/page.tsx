@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Loader2, Mail, ArrowLeft } from "lucide-react";
 import { Logo, Wordmark } from "@/components/ui/Logo";
+import BackgroundStage from "@/components/scroll/BackgroundStage";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -37,8 +38,9 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-bg text-text-primary px-4">
-      <div className="w-full max-w-sm p-6 md:p-8 bg-surface-2 border border-border rounded-2xl shadow-2xl relative overflow-hidden text-xs space-y-6">
+    <div className="relative flex items-center justify-center min-h-screen bg-bg text-text-primary px-4 overflow-hidden">
+      <BackgroundStage />
+      <div className="relative z-[1] w-full max-w-sm p-6 md:p-8 bg-surface-2 border border-border rounded-2xl shadow-2xl overflow-hidden text-xs space-y-6">
         <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-accent/15 blur-3xl" />
 
         <div className="flex flex-col items-center space-y-2 relative z-10 text-center">

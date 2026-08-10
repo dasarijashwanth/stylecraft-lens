@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
+import BackgroundStage from "@/components/scroll/BackgroundStage";
 
 // Reached only via the emailed recovery link -> /api/auth/callback's code
 // exchange, which establishes a real (short-lived, single-use-token-backed)
@@ -62,8 +63,9 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-bg text-text-primary px-4">
-      <div className="w-full max-w-sm p-6 md:p-8 bg-surface-2 border border-border rounded-2xl shadow-2xl text-xs space-y-6">
+    <div className="relative flex items-center justify-center min-h-screen bg-bg text-text-primary px-4 overflow-hidden">
+      <BackgroundStage />
+      <div className="relative z-[1] w-full max-w-sm p-6 md:p-8 bg-surface-2 border border-border rounded-2xl shadow-2xl text-xs space-y-6">
         <div className="flex flex-col items-center space-y-2 text-center">
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-accent/15 text-accent border border-accent/25">
             <KeyRound className="w-5 h-5" />

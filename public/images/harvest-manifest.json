@@ -1,0 +1,48 @@
+{
+  "_comment": "Additive manifest for images harvested from stylecraftus.com this pass. Existing hero-1..4.jpg (and their .mp4/.webm/-poster.jpg siblings) are NOT listed here — they predate this manifest and were left completely untouched. hero-5.webp predates this pass too (already on disk, previously unwired) but is included below since this pass is the first to actually reference it.",
+  "harvestedAt": "2026-08-09",
+  "images": [
+    {
+      "file": "homie-nano-shaver.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/Homie_Shaver-SC817B-Product_on_Trade_Dress-04-2000X2000.png",
+      "alt": "Homie Nano Single Foil Shaver (SC817B) on dark trade-dress background",
+      "usedFor": "catalog product hero — Homie Nano Single Foil Shaver"
+    },
+    {
+      "file": "collection-saber.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/SC403BPPrecisionSaber_Main.jpg",
+      "alt": "Saber collection hero — Precision Saber trimmer",
+      "usedFor": "collection banner imagery — Saber"
+    },
+    {
+      "file": "collection-instinct.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/SC611M_Black_Front_View_in_Base.jpg",
+      "alt": "Instinct collection hero — clipper in charging base, dark background",
+      "usedFor": "collection banner imagery — Instinct"
+    },
+    {
+      "file": "collection-reign.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/Reign_Clipper_Purple-SC620P-01-2000x2000.jpg",
+      "alt": "Reign collection hero — Reign clipper",
+      "usedFor": "collection banner imagery — Reign"
+    },
+    {
+      "file": "collection-homie.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/HomieClipper-SC628B-01-2000x2000.jpg",
+      "alt": "Homie collection hero — Homie clipper (SC628B)",
+      "usedFor": "collection banner imagery — Homie"
+    },
+    {
+      "file": "collection-sage.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/SC718GR.jpg",
+      "alt": "Sage collection hero product",
+      "usedFor": "collection banner imagery — Sage"
+    },
+    {
+      "file": "collection-rogue.webp",
+      "sourceUrl": "https://stylecraftus.com/cdn/shop/files/RogueClipper-SCRBC-01-2000x2000.jpg",
+      "alt": "Rogue collection hero — Rogue clipper",
+      "usedFor": "collection banner imagery — Rogue"
+    }
+  ]
+}
