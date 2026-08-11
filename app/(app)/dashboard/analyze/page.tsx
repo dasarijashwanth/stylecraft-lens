@@ -431,6 +431,137 @@ export default function AnalyzePage() {
     });
   }
 
+  // Remove + Refill single slot (Part 3) — three handlers mirroring
+  // handleCompetitorReplaced above exactly: this page owns analysisResult,
+  // CompetitorCard/EmptySlotCard never mutate their own props directly.
+
+  // Fired by CompetitorCard's own onRemoved after ITS OWN POST
+  // .../competitors/remove already succeeded — this just patches the
+  // returned placeholder into whichever phase's competitors array the
+  // removed ASIN lived in (tier tells us directly, no search needed) and
+  // propagates staleness into phase3 exactly like handleCompetitorReplaced.
+  function handleCompetitorRemoved(asin: string, tier: string, placeholder: any, synthesisPossiblyStale: boolean) {
+    setAnalysisResult((prev: any) => {
+      if (!prev) return prev;
+      const patchList = (list: any[]) => (list || []).map((c: any) => (c.asin === asin ? placeholder : c));
+      const inPhase1 = tier === "legacy";
+      return {
+        ...prev,
+        phase1: inPhase1 ? { ...prev.phase1, competitors: patchList(prev.phase1.competitors) } : prev.phase1,
+        phase2: !inPhase1 ? { ...prev.phase2, competitors: patchList(prev.phase2.competitors) } : prev.phase2,
+        phase3: synthesisPossiblyStale && prev.phase3 ? { ...prev.phase3, synthesis_possibly_stale: true } : prev.phase3,
+      };
+    });
+  }
+
+  // Which removed slot's refill is currently in flight — threaded into
+  // ResultsPanel so only that one EmptySlotCard shows a spinner.
+  const [refillingAsin, setRefillingAsin] = useState<string | null>(null);
+
+  // Fired by EmptySlotCard's onRefillRequested (just the removedAsin —
+  // EmptySlotCard/ResultsPanel never fetch this themselves, unlike the
+  // Remove flow above). This is the one that actually calls
+  // POST .../competitors/refill-slot, then hands the parsed response
+  // (with the requested removedAsin attached, since the route's own
+  // response never echoes it back) to handleSlotRefilled below.
+  async function requestSlotRefill(removedAsin: string) {
+    if (!analysisId) return;
+    setRefillingAsin(removedAsin);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/competitors/refill-slot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ removedAsin }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to refill this slot");
+      handleSlotRefilled({ ...data, removedAsin });
+    } catch (err: any) {
+      toast.error(err.message || "Failed to refill this slot");
+    } finally {
+      setRefillingAsin(null);
+    }
+  }
+
+  // An honest "nothing qualifies" (result.ok === false) is a NORMAL outcome
+  // here (see app/api/analyses/[id]/competitors/refill-slot/route.ts's own
+  // header comment) — surfaced via toast rather than silently doing
+  // nothing, never treated as a crash.
+  function handleSlotRefilled(result: any) {
+    if (!result?.ok) {
+      toast.error(result?.reason || "No replacement found for this slot");
+      return;
+    }
+    const inPhase1 = result.tier === "legacy";
+    setAnalysisResult((prev: any) => {
+      if (!prev) return prev;
+      const patchList = (list: any[]) => (list || []).map((c: any) => (c.removed_asin === result.removedAsin ? result.competitor : c));
+      return {
+        ...prev,
+        phase1: inPhase1 ? { ...prev.phase1, competitors: patchList(prev.phase1.competitors) } : prev.phase1,
+        phase2: !inPhase1 ? { ...prev.phase2, competitors: patchList(prev.phase2.competitors) } : prev.phase2,
+        phase3: result.synthesisPossiblyStale && prev.phase3 ? { ...prev.phase3, synthesis_possibly_stale: true } : prev.phase3,
+      };
+    });
+  }
+
+  // Fired once after ResultsPanel's own "Remove & refill N flagged" button
+  // completes its POST .../competitors/bulk-refill call — each entry is
+  // either a successful remove+refill pair or a per-item error (never a
+  // thrown exception, see that route's own per-item try/catch), so this
+  // loops the same per-item logic as the two handlers above rather than
+  // reusing them directly (their signatures don't fit a batch element).
+  function handleBulkRefillComplete(results: any[]) {
+    if (!results || results.length === 0) return;
+    let anyStale = false;
+    setAnalysisResult((prev: any) => {
+      if (!prev) return prev;
+      let phase1Competitors: any[] = prev.phase1?.competitors || [];
+      let phase2Competitors: any[] = prev.phase2?.competitors || [];
+
+      for (const item of results) {
+        if (!item.ok) {
+          toast.error(`Could not remove/refill ${item.asin}: ${item.error || "Unknown error"}`);
+          continue;
+        }
+        const { removed, refilled } = item;
+        if (removed?.synthesisPossiblyStale) anyStale = true;
+        if (refilled?.synthesisPossiblyStale) anyStale = true;
+
+        const inPhase1 = phase1Competitors.some((c: any) => c.asin === item.asin);
+        const list = inPhase1 ? phase1Competitors : phase2Competitors;
+        const original = list.find((c: any) => c.asin === item.asin);
+
+        let replacement: any;
+        if (refilled?.ok) {
+          replacement = refilled.competitor;
+        } else {
+          replacement = {
+            empty_slot: true,
+            tier: removed?.tier,
+            removed: true,
+            removed_asin: removed?.removedAsin ?? item.asin,
+            removed_name: original?.name ?? null,
+            removed_brand: original?.brand ?? null,
+            name: "Slot removed — refill to search for a replacement",
+          };
+          if (refilled?.reason) toast.error(`No replacement found for ${original?.name || item.asin}: ${refilled.reason}`);
+        }
+
+        const patched = list.map((c: any) => (c.asin === item.asin ? replacement : c));
+        if (inPhase1) phase1Competitors = patched;
+        else phase2Competitors = patched;
+      }
+
+      return {
+        ...prev,
+        phase1: { ...prev.phase1, competitors: phase1Competitors },
+        phase2: { ...prev.phase2, competitors: phase2Competitors },
+        phase3: anyStale && prev.phase3 ? { ...prev.phase3, synthesis_possibly_stale: true } : prev.phase3,
+      };
+    });
+  }
+
   // Resets Phase 3 server-side then hands control back to the same
   // ProgressPanel view a fresh analysis uses — it re-fetches phase0-2
   // results (already complete, instant) and re-runs only the synthesis
@@ -1448,6 +1579,10 @@ export default function AnalyzePage() {
           onRelatedProductReplaced={handleRelatedProductReplaced}
           onRegenerateSynthesis={handleRegenerateSynthesis}
           regeneratingSynthesis={regeneratingSynthesis}
+          onRemoved={handleCompetitorRemoved}
+          onRefillRequested={requestSlotRefill}
+          refillingAsin={refillingAsin}
+          onBulkRefillComplete={handleBulkRefillComplete}
         />
       )}
     </div>

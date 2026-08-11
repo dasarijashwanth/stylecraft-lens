@@ -55,6 +55,20 @@ export interface FeatureComparable {
   // double-count the primary-criterion match.
   heaterType?: string | null;
   maxTempClass?: string | null;
+  // Grooming-specific structural specs (industry-gate ticket, Part 2) — used
+  // both as extra computeFeatureScore checks below AND, separately, by
+  // lib/grooming-tag-taxonomy.ts's computeGroomingTagConfidence() as a hard
+  // same-tool-kind gate (not blended into this function's score).
+  bladeType?: string | null; // fixed/moving/DLC/ceramic/stainless/titanium/foil
+  cutterName?: string | null;
+  zeroGap?: boolean | null;
+  bladeWidthMm?: number | null;
+  guardCombCount?: number | null;
+  taperLever?: boolean | null;
+  lengthSettingsMm?: { min: number; max: number } | null;
+  lengthSettingsCount?: number | null;
+  waterproof?: boolean | null;
+  groomingTag?: string | null; // the derived GroomingTag, carried for downstream display/debugging
 }
 
 function normalizeStr(s: string): string {
@@ -100,6 +114,11 @@ export function computeFeatureScore(
   if (ours.buildMaterial && theirs.buildMaterial) checks.push(normalizeStr(ours.buildMaterial) === normalizeStr(theirs.buildMaterial));
   if (ours.heaterType && theirs.heaterType) checks.push(normalizeStr(ours.heaterType) === normalizeStr(theirs.heaterType));
   if (ours.maxTempClass && theirs.maxTempClass) checks.push(normalizeStr(ours.maxTempClass) === normalizeStr(theirs.maxTempClass));
+  if (ours.bladeType && theirs.bladeType) checks.push(normalizeStr(ours.bladeType) === normalizeStr(theirs.bladeType));
+  if (ours.zeroGap != null && theirs.zeroGap != null) checks.push(ours.zeroGap === theirs.zeroGap);
+  if (ours.guardCombCount != null && theirs.guardCombCount != null) checks.push(ours.guardCombCount === theirs.guardCombCount);
+  if (ours.taperLever != null && theirs.taperLever != null) checks.push(ours.taperLever === theirs.taperLever);
+  if (ours.waterproof != null && theirs.waterproof != null) checks.push(ours.waterproof === theirs.waterproof);
 
   const structuralScore = checks.length === 0 ? 0 : checks.filter(Boolean).length / checks.length;
   const score = (differentiatorMatch === undefined || differentiatorMatch === null)

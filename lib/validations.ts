@@ -144,7 +144,7 @@ export const AnalysisFormSchema = z.object({
 // accepts any 10-char alphanumeric ASIN elsewhere.
 const AsinValue = z.string().regex(/^[A-Z0-9]{10}$/i, "ASIN must be exactly 10 letters/digits");
 
-export const CorrectionReasonValues = ["wrong_product", "wrong_model", "wrong_motor", "better_competitor", "discontinued", "other"] as const;
+export const CorrectionReasonValues = ["wrong_product", "wrong_model", "wrong_motor", "better_competitor", "discontinued", "wrong_industry", "not_comparable", "other"] as const;
 
 export const CompetitorPreviewSchema = z.object({
   asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
@@ -155,6 +155,31 @@ export const CompetitorReplaceSchema = z.object({
   asinOrUrl: z.string().min(1, "Enter an ASIN or Amazon product URL"),
   reason: z.enum(CorrectionReasonValues),
   note: z.string().max(500).optional(),
+});
+
+// Remove + Refill single slot (see lib/analysisEngine.ts's removeCompetitorSlot/
+// refillCompetitorSlot) — a distinct, smaller reason set than
+// CorrectionReasonValues above (no "wrong_model"/"better_competitor" — those
+// only make sense when a replacement ASIN is already known, which Remove
+// deliberately doesn't require up front).
+export const CompetitorRemoveReasonValues = ["wrong_industry", "wrong_product", "wrong_motor", "not_comparable", "other"] as const;
+
+export const CompetitorRemoveSchema = z.object({
+  asin: AsinValue,
+  reason: z.enum(CompetitorRemoveReasonValues),
+  note: z.string().max(500).optional(),
+});
+
+export const CompetitorRefillSlotSchema = z.object({
+  removedAsin: AsinValue,
+});
+
+export const CompetitorBulkRefillSchema = z.object({
+  items: z.array(z.object({
+    asin: AsinValue,
+    reason: z.enum(CompetitorRemoveReasonValues),
+    note: z.string().max(500).optional(),
+  })).max(10),
 });
 
 // Related Products preview (analyze form, no analysisId yet — the analysis

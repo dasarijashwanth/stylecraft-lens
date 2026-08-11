@@ -12,7 +12,7 @@ import { memoryDb, MockCompetitorCorrection } from "@/lib/memoryDb";
 // Kept as a plain string (not a literal union) at the DB-row boundary —
 // matches this codebase's convention of validating literal reason values
 // at the API/zod boundary (lib/validations.ts), not the CRUD layer.
-export type CorrectionReason = "wrong_product" | "wrong_model" | "wrong_motor" | "better_competitor" | "discontinued" | "other";
+export type CorrectionReason = "wrong_product" | "wrong_model" | "wrong_motor" | "better_competitor" | "discontinued" | "wrong_industry" | "not_comparable" | "other";
 
 export interface CompetitorCorrectionRow {
   id: string;
@@ -24,13 +24,17 @@ export interface CompetitorCorrectionRow {
   price_band: string | null;
   old_asin: string;
   old_title: string | null;
-  new_asin: string;
+  // Nullable since Section 57 (supabase_schema.sql) — a "remove" correction
+  // (correction_type:'remove') has no new pick to record; only a "replace"
+  // correction (the default/original flow) ever populates this.
+  new_asin: string | null;
   new_title: string | null;
   reason: string;
   note: string | null;
   user_id: string | null;
   expired_at: string | null;
   created_at: string;
+  correction_type: string;
 }
 
 function mockToRow(m: MockCompetitorCorrection): CompetitorCorrectionRow {
@@ -51,6 +55,7 @@ function mockToRow(m: MockCompetitorCorrection): CompetitorCorrectionRow {
     user_id: m.userId ?? null,
     expired_at: m.expiredAt ? m.expiredAt.toISOString() : null,
     created_at: m.createdAt.toISOString(),
+    correction_type: m.correctionType ?? "replace",
   };
 }
 
@@ -63,12 +68,16 @@ export async function recordCorrection(input: {
   priceBand?: string | null;
   oldAsin: string;
   oldTitle?: string | null;
-  newAsin: string;
+  // null for a "remove" correction (correctionType:"remove") — a remove has
+  // no new pick. Always a real ASIN string for the default "replace" flow.
+  newAsin: string | null;
   newTitle?: string | null;
   reason: CorrectionReason;
   note?: string | null;
   userId?: string | null;
+  correctionType?: "replace" | "remove";
 }): Promise<CompetitorCorrectionRow> {
+  const correctionType = input.correctionType ?? "replace";
   if (isSupabaseConfigured) {
     const { data, error } = await supabaseAdmin
       .from("competitor_corrections")
@@ -86,6 +95,7 @@ export async function recordCorrection(input: {
         reason: input.reason,
         note: input.note ?? null,
         user_id: input.userId ?? null,
+        correction_type: correctionType,
       })
       .select()
       .single();
@@ -111,6 +121,7 @@ export async function recordCorrection(input: {
     userId: input.userId ?? null,
     expiredAt: null,
     createdAt: now,
+    correctionType,
   };
   memoryDb.competitorCorrections.push(row);
   return mockToRow(row);

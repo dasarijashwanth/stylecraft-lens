@@ -36,7 +36,10 @@ export type AuthEventType =
   | "faq_search_miss"
   | "tool_type_create"
   | "change_password_verify"
-  | "competitor_replace";
+  | "competitor_replace"
+  | "competitor_remove"
+  | "competitor_refill_slot"
+  | "competitor_bulk_refill";
 
 export interface AuthEventInput {
   eventType: AuthEventType;

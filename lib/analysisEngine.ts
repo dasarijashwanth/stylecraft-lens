@@ -50,6 +50,9 @@ import { listCatalogProducts } from "./db/catalog-products";
 import { extractCompetitorSpecs, extractOurSpecsFromTds } from "./spec-extraction";
 import { getTdsFieldsForProject } from "./db/documents";
 import { matchesDifferentiator } from "./differentiator-match";
+import { passesGroomingIndustryGate, type GroomingGateCandidateInput } from "./grooming-industry-gate";
+import { deriveGroomingTag, type GroomingTag } from "./grooming-tag-taxonomy";
+import { listGroomingGateRules, getGroomingGateConfidenceThreshold, logGroomingGateIncident, type GroomingGateRuleRow } from "./db/grooming-gate-rules";
 
 // "brushless rotary" style combined label — used consistently everywhere
 // our own motor type needs to appear in a search query or prompt.
@@ -114,7 +117,10 @@ export interface CorrectionSignals {
 export function buildCorrectionSignals(corrections: CompetitorCorrectionRow[]): CorrectionSignals {
   const usersByAsin = new Map<string, Set<string>>();
   for (const corr of corrections) {
-    if (corr.reason !== "wrong_product" && corr.reason !== "discontinued") continue;
+    // "wrong_industry"/"not_comparable" (Remove reasons — Part 3) carry the
+    // exact same "this doesn't belong here" signal strength as
+    // "wrong_product"/"discontinued" — same block/penalize treatment below.
+    if (corr.reason !== "wrong_product" && corr.reason !== "discontinued" && corr.reason !== "wrong_industry" && corr.reason !== "not_comparable") continue;
     const asin = corr.old_asin.toUpperCase();
     const userKey = corr.user_id || `anon:${corr.id}`;
     if (!usersByAsin.has(asin)) usersByAsin.set(asin, new Set());
@@ -158,6 +164,11 @@ export async function seedKnownGoodCandidates(
   const seen = new Set<string>();
   const seeds: any[] = [];
   for (const corr of relevant) {
+    // new_asin is only null for a "remove" correction (correction_type:
+    // "remove"), which never carries reason:"better_competitor" — but the
+    // type is nullable at the row boundary, so this is guarded rather than
+    // assumed.
+    if (!corr.new_asin) continue;
     const asin = corr.new_asin.toUpperCase();
     if (seen.has(asin) || seeds.length >= 3) continue;
     seen.add(asin);
@@ -968,7 +979,7 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
 // search actually returned (up to 8 per the bumped prompt count), producing
 // a clean candidate pool for applyPriceBandGate (below) to price-filter,
 // widen, and truncate AFTER Rainforest enrichment resolves real live prices.
-export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard, toolTypes: ToolTypeRow[]): any[] {
+export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaultTier: "legacy" | "emerging", identity: IdentityCard, toolTypes: ToolTypeRow[], groomingGateRules: GroomingGateRuleRow[] = []): any[] {
   const incomingList = Array.isArray(competitors) ? competitors : [];
   const cleaned: any[] = [];
   // Well above the 8 the prompt now requests — just a runaway-response cap,
@@ -996,9 +1007,19 @@ export function filterCandidatesByCategoryAndIdentity(competitors: any[], defaul
     // No identity.toolType (legacy analysis pre-dating this field) —
     // nothing strict to validate against, don't block. Otherwise this is
     // THE gate that stops a clipper from ever surviving into a trimmer
-    // analysis (or vice versa), even if the AI itself proposed one.
-    if (identity.toolType && !assertToolType(candidateText, identity.toolType, toolTypes).ok) {
-      console.warn(`[tool-type] rejected candidate "${rawIncoming.name}" — mismatched tool type for ${identity.toolType}`);
+    // analysis (or vice versa), even if the AI itself proposed one. Also
+    // runs the grooming/beauty industry gate (Part 1 of the industry-gate
+    // fix) — title/keyword-only capable at this pre-enrichment stage
+    // (no real Amazon category data exists yet for an AI-proposed or raw
+    // search-result candidate), which supersedes a standalone assertToolType
+    // call (the gate's own 1C step already delegates to it, one code path).
+    const gateResult = passesGroomingIndustryGate(
+      { name: rawIncoming.name, description: rawIncoming.top_feature_summary || null, feature_bullets: rawIncoming.key_features || [] },
+      groomingGateRules,
+      { stage: "pre_enrichment", toolTypes, requiredToolType: identity.toolType, ourIsPetGrooming: /pet|dog/i.test(identity.category || "") }
+    );
+    if (!gateResult.ok) {
+      console.warn(`[grooming-gate] rejected candidate "${rawIncoming.name}" — ${gateResult.reason}${gateResult.detail ? ` (${gateResult.detail})` : ""}`);
       continue;
     }
     if (isNamedAfterOwnProduct(rawIncoming.name || "")) continue;
@@ -1219,6 +1240,14 @@ export interface CompositeScoringContext {
   // to exactly today's scoring (see computeRelatedProductSimilarity's own
   // header comment in lib/competitor-scoring.ts).
   relatedProducts?: RelatedProductProfile[];
+  // Grooming/beauty industry gate (Part 1/2) — fetched once per phase step
+  // alongside motorFamilies/toolTypes above, never module-level state (same
+  // per-request-freshness discipline, and what lets an admin's rule edit
+  // affect the very next analysis/refill).
+  groomingGateRules: GroomingGateRuleRow[];
+  ourGroomingTag: GroomingTag | null;
+  groomingGateConfidenceThreshold: number;
+  ourIsPetGrooming: boolean;
 }
 
 // Replaces applyPriceBandGate's plain "in-band first, then closest to
@@ -1251,6 +1280,39 @@ export function selectByCompositeScore(
     _resolvedPrice: typeof c.price_raw === "number" ? c.price_raw : parsePriceToNumber(c.ai_claimed_price ?? c.price),
   }));
 
+  // Grooming/beauty industry gate (Part 1/2) — spec extraction runs here,
+  // BEFORE the gate call, so the gate's 1F structural-spec check and the
+  // Part 2 same-tool-kind confidence gate can consult real grooming specs;
+  // the per-candidate `.map()` below reuses `_groomingSpecs` instead of
+  // calling extractCompetitorSpecs(c) a second time. This is the post-
+  // enrichment gate call — real Amazon categories/BSR data is available
+  // here for every candidate that resolved a real ASIN (see
+  // mergeRainforestProductIntoCompetitor), so 1A's category check is fully
+  // capable at this stage, unlike filterCandidatesByCategoryAndIdentity's
+  // earlier pre-enrichment call.
+  const withSpecsAndTag = withPrice.map(c => {
+    const theirSpecs = extractCompetitorSpecs(c);
+    const candidateTag = deriveGroomingTag(identity.toolType, [c.name, ...(c.feature_bullets || []), c.description || ""].join(" "));
+    return { ...c, _groomingSpecs: { ...theirSpecs, groomingTag: candidateTag } };
+  });
+  const gated = withSpecsAndTag.filter(c => {
+    const result = passesGroomingIndustryGate(c, ctx.groomingGateRules, {
+      stage: "post_enrichment",
+      toolTypes: ctx.toolTypes,
+      requiredToolType: identity.toolType,
+      ourIsPetGrooming: ctx.ourIsPetGrooming,
+      theirSpecs: c._groomingSpecs,
+      ourSpecs: ctx.ourSpecs,
+      ourTag: ctx.ourGroomingTag,
+      candidateTag: c._groomingSpecs.groomingTag,
+      confidenceThreshold: ctx.groomingGateConfidenceThreshold,
+    });
+    if (!result.ok) {
+      console.warn(`[grooming-gate] rejected "${c.name}" — ${result.reason}${result.detail ? ` (${result.detail})` : ""}`);
+    }
+    return result.ok;
+  });
+
   const primaryBand = computePriceBand(targetPriceRaw, tier, 0);
   const widestBand = computePriceBand(targetPriceRaw, tier, 2);
 
@@ -1262,12 +1324,15 @@ export function selectByCompositeScore(
     // than the normal widest step: 40%-250% of target, not clamped to the
     // normal ±50%. This is a distinct, explicit band, not another widenStep
     // on computePriceBand (which stays untouched — it's used elsewhere and
-    // its 50%-floor clamp is intentional for the NORMAL ladder).
-    accepted = withPrice.filter(c => c._resolvedPrice != null && c._resolvedPrice >= targetPriceRaw * 0.4 && c._resolvedPrice <= targetPriceRaw * 2.5);
+    // its 50%-floor clamp is intentional for the NORMAL ladder). The
+    // industry gate is NEVER relaxed here — `gated`, not `withPrice`, is
+    // still the source pool, per the ticket's explicit "better an honest
+    // empty than a nearest-similar gate bypass" rule.
+    accepted = gated.filter(c => c._resolvedPrice != null && c._resolvedPrice >= targetPriceRaw * 0.4 && c._resolvedPrice <= targetPriceRaw * 2.5);
   } else {
     for (let widenStep = 0; widenStep <= 2; widenStep++) {
       const band = computePriceBand(targetPriceRaw, tier, widenStep);
-      const inBand = withPrice.filter(c => c._resolvedPrice != null && isWithinBand(c._resolvedPrice, band));
+      const inBand = gated.filter(c => c._resolvedPrice != null && isWithinBand(c._resolvedPrice, band));
       if (inBand.length >= limit || widenStep === 2) {
         accepted = inBand;
         break;
@@ -1342,7 +1407,9 @@ export function selectByCompositeScore(
       priceScore = priceScoreForCandidate(c._resolvedPrice);
     }
 
-    const theirSpecs = extractCompetitorSpecs(c);
+    // Reuses the spec extraction already run (and gate-checked) above this
+    // function's price-band widen loop — never recomputed.
+    const theirSpecs = c._groomingSpecs;
     // Real listing text only (title/feature_bullets/description — the same
     // grounding data enrichCompetitorsWithRainforest now forwards), never
     // AI-claimed fields — a differentiator "match" must be found in text
@@ -1525,6 +1592,15 @@ export function selectByCompositeScore(
         console.warn(`[tool-type] rejected fallback candidate "${fb.name}" — mismatched tool type for ${identity.toolType}`);
         continue;
       }
+      // Same defense-in-depth re-check for the grooming/beauty industry
+      // gate — this curated static fallback pool should never contain a
+      // non-grooming item, but this is the exact loop the original
+      // contamination bug lived in, so it's never trusted blindly.
+      const fbGateResult = passesGroomingIndustryGate({ name: fb.name || "" }, ctx.groomingGateRules, { stage: "pre_enrichment", toolTypes: ctx.toolTypes, requiredToolType: identity.toolType, ourIsPetGrooming: ctx.ourIsPetGrooming });
+      if (!fbGateResult.ok) {
+        console.warn(`[grooming-gate] rejected fallback candidate "${fb.name}" — ${fbGateResult.reason}`);
+        continue;
+      }
 
       usedNames.add((fb.name || "").toLowerCase());
       const outOfBand = !isWithinBand(fbPrice, primaryBand);
@@ -1574,7 +1650,7 @@ export function selectByCompositeScore(
 // single Promise.all could burst well past that, causing MORE competitors
 // to fail verification than a real per-account rate limit would otherwise
 // allow. Small batches keep this well under any reasonable concurrency cap.
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   async function worker() {
@@ -1772,6 +1848,13 @@ function mergeRainforestProductIntoCompetitor(c: any, product: RainforestProduct
     review_count: product.reviews_str,
     monthly_sales: product.monthly_str || c.monthly_sales,
     bsr_rank: product.bsr || c.bsr_rank,
+    // Real Amazon category path + BSR category breakdown — already fetched
+    // by getAmazonProduct, previously silently dropped here before ever
+    // reaching selectByCompositeScore. This is what lib/grooming-industry-
+    // gate.ts's 1A category check actually gates on; without this, a
+    // candidate's real category data never existed anywhere in the pipeline.
+    categories: product.categories ?? c.categories,
+    bestsellers_rank_full: product.bestsellers_rank_full ?? c.bestsellers_rank_full,
     amazon_url: product.amazon_url,
     image: product.image,
     images: product.images.length ? product.images : (product.image ? [product.image] : []),
@@ -1953,6 +2036,13 @@ interface Phase2ResolvedContext {
   // once per phase run, same "cheap re-read" precedent as motorFamilies/
   // toolTypes above.
   correctionSignals: CorrectionSignals;
+  // Grooming/beauty industry gate (Part 1/2) — same "cheap re-read every
+  // phase step, never module-level state" precedent as motorFamilies/
+  // toolTypes above.
+  groomingGateRules: GroomingGateRuleRow[];
+  groomingGateConfidenceThreshold: number;
+  ourGroomingTag: GroomingTag | null;
+  ourIsPetGrooming: boolean;
 }
 
 type Phase2ContextResult =
@@ -2062,7 +2152,12 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
     };
   }
 
-  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile, correctionSignals } };
+  const groomingGateRules = await listGroomingGateRules();
+  const groomingGateConfidenceThreshold = await getGroomingGateConfidenceThreshold();
+  const ourGroomingTag = deriveGroomingTag(identityCard.toolType, `${identityCard.category} ${identityCard.subcategory} ${identityCard.whatItIs}`);
+  const ourIsPetGrooming = /\b(pet|dog|animal)\b/i.test(`${identityCard.category} ${identityCard.subcategory}`);
+
+  return { ok: true, ctx: { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile, correctionSignals, groomingGateRules, groomingGateConfidenceThreshold, ourGroomingTag, ourIsPetGrooming } };
 }
 
 // Shared by Phase 1's and Phase 2a's multi-round fill loop (see the header
@@ -2366,6 +2461,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // feature) — fetched once here, same "cheap re-read" precedent as
       // motorFamilies/toolTypes above.
       const correctionSignals = buildCorrectionSignals(identityCard.toolType ? await getActiveCorrectionsForToolType(identityCard.toolType) : []);
+      const groomingGateRules = await listGroomingGateRules();
+      const groomingGateConfidenceThreshold = await getGroomingGateConfidenceThreshold();
+      const ourGroomingTag = deriveGroomingTag(identityCard.toolType, `${identityCard.category} ${identityCard.subcategory} ${identityCard.whatItIs}`);
+      const ourIsPetGrooming = /\b(pet|dog|animal)\b/i.test(`${identityCard.category} ${identityCard.subcategory}`);
       const scoringCtx: CompositeScoringContext = {
         motorFamilies,
         brandedNames,
@@ -2380,6 +2479,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         keyDiff: context.keyDiff ?? null,
         penalizedAsins: correctionSignals.penalizedAsins,
         relatedProducts: relatedProductProfiles,
+        groomingGateRules,
+        groomingGateConfidenceThreshold,
+        ourGroomingTag,
+        ourIsPetGrooming,
       };
 
       // Curated legacy-brand registry (lib/db/legacy-brands.ts) takes
@@ -2431,8 +2534,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // filterCandidatesByCategoryAndIdentity exactly like every other
       // incoming batch, never merged into `pool` unfiltered.
       if (fill.round === 1 && eligibleRelatedProducts.length) {
-        const relatedSeeds = filterCandidatesByCategoryAndIdentity(buildRelatedProductSeeds(eligibleRelatedProducts, "legacy"), "legacy", identityCard, toolTypes);
-        const neighbors = filterCandidatesByCategoryAndIdentity(await searchRelatedProductNeighbors(eligibleRelatedProducts, toolTypes, identityCard, "legacy", startTime), "legacy", identityCard, toolTypes);
+        const relatedSeeds = filterCandidatesByCategoryAndIdentity(buildRelatedProductSeeds(eligibleRelatedProducts, "legacy"), "legacy", identityCard, toolTypes, groomingGateRules);
+        const neighbors = filterCandidatesByCategoryAndIdentity(await searchRelatedProductNeighbors(eligibleRelatedProducts, toolTypes, identityCard, "legacy", startTime), "legacy", identityCard, toolTypes, groomingGateRules);
         pool = mergeNewCandidatesIntoPool(pool, [...relatedSeeds, ...neighbors]);
       }
 
@@ -2473,7 +2576,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             criterionPhrasing(primaryCriterion).term
           );
 
-          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard, toolTypes)
+          let competitors = filterCandidatesByCategoryAndIdentity(curatedCandidates, "legacy", identityCard, toolTypes, groomingGateRules)
             .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()));
 
           // Real motor-grounding fix — curated candidates from the Amazon leg
@@ -2558,7 +2661,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
             startTime
           );
           webSearchCount += aiResult.web_searches_performed || 0;
-          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes)
+          let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes, groomingGateRules)
             .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()));
           if (hasRainforestKey) {
             aiCompetitors = await enrichCompetitorsWithRainforest(aiCompetitors, toolTypes, identityCard.toolType, startTime);
@@ -2584,7 +2687,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         );
         webSearchCount += aiResult.web_searches_performed || 0;
 
-        let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes)
+        let aiCompetitors = filterCandidatesByCategoryAndIdentity(aiResult.competitors, "legacy", identityCard, toolTypes, groomingGateRules)
           .filter((c: any) => !usedBrands.has(normalizeBrandToken(c.brand || "")))
           .filter((c: any) => !correctionSignals.blockedAsins.has((c.asin || "").toUpperCase()))
           .map((c: any) => (registry ? { ...c, curated_brand: false, brand_list_status: "not_curated" } : c));
@@ -2669,7 +2772,33 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         fill_rounds_used: updatedFill.round,
       };
 
-      const realCompetitors = competitors.filter((c: any) => !c.empty_slot);
+      // PART 3 (Remove + Refill) — persist a runner-up pool (everything
+      // this run gathered but didn't select) and an empty removed-ASIN
+      // blocklist, both read back later by fetchReplacementForSlot/
+      // removeCompetitorSlot/refillCompetitorSlot. Capped for storage via
+      // trimRunnerUpPoolForStorage — this is a "nice to have instant
+      // refill," not a full audit trail.
+      result.runnerUpPool = trimRunnerUpPoolForStorage(excludeAlreadySelected(pool, competitors));
+      result.removedAsins = [];
+
+      // 1E post-selection sweep — re-checks every non-placeholder survivor
+      // against the CURRENT grooming-gate rules one more time (the gate was
+      // already applied inside selectByCompositeScore above, but rules can
+      // change between candidate-gating and this exact moment is also where
+      // a future admin-rule-edit-triggered re-sweep would hook in) and
+      // swaps out anything contaminated using the runner-up pool this same
+      // run already gathered — zero extra network calls in the common case.
+      result.competitors = await sweepGroomingGateContamination(result.competitors, result.runnerUpPool, {
+        identity: identityCard,
+        tier: "legacy",
+        targetPriceRaw,
+        toolTypes,
+        scoringCtx,
+        excludeAsins: new Set<string>(),
+        analysisId,
+      });
+
+      const realCompetitors = result.competitors.filter((c: any) => !c.empty_slot);
       if (registry) {
         // Per-competitor provenance (which curated list — or the "not on
         // curated list" AI fallback — sourced each legacy pick), feeding the
@@ -2711,7 +2840,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         await setPendingQuestion(analysisId, resolved.pendingQuestion);
         return { analysisId, phase: 2, status: "running", stepResult: null, totalSearches: 0, pendingQuestion: resolved.pendingQuestion };
       }
-      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile, correctionSignals } = resolved.ctx;
+      const { targetPriceRaw, registryBrandTokens, brandHintOverride, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor, heatTechFamilies, brandedHeatTechNames, ourHeatTech, ourMotorLabel, weights, ourSpecs, ourLineupPercentile, correctionSignals, groomingGateRules, groomingGateConfidenceThreshold, ourGroomingTag, ourIsPetGrooming } = resolved.ctx;
 
       if (record.phase2_result?.__phase2Stage !== "discovered") {
         // ----------------------------------------------------
@@ -2737,8 +2866,8 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         // Related Products eligibility (additive only) — same reasoning as
         // Phase 1's identical block above, scoped to "emerging" here.
         if (fill.round === 1 && eligibleRelatedProducts.length) {
-          const relatedSeeds = filterCandidatesByCategoryAndIdentity(buildRelatedProductSeeds(eligibleRelatedProducts, "emerging"), "emerging", identityCard, toolTypes);
-          const neighbors = filterCandidatesByCategoryAndIdentity(await searchRelatedProductNeighbors(eligibleRelatedProducts, toolTypes, identityCard, "emerging", startTime), "emerging", identityCard, toolTypes);
+          const relatedSeeds = filterCandidatesByCategoryAndIdentity(buildRelatedProductSeeds(eligibleRelatedProducts, "emerging"), "emerging", identityCard, toolTypes, groomingGateRules);
+          const neighbors = filterCandidatesByCategoryAndIdentity(await searchRelatedProductNeighbors(eligibleRelatedProducts, toolTypes, identityCard, "emerging", startTime), "emerging", identityCard, toolTypes, groomingGateRules);
           pool = mergeNewCandidatesIntoPool(pool, [...relatedSeeds, ...neighbors]);
         }
 
@@ -2753,7 +2882,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           startTime
         );
 
-        let newCompetitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard, toolTypes);
+        let newCompetitors = filterCandidatesByCategoryAndIdentity(result.competitors, "emerging", identityCard, toolTypes, groomingGateRules);
         if (registryBrandTokens) {
           newCompetitors = newCompetitors.filter((c: any) => !registryBrandTokens.has(normalizeBrandToken(c.brand || "")));
         }
@@ -2777,6 +2906,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           keyDiff: context.keyDiff ?? null,
           penalizedAsins: correctionSignals.penalizedAsins,
           relatedProducts: relatedProductProfiles,
+          groomingGateRules, groomingGateConfidenceThreshold, ourGroomingTag, ourIsPetGrooming,
         };
         const trialSelection = selectByCompositeScore(pool, targetPriceRaw, "emerging", identityCard, 5, trialCtx, { allowStaticFallbackTopup: false, requireMotorEvidenceFirst: true });
 
@@ -2885,6 +3015,10 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         keyDiff: context.keyDiff ?? null,
         penalizedAsins: correctionSignals.penalizedAsins,
         relatedProducts: relatedProductProfiles,
+        groomingGateRules,
+        groomingGateConfidenceThreshold,
+        ourGroomingTag,
+        ourIsPetGrooming,
       };
       // Captured before the reassignment below — this is the full,
       // already-enriched candidate pool the nearest-similar fallback draws
@@ -2934,6 +3068,26 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       result.matching_weights = scoringCtx.weights;
       result.form_inputs = buildFormInputsSnapshot(context);
       result.fill_rounds_used = fillRoundsUsed;
+
+      // PART 3 (Remove + Refill) — same runner-up-pool/removed-ASIN
+      // persistence as Phase 1's finalize block (see its own comment).
+      // enrichedPool is the full, already-enriched candidate pool BEFORE
+      // truncation to 5 — the right "everything gathered but not selected"
+      // source for a runner-up pool.
+      result.runnerUpPool = trimRunnerUpPoolForStorage(excludeAlreadySelected(enrichedPool, result.competitors));
+      result.removedAsins = [];
+
+      // 1E post-selection sweep — same reasoning as Phase 1's own call.
+      result.competitors = await sweepGroomingGateContamination(result.competitors, result.runnerUpPool, {
+        identity: identityCard,
+        tier: "emerging",
+        targetPriceRaw,
+        toolTypes,
+        scoringCtx,
+        excludeAsins: new Set<string>(),
+        analysisId,
+      });
+
       const realEmergingCompetitors = result.competitors.filter((c: any) => !c.empty_slot);
       if (hasRainforestKey) {
         await persistPricingProvenance(realEmergingCompetitors, analysisId);
@@ -3342,6 +3496,460 @@ export async function replaceCompetitor(
   }
 
   return { competitor: newCompetitor, synthesisPossiblyStale };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PART 3 — Remove + Refill single slot. A bad competitor pick (most often
+// caught by the grooming/beauty industry gate, but also a plain wrong-
+// product/wrong-motor human catch) can be dropped and replaced without
+// re-running the whole analysis. Reuses filterCandidatesByCategoryAndIdentity/
+// selectByCompositeScore — the exact same gate+scoring pipeline every
+// discovery round already runs through — never a parallel/looser path, so a
+// slot filled this way is held to identical standards as one filled during
+// normal discovery.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Capped for storage — a "nice to have instant refill" pool, not a full
+// audit trail. 15 is comfortably more than a single slot ever needs across
+// a handful of manual Remove/Refill cycles.
+function trimRunnerUpPoolForStorage(pool: any[]): any[] {
+  return pool.slice(0, 15);
+}
+
+export interface SlotRefillContext {
+  identity: IdentityCard;
+  tier: CompetitorTier;
+  targetPriceRaw: number;
+  toolTypes: ToolTypeRow[];
+  // Already carries groomingGateRules/ourGroomingTag/groomingGateConfidenceThreshold/
+  // ourIsPetGrooming — the whole point of reusing CompositeScoringContext
+  // here is that a refill is held to the exact same gate/scoring standard
+  // as a normal discovery pick, never a separate, looser path.
+  scoringCtx: CompositeScoringContext;
+  excludeAsins: Set<string>;
+  analysisId: string;
+}
+
+export interface SlotRefillResult {
+  ok: boolean;
+  competitor?: any;
+  source?: "runner_up_pool" | "live_rainforest_search";
+  reason?: string;
+}
+
+// The one core primitive used by both the 1E post-selection sweep
+// (sweepGroomingGateContamination, below) and manual single-slot Refill
+// (refillCompetitorSlot, below). Tier A (instant, zero network calls) draws
+// from an already-persisted runner-up pool, re-gated against the CURRENT
+// grooming-gate rules (never whatever rules were live when that pool was
+// first gathered) — this is what makes an admin's rule edit affect the very
+// next refill. Tier B (only when Tier A comes up empty AND a live catalog
+// search is actually possible) falls back to the existing, already-built
+// discoverCompetitorsLive (Rainforest-only, no LLM — genuinely fast). The
+// industry gate is NEVER relaxed at either tier: an honest "nothing
+// qualifies" beats a gate bypass (see the plan's own "Refill's live-fallback
+// depth" note) — allowStaticFallbackTopup is always false here, since the
+// hand-curated static fallback dataset has never been gate-checked.
+export async function fetchReplacementForSlot(candidatePool: any[], ctx: SlotRefillContext): Promise<SlotRefillResult> {
+  const notExcluded = (c: any): boolean => {
+    const asin = (c.asin || "").toUpperCase();
+    return !(asin && ctx.excludeAsins.has(asin));
+  };
+
+  const tierAPool = filterCandidatesByCategoryAndIdentity(
+    candidatePool.filter(notExcluded),
+    ctx.tier,
+    ctx.identity,
+    ctx.toolTypes,
+    ctx.scoringCtx.groomingGateRules
+  );
+  let picked = selectByCompositeScore(tierAPool, ctx.targetPriceRaw, ctx.tier, ctx.identity, 1, ctx.scoringCtx, { allowStaticFallbackTopup: false });
+  if (picked.length === 0) {
+    picked = selectByCompositeScore(tierAPool, ctx.targetPriceRaw, ctx.tier, ctx.identity, 1, ctx.scoringCtx, { nearestSimilarMode: true, allowStaticFallbackTopup: false });
+  }
+  if (picked.length > 0) {
+    return { ok: true, competitor: picked[0], source: "runner_up_pool" };
+  }
+
+  // Tier B — only reachable when the saved runner-up pool has nothing
+  // qualifying left AND a live Rainforest search is actually possible.
+  if (hasRainforestKey) {
+    const ourMotorLabel = ctx.scoringCtx.ourMotor ? formatMotorLabel(ctx.scoringCtx.ourMotor) : null;
+    const liveCandidates = await discoverCompetitorsLive(ctx.identity, ctx.tier, ctx.targetPriceRaw, ctx.toolTypes, [], ourMotorLabel);
+    const tierBPool = filterCandidatesByCategoryAndIdentity(
+      liveCandidates.filter(notExcluded),
+      ctx.tier,
+      ctx.identity,
+      ctx.toolTypes,
+      ctx.scoringCtx.groomingGateRules
+    );
+    let livePicked = selectByCompositeScore(tierBPool, ctx.targetPriceRaw, ctx.tier, ctx.identity, 1, ctx.scoringCtx, { allowStaticFallbackTopup: false });
+    if (livePicked.length === 0) {
+      livePicked = selectByCompositeScore(tierBPool, ctx.targetPriceRaw, ctx.tier, ctx.identity, 1, ctx.scoringCtx, { nearestSimilarMode: true, allowStaticFallbackTopup: false });
+    }
+    if (livePicked.length > 0) {
+      return { ok: true, competitor: livePicked[0], source: "live_rainforest_search" };
+    }
+  }
+
+  return { ok: false, reason: "No qualifying in-industry competitor found in the saved candidate pool or a live catalog search — the industry gate was not relaxed." };
+}
+
+// 1E post-selection sweep — re-checks every non-placeholder finalist against
+// the grooming/beauty industry gate one more time (defense in depth:
+// candidates flow through several merge/dedupe/nearest-similar-fallback
+// steps between their own gate check and final selection) and swaps out
+// anything contaminated using the SAME run's own runner-up pool — zero
+// extra network calls in the common case. A failure that can't be replaced
+// shrinks the slot (an honest empty) rather than ever leaving a
+// contaminated pick in place. Exported (rather than file-private) so it's
+// directly unit-testable (scripts/verify-sweep-gate-contamination.ts).
+export async function sweepGroomingGateContamination(
+  finalList: any[],
+  runnerUpPool: any[],
+  ctx: SlotRefillContext & { scoringCtx: CompositeScoringContext }
+): Promise<any[]> {
+  const rebuilt: any[] = [];
+  for (const c of finalList) {
+    if (c.empty_slot) {
+      rebuilt.push(c);
+      continue;
+    }
+
+    const result = passesGroomingIndustryGate(c, ctx.scoringCtx.groomingGateRules, {
+      stage: "post_enrichment",
+      toolTypes: ctx.toolTypes,
+      requiredToolType: ctx.identity.toolType,
+      ourIsPetGrooming: ctx.scoringCtx.ourIsPetGrooming,
+      theirSpecs: c._groomingSpecs,
+      ourSpecs: ctx.scoringCtx.ourSpecs,
+      ourTag: ctx.scoringCtx.ourGroomingTag,
+      candidateTag: c._groomingSpecs?.groomingTag,
+      confidenceThreshold: ctx.scoringCtx.groomingGateConfidenceThreshold,
+    });
+
+    if (result.ok) {
+      rebuilt.push(c);
+      continue;
+    }
+
+    console.warn(`[grooming-gate] sweep caught contaminated survivor "${c.name}" — ${result.reason}${result.detail ? ` (${result.detail})` : ""}`);
+    try {
+      await logGroomingGateIncident({
+        analysisId: ctx.analysisId,
+        phase: ctx.tier === "legacy" ? "phase1" : "phase2",
+        candidateName: c.name,
+        candidateAsin: c.asin,
+        candidateBrand: c.brand,
+        categoryPath: (c.categories || []).join(" > ") || null,
+        failedRule: result.reason,
+        detail: result.detail,
+      });
+    } catch (e) {
+      console.warn("Failed to log grooming-gate sweep incident:", e);
+    }
+
+    const replacement = await fetchReplacementForSlot(excludeAlreadySelected(runnerUpPool, finalList), ctx);
+    if (replacement.ok && replacement.competitor) {
+      console.warn(`[grooming-gate] sweep replaced "${c.name}" with "${replacement.competitor.name}" (source: ${replacement.source})`);
+      rebuilt.push(replacement.competitor);
+    } else {
+      console.warn(`[grooming-gate] sweep removed "${c.name}" — no qualifying replacement found in the runner-up pool or a live search; slot shrinks`);
+    }
+  }
+  return rebuilt;
+}
+
+// The single-slot Remove action. Mirrors replaceCompetitor's own
+// ownership/loading/patching/staleness-flagging/correction-recording
+// machinery exactly (see that function above) but replaces the slot with an
+// honest "removed, awaiting refill" placeholder instead of a new pick —
+// Refill (below) is a separate, later action.
+export type CompetitorRemoveReason = "wrong_industry" | "wrong_product" | "wrong_motor" | "not_comparable" | "other";
+
+export interface RemoveCompetitorSlotResult {
+  removedAsin: string;
+  tier: string;
+  synthesisPossiblyStale: boolean;
+}
+
+export async function removeCompetitorSlot(
+  analysisId: string,
+  asin: string,
+  actorUserId: string,
+  opts: { reason: CompetitorRemoveReason; note?: string | null }
+): Promise<RemoveCompetitorSlotResult> {
+  const record: any = await getAnalysis(analysisId);
+  if (!record) throw new Error("Analysis not found");
+
+  const identity: IdentityCard | null = hasResult(record.phase0_result) ? record.phase0_result : null;
+  if (!identity) throw new Error("Analysis has no confirmed product identity yet — cannot remove a competitor before Phase 0 completes");
+
+  const context: AnalysisContext = { id: analysisId, orgId: record.org_id || "dev_org_id", userId: record.user_id, projectId: record.project_id || null, ...(record.context || {}) };
+
+  const phase1Result = hasResult(record.phase1_result) ? record.phase1_result : null;
+  const phase2Result = hasResult(record.phase2_result) ? record.phase2_result : null;
+  const phase3Result = hasResult(record.phase3_result) ? record.phase3_result : null;
+
+  let foundIn: "phase1" | "phase2" | null = null;
+  let found: any = null;
+  if (phase1Result?.competitors) {
+    const idx = phase1Result.competitors.findIndex((c: any) => c.asin === asin);
+    if (idx >= 0) { foundIn = "phase1"; found = phase1Result.competitors[idx]; }
+  }
+  if (!foundIn && phase2Result?.competitors) {
+    const idx = phase2Result.competitors.findIndex((c: any) => c.asin === asin);
+    if (idx >= 0) { foundIn = "phase2"; found = phase2Result.competitors[idx]; }
+  }
+  if (!foundIn || !found) throw new Error(`No competitor with ASIN "${asin}" found on this analysis`);
+
+  const tier = foundIn === "phase1" ? "legacy" : "emerging";
+  const placeholder = {
+    empty_slot: true,
+    tier,
+    removed: true,
+    removed_asin: asin,
+    removed_name: found.name ?? null,
+    removed_brand: found.brand ?? null,
+    removed_reason: opts.reason,
+    removed_at: new Date().toISOString(),
+    removed_by: actorUserId,
+    name: "Slot removed — refill to search for a replacement",
+  };
+
+  const patch: { phase1_result?: object; phase2_result?: object; phase3_result?: object } = {};
+  if (foundIn === "phase1") {
+    const existingRemoved: string[] = Array.isArray(phase1Result.removedAsins) ? phase1Result.removedAsins : [];
+    patch.phase1_result = {
+      ...phase1Result,
+      competitors: phase1Result.competitors.map((c: any) => (c.asin === asin ? placeholder : c)),
+      removedAsins: existingRemoved.includes(asin) ? existingRemoved : [...existingRemoved, asin],
+    };
+  } else {
+    const existingRemoved: string[] = Array.isArray(phase2Result.removedAsins) ? phase2Result.removedAsins : [];
+    patch.phase2_result = {
+      ...phase2Result,
+      competitors: phase2Result.competitors.map((c: any) => (c.asin === asin ? placeholder : c)),
+      removedAsins: existingRemoved.includes(asin) ? existingRemoved : [...existingRemoved, asin],
+    };
+  }
+
+  const synthesisPossiblyStale = phase3MentionsCompetitor(phase3Result, found.name, found.brand);
+  if (synthesisPossiblyStale && phase3Result) {
+    patch.phase3_result = { ...phase3Result, synthesis_possibly_stale: true };
+  }
+
+  await patchAnalysisPhaseResults(analysisId, patch);
+
+  const toolTypes = await listToolTypes();
+  const primaryCriterion = resolvePrimaryCriterion(identity, toolTypes);
+  const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identity);
+
+  // One correction row per remove, keyed on old_asin (never new_asin, which
+  // is null here) — a later refill of this same slot does NOT write a
+  // second row, avoiding double-counting toward buildCorrectionSignals'
+  // 2-distinct-user hard-block threshold.
+  await recordCorrection({
+    analysisId,
+    projectId: context.projectId,
+    toolType: identity.toolType || "",
+    motorFamily: primaryCriterion === "motor" ? (found.motor_family_key ?? null) : null,
+    heatTechFamily: primaryCriterion === "heat_technology" ? (found.heat_tech_family_key ?? null) : null,
+    priceBand: targetPriceRaw != null ? deriveTierKeyword(targetPriceRaw) : null,
+    oldAsin: asin,
+    oldTitle: found.name ?? null,
+    newAsin: null,
+    newTitle: null,
+    reason: opts.reason,
+    note: opts.note ?? null,
+    userId: actorUserId,
+    correctionType: "remove",
+  });
+
+  // Same root-cause routing as replaceCompetitor's own "wrong_motor" branch
+  // — reuses the already-built motor_tech_search_misses admin-inspectable
+  // log rather than inventing a parallel one.
+  if (opts.reason === "wrong_motor" && primaryCriterion === "motor") {
+    try {
+      await logMotorTechMiss(found.motor_type || found.name || asin);
+    } catch (e) {
+      console.warn("Failed to log motor-tech miss for removal:", e);
+    }
+  }
+
+  // A human-flagged "wrong industry" removal surfaces in the exact same
+  // admin anomaly panel as an automated gate rejection (phase:
+  // "manual_removal", failed_rule: null — a human flagged it, the automated
+  // gate never actually tripped), with an "Add to blocklist" suggestion the
+  // admin can confirm — never auto-applied.
+  if (opts.reason === "wrong_industry") {
+    try {
+      await logGroomingGateIncident({
+        analysisId,
+        phase: "manual_removal",
+        candidateName: found.name ?? null,
+        candidateAsin: asin,
+        candidateBrand: found.brand ?? null,
+        categoryPath: (found.categories || []).join(" > ") || (found.bestsellers_rank_full || [])[0]?.category || null,
+        failedRule: null,
+        detail: opts.note ?? null,
+      });
+    } catch (e) {
+      console.warn("Failed to log grooming-gate manual-removal incident:", e);
+    }
+  }
+
+  return { removedAsin: asin, tier, synthesisPossiblyStale };
+}
+
+// The single-slot Refill action, the counterpart to Remove above. Re-derives
+// everything a fresh SlotRefillContext needs (never cached — same "cheap
+// re-read every time" discipline as motorFamilies/toolTypes elsewhere in
+// this file, and what lets an admin's grooming-gate rule edit affect the
+// very next refill), then delegates the actual search to
+// fetchReplacementForSlot. An honest "nothing qualifies" is a normal,
+// non-throwing outcome here (HTTP 200 at the route layer) — matching this
+// codebase's existing buildEmptySlotPlaceholder "explicit empty is not a
+// failure" convention.
+export async function refillCompetitorSlot(
+  analysisId: string,
+  removedAsin: string,
+  actorUserId: string
+): Promise<SlotRefillResult & { tier?: string; synthesisPossiblyStale?: boolean }> {
+  const record: any = await getAnalysis(analysisId);
+  if (!record) throw new Error("Analysis not found");
+
+  const identity: IdentityCard | null = hasResult(record.phase0_result) ? record.phase0_result : null;
+  if (!identity) throw new Error("Analysis has no confirmed product identity yet — cannot refill a slot before Phase 0 completes");
+
+  const context: AnalysisContext = { id: analysisId, orgId: record.org_id || "dev_org_id", userId: record.user_id, projectId: record.project_id || null, ...(record.context || {}) };
+
+  const phase1Result = hasResult(record.phase1_result) ? record.phase1_result : null;
+  const phase2Result = hasResult(record.phase2_result) ? record.phase2_result : null;
+  const phase3Result = hasResult(record.phase3_result) ? record.phase3_result : null;
+
+  let foundIn: "phase1" | "phase2" | null = null;
+  let placeholderIdx = -1;
+  let placeholder: any = null;
+  if (phase1Result?.competitors) {
+    const idx = phase1Result.competitors.findIndex((c: any) => c.removed_asin === removedAsin);
+    if (idx >= 0) { foundIn = "phase1"; placeholderIdx = idx; placeholder = phase1Result.competitors[idx]; }
+  }
+  if (!foundIn && phase2Result?.competitors) {
+    const idx = phase2Result.competitors.findIndex((c: any) => c.removed_asin === removedAsin);
+    if (idx >= 0) { foundIn = "phase2"; placeholderIdx = idx; placeholder = phase2Result.competitors[idx]; }
+  }
+  if (!foundIn || !placeholder) throw new Error(`No removed slot with ASIN "${removedAsin}" found on this analysis`);
+
+  const tier: CompetitorTier = foundIn === "phase1" ? "legacy" : "emerging";
+  const phaseResult = foundIn === "phase1" ? phase1Result : phase2Result;
+
+  // resolvePhase2Context is tier-agnostic despite its name — it resolves
+  // exactly the pieces a fresh CompositeScoringContext needs (target price,
+  // motor/heat-tech resolution, weights, our specs, lineup percentile,
+  // correction signals, grooming-gate rules/tag/threshold) regardless of
+  // which tier is being refilled. By the time a slot exists to refill,
+  // discovery has already run at least once for this analysis, so every
+  // pause-and-ask input this resolves was already answered earlier in the
+  // flow — this should not re-trigger a pause in practice; if it somehow
+  // does, that's an honest "can't search right now" rather than a crash.
+  const resolved = await resolvePhase2Context(context, identity);
+  if (!resolved.ok) {
+    return { ok: false, reason: `Cannot search for a replacement — missing required analysis context (${resolved.pendingQuestion.question})` };
+  }
+  const {
+    targetPriceRaw, motorFamilies, brandedNames, toolTypes, primaryCriterion, ourMotor,
+    heatTechFamilies, brandedHeatTechNames, ourHeatTech, weights, ourSpecs, ourLineupPercentile,
+    correctionSignals, groomingGateRules, groomingGateConfidenceThreshold, ourGroomingTag, ourIsPetGrooming,
+  } = resolved.ctx;
+
+  // No indie brand lineups reconstructed here — same reasoning as
+  // replaceCompetitor's own header comment: relative-lineup pricing is a
+  // discovery-time-only concept not worth rebuilding for a single slot;
+  // price scoring falls back to absolute-price-to-target automatically when
+  // indieLineups/ourLineupPercentile aren't both present (see
+  // selectByCompositeScore's own tier==="emerging" branch).
+  const scoringCtx: CompositeScoringContext = {
+    motorFamilies,
+    brandedNames,
+    toolTypes,
+    primaryCriterion,
+    ourMotor,
+    heatTechFamilies,
+    brandedHeatTechNames,
+    ourHeatTech,
+    ourSpecs,
+    weights,
+    ourLineupPercentile,
+    keyDiff: context.keyDiff ?? null,
+    penalizedAsins: correctionSignals.penalizedAsins,
+    groomingGateRules,
+    groomingGateConfidenceThreshold,
+    ourGroomingTag,
+    ourIsPetGrooming,
+  };
+
+  // The union of both phases' real (non-placeholder) competitor ASINs and
+  // both phases' removedAsins blocklists — a removed legacy pick can never
+  // resurface as an emerging refill, or vice versa.
+  const excludeAsins = new Set<string>();
+  for (const c of phase1Result?.competitors || []) {
+    const a = (c.asin || "").toUpperCase();
+    if (/^[A-Z0-9]{10}$/.test(a)) excludeAsins.add(a);
+  }
+  for (const c of phase2Result?.competitors || []) {
+    const a = (c.asin || "").toUpperCase();
+    if (/^[A-Z0-9]{10}$/.test(a)) excludeAsins.add(a);
+  }
+  for (const a of phase1Result?.removedAsins || []) excludeAsins.add(String(a).toUpperCase());
+  for (const a of phase2Result?.removedAsins || []) excludeAsins.add(String(a).toUpperCase());
+
+  const slotCtx: SlotRefillContext = { identity, tier, targetPriceRaw, toolTypes, scoringCtx, excludeAsins, analysisId };
+
+  const result = await fetchReplacementForSlot(phaseResult.runnerUpPool || [], slotCtx);
+  if (!result.ok || !result.competitor) {
+    return { ok: false, reason: result.reason };
+  }
+
+  const newCompetitor = {
+    ...result.competitor,
+    // A distinct flag from manually_selected (replaceCompetitor's own
+    // marker) — this is an auto-discovered replacement, not a human-typed
+    // ASIN override.
+    slot_refilled: true,
+    slot_refilled_at: new Date().toISOString(),
+    slot_refilled_source: result.source,
+  };
+
+  const newCompetitors = phaseResult.competitors.map((c: any, i: number) => (i === placeholderIdx ? newCompetitor : c));
+  const consumedAsin = (result.competitor.asin || "").toUpperCase();
+  const newRunnerUpPool = (phaseResult.runnerUpPool || []).filter((c: any) => (c.asin || "").toUpperCase() !== consumedAsin);
+
+  const updatedPhaseResult = { ...phaseResult, competitors: newCompetitors, runnerUpPool: newRunnerUpPool };
+  const patch: { phase1_result?: object; phase2_result?: object; phase3_result?: object } = {};
+  if (foundIn === "phase1") {
+    patch.phase1_result = updatedPhaseResult;
+  } else {
+    patch.phase2_result = updatedPhaseResult;
+  }
+
+  // The ORIGINAL removed competitor's name/brand (stored on the placeholder
+  // by removeCompetitorSlot above) — not the new pick's — since this checks
+  // whether Phase 3's synthesis discussed the product that's now gone.
+  const synthesisPossiblyStale = phase3MentionsCompetitor(phase3Result, placeholder.removed_name, placeholder.removed_brand);
+  if (synthesisPossiblyStale && phase3Result) {
+    patch.phase3_result = { ...phase3Result, synthesis_possibly_stale: true };
+  }
+
+  await patchAnalysisPhaseResults(analysisId, patch);
+
+  try {
+    await persistPricingProvenance([newCompetitor], analysisId);
+  } catch (e) {
+    console.warn("Failed to persist pricing provenance for refilled competitor:", e);
+  }
+
+  return { ok: true, competitor: newCompetitor, source: result.source, tier, synthesisPossiblyStale };
 }
 
 export interface ReplaceRelatedProductResult {

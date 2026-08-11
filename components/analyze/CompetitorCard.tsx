@@ -2,17 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { useAmazonProduct } from "@/hooks/useAmazonProduct";
-import { ChevronDown, ChevronUp, ExternalLink, Star, RefreshCw, Newspaper, TrendingUp, TrendingDown, Minus, AlertTriangle, Pencil, X, Check } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Star, RefreshCw, Newspaper, TrendingUp, TrendingDown, Minus, AlertTriangle, Pencil, X, Check, Trash2 } from "lucide-react";
 import type { ReviewAnalysis, TierResult, ListingStats } from "@/lib/amazon-review-analysis";
 import type { ProductNewsResult } from "@/lib/product-news";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
 import { CitationMarker, SourcesFootnoteList, useCitationNumbering } from "./CitationMarker";
 import { enqueue } from "@/lib/fetch-queue";
 import { SkeletonRows } from "@/components/ui/Skeleton";
+import { Spinner } from "@/components/ui/Spinner";
 import { SectionSourceLine, SourceUnavailableCaption } from "./SectionSourceLine";
 import { assertProvenance, domainOf, formatReviewDate } from "@/lib/provenance-format";
 import type { ReviewEvidence } from "@/lib/amazon-review-analysis";
-import { CorrectionReasonValues } from "@/lib/validations";
+import { CorrectionReasonValues, CompetitorRemoveReasonValues } from "@/lib/validations";
 
 const CORRECTION_REASON_LABELS: Record<string, string> = {
   wrong_product: "Wrong product entirely (not the right tool type)",
@@ -20,6 +21,17 @@ const CORRECTION_REASON_LABELS: Record<string, string> = {
   wrong_motor: "Wrong motor/plate-heat type",
   better_competitor: "Better/more relevant competitor exists (this one)",
   discontinued: "Discontinued / unavailable product",
+  other: "Other",
+};
+
+// Remove + Refill single slot (distinct from the correction reasons above,
+// which are for an ASIN swap/replace) — labels map 1:1 to
+// lib/validations.ts's CompetitorRemoveReasonValues, the authoritative list.
+const REMOVE_REASON_LABELS: Record<string, string> = {
+  wrong_industry: "Wrong industry (not a grooming/beauty product at all)",
+  wrong_product: "Wrong product",
+  wrong_motor: "Wrong motor",
+  not_comparable: "Not really comparable",
   other: "Other",
 };
 
@@ -183,6 +195,15 @@ interface CompetitorCardProps {
   // and patches its phase1/phase2 competitors array in place; this card
   // never mutates its own `competitor` prop directly.
   onReplaced?: (oldAsin: string, updatedCompetitor: any, synthesisPossiblyStale: boolean) => void;
+  // Fired after a successful Remove (lib/analysisEngine.ts's
+  // removeCompetitorSlot via POST .../competitors/remove) — same division
+  // of responsibility as onReplaced above: the route only returns
+  // {removedAsin, tier, synthesisPossiblyStale}, so this card builds the
+  // displayed placeholder object itself (mirroring the server's own
+  // placeholder shape) and hands it up for the parent to patch in. Never
+  // shown/wired for Related Products cards (mode="related") — Remove +
+  // Refill only applies to phase1/phase2 discovered competitor slots.
+  onRemoved?: (asin: string, tier: string, placeholder: any, synthesisPossiblyStale: boolean) => void;
 }
 
 type FeaturesState =
@@ -417,21 +438,46 @@ async function safeJson(res: Response): Promise<any> {
   }
 }
 
+interface EmptySlotCardProps {
+  reason: string;
+  // Set only for a slot vacated by Remove + Refill (lib/analysisEngine.ts's
+  // removeCompetitorSlot placeholder, identified by its removed_asin field)
+  // — a genuinely-never-found empty slot from normal discovery never has
+  // this, and must render IDENTICALLY to before (no button, no layout
+  // change) since that's a completely different, unrelated situation.
+  removedAsin?: string;
+  onRefillRequested?: (removedAsin: string) => void;
+  refilling?: boolean;
+}
+
 // Rendered instead of a real CompetitorCard for a slot the fill loop
 // genuinely could not fill after exhausting the full round/relaxation
 // ladder (lib/analysisEngine.ts's buildEmptySlotPlaceholder) — an honest,
 // visibly-different empty state rather than silently showing fewer
 // competitors, with the exact reason (how much was actually searched)
-// always visible, not just in a log.
-export function EmptySlotCard({ reason }: { reason: string }) {
+// always visible, not just in a log. ALSO doubles as the post-Remove
+// placeholder's display (removedAsin present) — same visual shell, plus a
+// "Refill this slot" action.
+export function EmptySlotCard({ reason, removedAsin, onRefillRequested, refilling }: EmptySlotCardProps) {
   return (
-    <div className="competitor-card border border-dashed border-border rounded-xl p-5 flex items-center justify-center text-center min-h-[140px]">
+    <div className={`competitor-card border border-dashed border-border rounded-xl p-5 flex items-center justify-center text-center min-h-[140px]${removedAsin ? " flex-col gap-3" : ""}`}>
       <p className="text-[11px] text-text-muted italic max-w-xs">{reason}</p>
+      {removedAsin && (
+        <button
+          type="button"
+          onClick={() => onRefillRequested?.(removedAsin)}
+          disabled={refilling}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-50"
+        >
+          {refilling ? <Spinner size="xs" className="text-white" /> : <RefreshCw className="w-3 h-3" />}
+          <span>{refilling ? "Searching…" : "Refill this slot"}</span>
+        </button>
+      )}
     </div>
   );
 }
 
-export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true, mode = "competitor", onReplaced }: CompetitorCardProps) {
+export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, keyDiff, buyerSentimentEnabled = true, newsUpdatesEnabled = true, mode = "competitor", onReplaced, onRemoved }: CompetitorCardProps) {
   const isRelated = mode === "related";
   // All 4 sections load automatically on mount — collapsing is purely a
   // visual/reading-convenience toggle, never a fetch trigger. Related
@@ -617,6 +663,59 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
     }
   }
 
+  // Remove + Refill single slot — Trash2-triggered sibling inline panel
+  // (same visual shell as the Replace panel above): pick a reason, an
+  // optional note, confirm. Never wired for Related Products (mode=
+  // "related") — see onRemoved's own comment on why. On success, this card
+  // builds the placeholder object the parent will display in its place
+  // (the /competitors/remove route itself only returns
+  // {removedAsin, tier, synthesisPossiblyStale}) and bubbles it up via
+  // onRemoved, mirroring onReplaced's division of responsibility above.
+  const [removePanelOpen, setRemovePanelOpen] = useState(false);
+  const [removeReason, setRemoveReason] = useState<string>("wrong_industry");
+  const [removeNote, setRemoveNote] = useState("");
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  function resetRemovePanel() {
+    setRemovePanelOpen(false);
+    setRemoveReason("wrong_industry");
+    setRemoveNote("");
+    setRemoveError(null);
+  }
+
+  async function handleConfirmRemove() {
+    if (!analysisId) return;
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/competitors/remove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asin: c.asin, reason: removeReason, note: removeNote.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to remove competitor");
+      const placeholder = {
+        empty_slot: true,
+        tier: data.tier,
+        removed: true,
+        removed_asin: data.removedAsin,
+        removed_name: c.name ?? null,
+        removed_brand: c.brand ?? null,
+        removed_reason: removeReason,
+        removed_at: new Date().toISOString(),
+        name: "Slot removed — refill to search for a replacement",
+      };
+      onRemoved?.(data.removedAsin, data.tier, placeholder, data.synthesisPossiblyStale);
+      resetRemovePanel();
+    } catch (err: any) {
+      setRemoveError(err.message || "Failed to remove competitor");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   // Per-section citation numbering — same URL cited twice in one section
   // keeps one number (components/analyze/CitationMarker.tsx).
   const featuresCitations = useCitationNumbering();
@@ -670,7 +769,7 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
           ) : (
             <span className="text-[10px] text-text-muted italic">ASIN unavailable</span>
           )}
-          {analysisId && !editingAsin && (
+          {analysisId && !editingAsin && !removePanelOpen && (
             <button
               type="button"
               onClick={() => { setEditingAsin(true); setAsinInput(c.asin || ""); }}
@@ -678,6 +777,16 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
               className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-text-primary transition-colors"
             >
               <Pencil className="w-3 h-3" />
+            </button>
+          )}
+          {analysisId && !isRelated && !editingAsin && !removePanelOpen && (
+            <button
+              type="button"
+              onClick={() => setRemovePanelOpen(true)}
+              title="Wrong competitor? Remove this slot"
+              className="p-1 rounded hover:bg-surface-3 text-text-muted hover:text-danger transition-colors"
+            >
+              <Trash2 className="w-3 h-3" />
             </button>
           )}
         </div>
@@ -792,6 +901,63 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Remove + Refill single slot — Trash2-triggered sibling inline
+          panel (same shell as the Replace panel above): pick why, an
+          optional note, confirm. Destructive-styled per this app's
+          ConfirmDialog danger convention (bg-danger / hover:bg-danger/90). */}
+      {removePanelOpen && (
+        <div className="rounded-lg border border-danger/40 bg-surface-3/30 p-3 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] font-bold text-text-muted uppercase tracking-wider">Remove this competitor</span>
+            <button type="button" onClick={resetRemovePanel} className="p-0.5 rounded hover:bg-surface-3 text-text-muted hover:text-text-primary">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Why are you removing this competitor?</label>
+            <div className="space-y-1">
+              {CompetitorRemoveReasonValues.map((reasonValue) => (
+                <label key={reasonValue} className="flex items-center gap-1.5 text-[10px] text-text-secondary cursor-pointer">
+                  <input
+                    type="radio"
+                    name={`remove-reason-${c.asin}`}
+                    value={reasonValue}
+                    checked={removeReason === reasonValue}
+                    onChange={() => setRemoveReason(reasonValue)}
+                  />
+                  {REMOVE_REASON_LABELS[reasonValue]}
+                </label>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={removeNote}
+              onChange={(e) => setRemoveNote(e.target.value)}
+              placeholder="Optional note"
+              className="w-full mt-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+            />
+          </div>
+
+          {removeError && <p className="text-[10px] text-danger">{removeError}</p>}
+
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={handleConfirmRemove}
+              disabled={removing}
+              className="flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold bg-danger hover:bg-danger/90 text-white rounded-lg transition-colors disabled:opacity-50"
+            >
+              {removing && <Spinner size="xs" className="text-white" />}
+              <span>{removing ? "Removing…" : "Remove"}</span>
+            </button>
+            <button type="button" onClick={resetRemovePanel} disabled={removing} className="px-3 py-1.5 text-[11px] font-semibold text-text-muted hover:text-text-primary transition-colors">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 

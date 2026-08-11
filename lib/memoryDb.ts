@@ -420,6 +420,41 @@ export interface MockMotorFamily {
   updatedAt: Date;
 }
 
+// Admin-editable grooming/beauty industry gate — the allow/block category
+// segments, required/disqualifying keywords, trimmer co-signal words,
+// component disqualifiers, cross-domain use phrases, and the same-tool-kind
+// confidence threshold that lib/grooming-industry-gate.ts's
+// passesGroomingIndustryGate() checks candidates against BEFORE motor/price
+// scoring. One flat, ruleType-discriminated array (not six) — same
+// precedent as motorTechSearchMisses' brandName-discriminator reuse instead
+// of a forked array. Always-seeded, same precedent as motorFamilies/toolTypes.
+export interface MockGroomingGateRule {
+  id: string;
+  ruleType: string;
+  value: string;
+  label: string | null;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Per-candidate rejection audit log — real usage data (starts empty), same
+// non-seeded precedent as competitorCorrections/motorTechSearchMisses.
+export interface MockGroomingGateIncident {
+  id: string;
+  analysisId: string | null;
+  phase: string; // 'phase1' | 'phase2' | 'manual_removal'
+  candidateName: string | null;
+  candidateAsin: string | null;
+  candidateBrand: string | null;
+  categoryPath: string | null;
+  failedRule: string | null;
+  detail: string | null;
+  dismissedAt: Date | null;
+  createdAt: Date;
+}
+
 export interface MockToolType {
   id: string;
   typeKey: string;
@@ -486,13 +521,17 @@ export interface MockCompetitorCorrection {
   priceBand?: string | null;
   oldAsin: string;
   oldTitle?: string | null;
-  newAsin: string;
+  // Nullable — a "Remove" action (no replacement chosen yet) records a
+  // correction with newAsin: null; correctionType distinguishes this from
+  // the original replace flow, which always populates newAsin.
+  newAsin: string | null;
   newTitle?: string | null;
   reason: string;
   note?: string | null;
   userId?: string | null;
   expiredAt?: Date | null;
   createdAt: Date;
+  correctionType?: string; // 'replace' (default) | 'remove'
 }
 
 export interface MockBrandedMotorName {
@@ -755,6 +794,12 @@ class MemoryDatabase {
   // non-seeded, non-persisted-across-restart precedent as
   // brandedMotorNames/faqVotes above.
   competitorCorrections: MockCompetitorCorrection[] = [];
+  // Grooming/beauty industry gate — always-seeded, same precedent as
+  // motorFamilies/toolTypes above (real default reference config).
+  groomingGateRules: MockGroomingGateRule[] = [];
+  // Real usage data (per-candidate gate-rejection audit trail) — same
+  // non-seeded precedent as competitorCorrections just above.
+  groomingGateIncidents: MockGroomingGateIncident[] = [];
   // Same always-seeded precedent — real default Help content, not an
   // empty admin table. Votes/search-misses start empty (real usage data).
   faqs: MockFaq[] = [];
@@ -788,6 +833,7 @@ class MemoryDatabase {
     this.seedCollectionDefaults();
     this.seedBrandVoiceGuideDefaults();
     this.seedFaqDefaults();
+    this.seedGroomingGateRuleDefaults();
     if (!IS_SERVERLESS) this.startAutosave();
   }
 
@@ -1034,6 +1080,47 @@ class MemoryDatabase {
         modifier: d.modifier ?? false,
         adjacentFamilies: d.adjacent ?? [],
         enabled: d.enabled ?? true,
+        sortOrder: i,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  // Mirrors supabase_schema.sql's Section 56 grooming_gate_rules seed —
+  // the ticket's own allow/block category segments, required/disqualifying
+  // keywords, trimmer co-signal words, component disqualifiers, cross-
+  // domain use phrases, and confidence threshold. Order within each
+  // ruleType doesn't matter for matching (unlike motorFamilies' aliases),
+  // so sortOrder here is just a stable display order per group.
+  seedGroomingGateRuleDefaults() {
+    if (this.groomingGateRules.length > 0) return;
+    const now = new Date();
+    const defs: { ruleType: string; value: string; label?: string }[] = [
+      // Positive category signals (Beauty & Personal Care taxonomy)
+      ...["Beauty & Personal Care", "Hair Care", "Hair Cutting Tools", "Hair Clippers", "Hair Trimmers", "Shave & Hair Removal", "Electric Shavers", "Men's Grooming", "Hair Dryers", "Hair Styling Tools", "Flat Irons", "Curling Irons", "Tools & Accessories"].map(v => ({ ruleType: "allow_category_segment", value: v })),
+      // Negative category signals (never a grooming/beauty product)
+      ...["Patio, Lawn & Garden", "Tools & Home Improvement", "Power & Hand Tools", "Outdoor Power Tools", "Automotive", "Kitchen & Dining", "Appliances", "Industrial & Scientific", "Pet Supplies", "Toys & Games", "Sports & Outdoors", "Garden", "Lawn Mowers", "String Trimmers", "Weed Trimmers", "Hedge Trimmers", "Brush Cutters", "Drills", "Saws"].map(v => ({ ruleType: "block_category_segment", value: v })),
+      // Required product-type keywords (title/description must contain at least one)
+      ...["hair", "clipper", "trimmer", "shaver", "foil", "beard", "barber", "grooming", "haircut", "hair dryer", "blow dryer", "flat iron", "curling", "styling", "razor", "edger", "lining", "fade"].map(v => ({ ruleType: "required_keyword", value: v })),
+      // Disqualifying keywords (any hit rejects, unless our product is itself pet-grooming for the pet/dog/animal ones)
+      ...["weed", "grass", "lawn", "garden", "hedge", "string trimmer", "brush cutter", "wacker", "whacker", "drill", "saw", "sander", "tire", "engine", "kitchen", "blender", "vacuum", "wood", "metal cutting", "automotive"].map(v => ({ ruleType: "disqualifying_keyword", value: v })),
+      ...["dog grooming", "pet grooming", "animal grooming"].map(v => ({ ruleType: "disqualifying_keyword", value: v, label: "Skipped when our own product is pet grooming" })),
+      // "Trimmer" is ambiguous across industries — require one of these to co-occur
+      ...["beard", "hair", "barber", "body", "mustache", "ear", "nose"].map(v => ({ ruleType: "trimmer_cosignal_keyword", value: v })),
+      // Bare motor/component/OEM-part listings, not a finished grooming tool
+      ...["brushless motor", "dc motor", "outrunner motor", "motor kit", "replacement motor", "esc", "propeller", "stator", "armature", "dynamo", "gear motor", "servo motor"].map(v => ({ ruleType: "component_disqualifier", value: v })),
+      // Cross-domain use phrases — reject regardless of motor match
+      ...["surfboard", "efoil", "drone", "rc car", "boat", "underwater", "marine", "thruster", "lawn mower"].map(v => ({ ruleType: "cross_domain_use_phrase", value: v })),
+      { ruleType: "confidence_threshold", value: "0.4", label: "Minimum same-tool-kind confidence to survive the gate" },
+    ];
+    defs.forEach((d, i) => {
+      this.groomingGateRules.push({
+        id: `ggrule_${i}_${d.ruleType}`,
+        ruleType: d.ruleType,
+        value: d.value,
+        label: d.label ?? null,
+        enabled: true,
         sortOrder: i,
         createdAt: now,
         updatedAt: now,

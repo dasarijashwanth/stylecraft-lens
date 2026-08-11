@@ -75,6 +75,64 @@ const DOMAIN_LABELS: Record<string, string> = {
   beauty: "Beauty Tools",
 };
 
+interface GroomingGateRule {
+  id: string;
+  rule_type: string;
+  value: string;
+  label: string | null;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface GroomingGateIncident {
+  id: string;
+  analysis_id: string | null;
+  phase: string;
+  candidate_name: string | null;
+  candidate_asin: string | null;
+  candidate_brand: string | null;
+  category_path: string | null;
+  failed_rule: string | null;
+  detail: string | null;
+  dismissed_at: string | null;
+  created_at: string;
+}
+
+const RULE_TYPE_ORDER = [
+  "allow_category_segment",
+  "block_category_segment",
+  "required_keyword",
+  "disqualifying_keyword",
+  "trimmer_cosignal_keyword",
+  "cross_domain_use_phrase",
+  "component_disqualifier",
+  "confidence_threshold",
+];
+
+const RULE_TYPE_LABELS: Record<string, string> = {
+  allow_category_segment: "Allow Category Segments",
+  block_category_segment: "Block Category Segments",
+  required_keyword: "Required Keywords",
+  disqualifying_keyword: "Disqualifying Keywords",
+  trimmer_cosignal_keyword: "Trimmer Co-signal Keywords",
+  component_disqualifier: "Component Disqualifiers",
+  cross_domain_use_phrase: "Cross-Domain Use Phrases",
+  confidence_threshold: "Confidence Threshold",
+};
+
+const RULE_TYPE_DESCRIPTIONS: Record<string, string> = {
+  allow_category_segment: 'Amazon category path segments that pass the gate outright — e.g. "Hair Clippers".',
+  block_category_segment: 'Amazon category path segments that fail the gate outright — e.g. "Lawn & Garden".',
+  required_keyword: "At least one of these must appear in the title/description/bullets whenever the category can't conclusively resolve the gate.",
+  disqualifying_keyword: "Any of these appearing anywhere disqualifies the candidate outright.",
+  trimmer_cosignal_keyword: 'When the only required-keyword hit is a bare "trimmer" plus an outdoor/garden signal, one of these must also appear (e.g. beard, hair, barber) or the candidate is rejected.',
+  component_disqualifier: 'Phrases indicating a bare component/part rather than a finished appliance (e.g. "replacement motor") — disqualifies unless the text also names a real grooming appliance.',
+  cross_domain_use_phrase: "Phrases indicating the product is marketed for a different domain's use case entirely.",
+  confidence_threshold: "Singleton — minimum same-tool-kind confidence score (0–1) required post-enrichment. Default 0.4.",
+};
+
 export default function CompetitorMatchingAdminPage() {
   const { user, loading: authLoading } = useAuth();
   const [families, setFamilies] = useState<MotorFamily[]>([]);
@@ -98,18 +156,26 @@ export default function CompetitorMatchingAdminPage() {
   const [dismissingMiss, setDismissingMiss] = useState<string | null>(null);
   const [toolTypesAdmin, setToolTypesAdmin] = useState<ToolTypeAdmin[]>([]);
   const [busyToolTypeId, setBusyToolTypeId] = useState<string | null>(null);
+  const [groomingGateRules, setGroomingGateRules] = useState<GroomingGateRule[]>([]);
+  const [groomingGateIncidents, setGroomingGateIncidents] = useState<GroomingGateIncident[]>([]);
+  const [newGateRuleText, setNewGateRuleText] = useState<Record<string, { value: string; label: string }>>({});
+  const [busyGateRuleId, setBusyGateRuleId] = useState<string | null>(null);
+  const [savingGateRuleType, setSavingGateRuleType] = useState<string | null>(null);
+  const [dismissingIncidentId, setDismissingIncidentId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [famRes, profilesRes, missRes, brandedRes, brandedMissRes, toolTypesRes] = await Promise.all([
+      const [famRes, profilesRes, missRes, brandedRes, brandedMissRes, toolTypesRes, gateRulesRes, gateIncidentsRes] = await Promise.all([
         fetch("/api/admin/motor-families"),
         fetch("/api/scoring-profiles"),
         fetch("/api/admin/motor-families/misses"),
         fetch("/api/admin/branded-motor-map"),
         fetch("/api/admin/motor-families/branded-misses"),
         fetch("/api/admin/tool-types"),
+        fetch("/api/admin/grooming-gate"),
+        fetch("/api/admin/grooming-gate/incidents"),
       ]);
       const famData = await famRes.json();
       const profilesData = await profilesRes.json();
@@ -131,6 +197,14 @@ export default function CompetitorMatchingAdminPage() {
       if (toolTypesRes.ok) {
         const toolTypesData = await toolTypesRes.json();
         setToolTypesAdmin(toolTypesData.toolTypes || []);
+      }
+      if (gateRulesRes.ok) {
+        const gateRulesData = await gateRulesRes.json();
+        setGroomingGateRules(gateRulesData.rules || []);
+      }
+      if (gateIncidentsRes.ok) {
+        const gateIncidentsData = await gateIncidentsRes.json();
+        setGroomingGateIncidents(gateIncidentsData.incidents || []);
       }
       // Re-derive the currently-selected profile's inputs from the freshly
       // loaded list (own row if present, else the global default) — keeps
@@ -417,6 +491,109 @@ export default function CompetitorMatchingAdminPage() {
     }
   }
 
+  async function handleAddGateRule(ruleType: string) {
+    const entry = newGateRuleText[ruleType] || { value: "", label: "" };
+    const value = entry.value.trim();
+    if (!value) return;
+    setSavingGateRuleType(ruleType);
+    try {
+      const res = await fetch("/api/admin/grooming-gate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ruleType, value, label: entry.label.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to add rule");
+      setNewGateRuleText(prev => ({ ...prev, [ruleType]: { value: "", label: "" } }));
+      toast.success(`Added to ${RULE_TYPE_LABELS[ruleType] || ruleType}`);
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to add rule");
+    } finally {
+      setSavingGateRuleType(null);
+    }
+  }
+
+  async function handleToggleGateRule(rule: GroomingGateRule) {
+    setBusyGateRuleId(rule.id);
+    try {
+      const res = await fetch(`/api/admin/grooming-gate/${rule.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !rule.enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update rule");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update rule");
+    } finally {
+      setBusyGateRuleId(null);
+    }
+  }
+
+  async function handleRemoveGateRule(id: string) {
+    setBusyGateRuleId(id);
+    try {
+      const res = await fetch(`/api/admin/grooming-gate/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove rule");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to remove rule");
+    } finally {
+      setBusyGateRuleId(null);
+    }
+  }
+
+  async function handleMoveGateRule(typeRules: GroomingGateRule[], index: number, direction: -1 | 1) {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= typeRules.length) return;
+    const reordered = [...typeRules];
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+
+    try {
+      const res = await fetch("/api/admin/grooming-gate/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderedIds: reordered.map(r => r.id) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to reorder");
+      await load();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to reorder");
+    }
+  }
+
+  async function handleDismissGateIncident(id: string) {
+    setDismissingIncidentId(id);
+    try {
+      const res = await fetch("/api/admin/grooming-gate/incidents", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to dismiss incident");
+      setGroomingGateIncidents(prev => prev.filter(i => i.id !== id));
+    } catch (err: any) {
+      toast.error(err.message || "Failed to dismiss incident");
+    } finally {
+      setDismissingIncidentId(null);
+    }
+  }
+
+  // Prefills the Block Category Segments add-form below from a manual_removal
+  // incident's own category path — the admin still confirms and clicks Add
+  // themselves, mirroring handlePrefillBrandedFromMiss's "AI/system suggests,
+  // admin confirms" convention used for branded motor misses above.
+  function handlePrefillBlockCategoryFromIncident(incident: GroomingGateIncident) {
+    if (!incident.category_path) return;
+    setNewGateRuleText(prev => ({ ...prev, block_category_segment: { value: incident.category_path || "", label: incident.candidate_name || "" } }));
+    toast.success("Prefilled the Block Category Segments form below — review and click Add");
+  }
+
   if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-[300px]">
@@ -441,6 +618,12 @@ export default function CompetitorMatchingAdminPage() {
   const criterionLabel = selectedProfileTypeKey ? (CRITERION_LABELS[selectedToolType?.primary_criterion || "motor"] || "Motor") : "Motor";
   const hasOwnProfile = !!selectedProfileTypeKey && scoringProfiles.some(p => p.type_key === selectedProfileTypeKey);
   const domains = Array.from(new Set(families.map(f => f.domain)));
+  const knownRuleTypes = new Set(RULE_TYPE_ORDER);
+  const extraRuleTypes = Array.from(new Set(groomingGateRules.map(r => r.rule_type).filter(rt => !knownRuleTypes.has(rt))));
+  const gateRuleGroups = [...RULE_TYPE_ORDER, ...extraRuleTypes].map(ruleType => ({
+    ruleType,
+    rules: groomingGateRules.filter(r => r.rule_type === ruleType).sort((a, b) => a.sort_order - b.sort_order),
+  }));
 
   return (
     <div className="space-y-6">
@@ -824,6 +1007,143 @@ export default function CompetitorMatchingAdminPage() {
               </div>
             </div>
           )}
+
+          <div className="space-y-5">
+            <h2 className="text-sm font-bold text-text-primary">Grooming Industry Gate Rules</h2>
+            <p className="text-xs text-text-muted -mt-3">
+              The hard, fail-closed grooming/beauty industry gate (lib/grooming-industry-gate.ts) that runs before motor/price scoring — rejects out-of-industry candidates (e.g. a weed-wacker showing up as a &quot;competitor&quot; for a hair clipper) using the rules below. Changes apply to future analyses only.
+            </p>
+            {gateRuleGroups.map(({ ruleType, rules }) => (
+              <div key={ruleType} className="border border-border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
+                  <h3 className="text-xs font-bold text-text-primary">{RULE_TYPE_LABELS[ruleType] || ruleType}</h3>
+                  {RULE_TYPE_DESCRIPTIONS[ruleType] && (
+                    <p className="text-[10px] text-text-muted mt-0.5">{RULE_TYPE_DESCRIPTIONS[ruleType]}</p>
+                  )}
+                </div>
+                <div className="p-4 space-y-2">
+                  {rules.map((rule, i) => (
+                    <div
+                      key={rule.id}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${
+                        rule.enabled ? "border-border bg-surface-1" : "border-border/50 bg-surface-3/20 opacity-60"
+                      }`}
+                    >
+                      <div className="flex flex-col -my-1">
+                        <button type="button" onClick={() => handleMoveGateRule(rules, i, -1)} disabled={i === 0} className="p-0.5 text-text-muted hover:text-text-primary disabled:opacity-30">
+                          <ArrowUp className="w-3 h-3" />
+                        </button>
+                        <button type="button" onClick={() => handleMoveGateRule(rules, i, 1)} disabled={i === rules.length - 1} className="p-0.5 text-text-muted hover:text-text-primary disabled:opacity-30">
+                          <ArrowDown className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-xs font-semibold text-text-primary">{rule.value}</span>
+                        {rule.label && <span className="ml-2 text-[10px] text-text-muted">{rule.label}</span>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleGateRule(rule)}
+                        disabled={busyGateRuleId === rule.id}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                          rule.enabled ? "border-success/30 text-success bg-success/10" : "border-border text-text-muted"
+                        }`}
+                      >
+                        {rule.enabled ? "Enabled" : "Disabled"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveGateRule(rule.id)}
+                        disabled={busyGateRuleId === rule.id}
+                        className="p-1 text-text-muted hover:text-danger transition-colors"
+                        title="Remove rule"
+                      >
+                        {busyGateRuleId === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      value={newGateRuleText[ruleType]?.value || ""}
+                      onChange={e => setNewGateRuleText(prev => ({ ...prev, [ruleType]: { value: e.target.value, label: prev[ruleType]?.label || "" } }))}
+                      onKeyDown={e => e.key === "Enter" && handleAddGateRule(ruleType)}
+                      placeholder={ruleType === "confidence_threshold" ? "Threshold — e.g. 0.4" : "Value — e.g. Lawn & Garden"}
+                      className="flex-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                    <input
+                      type="text"
+                      value={newGateRuleText[ruleType]?.label || ""}
+                      onChange={e => setNewGateRuleText(prev => ({ ...prev, [ruleType]: { value: prev[ruleType]?.value || "", label: e.target.value } }))}
+                      onKeyDown={e => e.key === "Enter" && handleAddGateRule(ruleType)}
+                      placeholder="Label (optional)"
+                      className="w-40 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAddGateRule(ruleType)}
+                      disabled={savingGateRuleType === ruleType}
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {savingGateRuleType === ruleType ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                      <span>Add</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 bg-surface-3/30 border-b border-border">
+              <h2 className="text-xs font-bold text-text-primary">Gate Anomalies</h2>
+              <p className="text-[10px] text-text-muted mt-0.5">
+                Candidates rejected by the grooming/beauty industry gate — logged from the automated post-selection sweep (phase1/phase2) and from manual &quot;wrong industry&quot; removals. Dismiss once reviewed.
+              </p>
+            </div>
+            {groomingGateIncidents.length === 0 ? (
+              <div className="p-4 text-[11px] text-text-muted">No anomalies logged.</div>
+            ) : (
+              <div className="p-4 space-y-1.5">
+                {groomingGateIncidents.map(incident => (
+                  <div key={incident.id} className="flex items-start gap-2 px-3 py-2 rounded-lg border border-border bg-surface-1 text-[11px]">
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div>
+                        <span className="font-semibold text-text-primary">{incident.candidate_name || "(unnamed candidate)"}</span>
+                        {incident.candidate_brand && <span className="text-text-muted"> · {incident.candidate_brand}</span>}
+                        {incident.candidate_asin && <span className="text-text-muted"> · {incident.candidate_asin}</span>}
+                      </div>
+                      {incident.category_path && <div className="text-text-muted">Category: {incident.category_path}</div>}
+                      <div className="text-text-muted">
+                        {incident.phase}
+                        {incident.failed_rule && <> · failed: <span className="font-semibold text-text-primary">{incident.failed_rule}</span></>}
+                        {incident.detail && <> · {incident.detail}</>}
+                        {" · "}{new Date(incident.created_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                    {incident.phase === "manual_removal" && incident.category_path && (
+                      <button
+                        type="button"
+                        onClick={() => handlePrefillBlockCategoryFromIncident(incident)}
+                        className="shrink-0 px-2 py-1 rounded text-[10px] font-bold border border-accent/40 text-accent hover:bg-accent/10 transition-colors"
+                      >
+                        Add category to blocklist →
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDismissGateIncident(incident.id)}
+                      disabled={dismissingIncidentId === incident.id}
+                      className="shrink-0 p-1 text-text-muted hover:text-danger transition-colors"
+                      title="Dismiss"
+                    >
+                      {dismissingIncidentId === incident.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>

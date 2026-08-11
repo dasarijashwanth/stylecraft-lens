@@ -1900,3 +1900,62 @@ DROP POLICY IF EXISTS "Allow all operations for document_fill_state" ON document
 -- definitions; those lines are dead/overridden by this section and Section
 -- 17, kept only so `CREATE TABLE IF NOT EXISTS` blocks stay runnable
 -- top-to-bottom on a fresh database.
+
+-- 56. GROOMING/BEAUTY INDUSTRY GATE — admin-editable allow/block/keyword
+-- rules + a per-candidate rejection anomaly log. Fixes a real pre-launch bug:
+-- competitor discovery (lib/analysisEngine.ts's selectByCompositeScore) was
+-- scoring candidates on motor-keyword match alone, with zero category/
+-- industry awareness — an "Electric Weed Wacker with Wheel" (Patio/Lawn) and
+-- a "Waterproof Brushless DC Motor... for Efoil Electric Surfboard" (a bare
+-- motor/component) both scored as strong "competitors" for a hair clipper.
+-- One flat, rule_type-discriminated table (not six) — same precedent as
+-- Section 27's motor_tech_search_misses -> branded misses via a nullable
+-- discriminator column rather than a forked table.
+CREATE TABLE IF NOT EXISTS grooming_gate_rules (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    rule_type VARCHAR(40) NOT NULL,  -- allow_category_segment | block_category_segment |
+                                     -- required_keyword | disqualifying_keyword |
+                                     -- trimmer_cosignal_keyword | component_disqualifier |
+                                     -- cross_domain_use_phrase | confidence_threshold
+    value VARCHAR(255) NOT NULL,
+    label VARCHAR(255),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS grooming_gate_rules_type_idx ON grooming_gate_rules(rule_type);
+ALTER TABLE grooming_gate_rules ENABLE ROW LEVEL SECURITY;
+-- No policy added — RLS enabled, zero policies, deny-by-default for anon/
+-- authenticated (per the Section 17/55 convention above). Only ever queried
+-- via supabaseAdmin in lib/db/grooming-gate-rules.ts.
+
+-- Anomaly log — a separate table (not a rule_type on the table above) since
+-- its rows are per-candidate audit records with a different shape entirely,
+-- same reasoning that kept competitor_corrections separate from
+-- motor_families despite both living under "competitor matching."
+CREATE TABLE IF NOT EXISTS grooming_gate_incidents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    analysis_id UUID,                  -- nullable, no FK — same precedent as competitor_corrections.analysis_id
+    phase VARCHAR(20) NOT NULL,        -- 'phase1' | 'phase2' | 'manual_removal'
+    candidate_name VARCHAR(500),
+    candidate_asin VARCHAR(20),
+    candidate_brand VARCHAR(255),
+    category_path TEXT,
+    failed_rule VARCHAR(40),           -- nullable — a manual_removal incident has no automated rule to name
+    detail TEXT,
+    dismissed_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS grooming_gate_incidents_created_idx ON grooming_gate_incidents(created_at DESC);
+ALTER TABLE grooming_gate_incidents ENABLE ROW LEVEL SECURITY;
+-- No policy added — same deny-by-default convention as above.
+
+-- 57. REMOVE-WITHOUT-REPLACEMENT SUPPORT — competitor_corrections
+-- The new per-competitor "Remove" action (lib/analysisEngine.ts's
+-- removeCompetitorSlot) records a correction with no replacement ASIN yet
+-- known (new_asin was NOT NULL before this). correction_type distinguishes
+-- a remove (no new_asin, may be refilled later without a second correction
+-- row) from the existing replace flow (new_asin always populated).
+ALTER TABLE competitor_corrections ALTER COLUMN new_asin DROP NOT NULL;
+ALTER TABLE competitor_corrections ADD COLUMN IF NOT EXISTS correction_type VARCHAR(20) NOT NULL DEFAULT 'replace';

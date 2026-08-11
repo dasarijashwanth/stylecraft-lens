@@ -99,8 +99,11 @@ function tokenSet(text: string): Set<string> {
 // already proven in lib/legacy-brand-discovery.ts's brandMatchesTitle,
 // applied here instead of raw substring matching so "clipper" as an alias
 // can still match the plural "Clippers" in real text without also risking
-// a false-positive substring hit inside an unrelated longer word.
-function textContainsPhrase(text: string, phrase: string): boolean {
+// a false-positive substring hit inside an unrelated longer word. Exported
+// for reuse by lib/grooming-industry-gate.ts, which needs the identical
+// whole-word phrase-containment semantics for its own keyword/category
+// rule matching rather than a third independent implementation.
+export function textContainsPhrase(text: string, phrase: string): boolean {
   const textTokens = tokenSet(text);
   const phraseTokens = normalizeToken(phrase).split(/\s+/).filter(Boolean).map(singularize);
   return phraseTokens.length > 0 && phraseTokens.every(t => textTokens.has(t));

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { CompetitorCard, EmptySlotCard } from "./CompetitorCard";
-import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download, Minus, Plus } from "lucide-react";
+import { Sparkles, FileText, CheckCircle2, TrendingUp, AlertTriangle, Lightbulb, UserCheck, Shield, Award, Download, Minus, Plus, Flag, Trash2 } from "lucide-react";
 import { downloadReportPDF } from "@/lib/export-pdf";
 import { CitationsSection, UnverifiedBadge, type Claim } from "./CitedClaim";
 import type { KeyFeaturesResult } from "@/lib/key-features-resolver";
@@ -10,6 +11,31 @@ import { Spinner } from "@/components/ui/Spinner";
 import { buildPricingAnalysis } from "@/lib/pricing-analysis";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { getToolTypeLabel } from "@/lib/tool-type-taxonomy";
+import { CompetitorRemoveReasonValues } from "@/lib/validations";
+
+// Bulk "Remove & refill" reason picker — same 5 values as CompetitorCard.tsx's
+// own single-slot Remove panel (lib/validations.ts's
+// CompetitorRemoveReasonValues is the authoritative list); duplicated here
+// (rather than imported) since it's just display text for this file's own
+// select, not shared logic.
+const BULK_REMOVE_REASON_LABELS: Record<string, string> = {
+  wrong_industry: "Wrong industry",
+  wrong_product: "Wrong product",
+  wrong_motor: "Wrong motor",
+  not_comparable: "Not really comparable",
+  other: "Other",
+};
+
+// Removed-slot placeholder's EmptySlotCard reason text — names what was
+// removed and why (lib/analysisEngine.ts's removeCompetitorSlot placeholder
+// shape: removed_brand/removed_name/removed_reason), so "Refill this slot"
+// isn't the only context shown for a Remove + Refill vacated slot, as
+// opposed to a genuinely-never-found empty slot from normal discovery.
+function describeRemovedSlot(comp: any): string {
+  const who = [comp.removed_brand, comp.removed_name].filter(Boolean).join(" ");
+  const reasonText = comp.removed_reason ? (BULK_REMOVE_REASON_LABELS[comp.removed_reason] || comp.removed_reason).toLowerCase() : null;
+  return `Removed${who ? ` ${who}` : ""}${reasonText ? ` (${reasonText})` : ""} — refill to search for a replacement.`;
+}
 
 // Fallback for a raw family/tech key (e.g. "brushless_dc") when no
 // human-authored branded name was captured for this run — title-cases it
@@ -122,6 +148,29 @@ interface ResultsPanelProps {
   // state-machine code) — see the banner below.
   onRegenerateSynthesis?: () => void;
   regeneratingSynthesis?: boolean;
+  // Remove + Refill single slot (Part 3) — these four are pure pass-through
+  // down to CompetitorCard/EmptySlotCard at both the legacy and emerging
+  // card-rendering sites below; this component owns no analysis state of
+  // its own (analyze/page.tsx does), only the per-card "flag" checkbox
+  // state and the bulk POST used by the "Remove & refill N flagged" button.
+  // Bubbled straight from CompetitorCard's own onRemoved (a Trash2-triggered
+  // single-slot Remove already POSTed by that card) up to the page's
+  // handleCompetitorRemoved.
+  onRemoved?: (asin: string, tier: string, placeholder: any, synthesisPossiblyStale: boolean) => void;
+  // Bubbled straight from EmptySlotCard's own onRefillRequested (just the
+  // removedAsin — EmptySlotCard never fetches itself) up to the page, which
+  // performs the actual POST .../competitors/refill-slot call and tracks
+  // its own loading state.
+  onRefillRequested?: (removedAsin: string) => void;
+  // Which removed slot's refill is currently in flight (page-owned state) —
+  // threaded back down so only that one EmptySlotCard shows a spinner.
+  refillingAsin?: string | null;
+  // Fired after THIS component's own POST .../competitors/bulk-refill call
+  // (the "Remove & refill N flagged" button below) resolves — unlike
+  // onRemoved/onRefillRequested above, the bulk fetch itself lives here,
+  // not in the page, since it's a whole-batch action this component
+  // originates (the per-card flag checkboxes are local-only state).
+  onBulkRefillComplete?: (results: any[]) => void;
 }
 
 // Which criterion actually scored a batch of competitors (motor_*/
@@ -135,7 +184,7 @@ function describeCriterionForCompetitors(competitors: any[]): string | null {
   return null;
 }
 
-export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis, onCompetitorReplaced, onRelatedProductReplaced, onRegenerateSynthesis, regeneratingSynthesis }: ResultsPanelProps) {
+export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingReport, onNewAnalysis, onCompetitorReplaced, onRelatedProductReplaced, onRegenerateSynthesis, regeneratingSynthesis, onRemoved, onRefillRequested, refillingAsin, onBulkRefillComplete }: ResultsPanelProps) {
   const { phase1, phase2, phase3, identity } = analysis;
   // A slot the fill loop couldn't fill (lib/analysisEngine.ts's
   // buildEmptySlotPlaceholder) renders as EmptySlotCard, not a real
@@ -161,6 +210,52 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
   // instead of re-running the resolver a second time.
   const [phase1Features, setPhase1Features] = useState<Record<number, KeyFeaturesResult>>({});
   const [phase2Features, setPhase2Features] = useState<Record<number, KeyFeaturesResult>>({});
+
+  // Remove + Refill single slot (Part 3) — per-card "flag" checkbox, local
+  // to this component only (never persisted, reset on unmount/re-analysis)
+  // and the one shared reason for the whole "Remove & refill N flagged"
+  // batch action. Real competitors only (never an already-empty slot) —
+  // toggleFlag is only ever wired to CompetitorCard below, not EmptySlotCard.
+  const [flaggedAsins, setFlaggedAsins] = useState<Set<string>>(new Set());
+  const [bulkReason, setBulkReason] = useState<string>("other");
+  const [bulkNote, setBulkNote] = useState("");
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+
+  function toggleFlag(asin: string) {
+    setFlaggedAsins(prev => {
+      const next = new Set(prev);
+      if (next.has(asin)) next.delete(asin);
+      else next.add(asin);
+      return next;
+    });
+  }
+
+  // The bulk fetch itself lives here (unlike the single-slot
+  // remove/refill flows above, which the page performs) — this is a
+  // whole-batch action this component originates from its own flag
+  // checkboxes, not something CompetitorCard/EmptySlotCard triggers
+  // individually.
+  async function handleBulkRemoveRefill() {
+    if (!analysisId || flaggedAsins.size === 0) return;
+    setBulkSubmitting(true);
+    try {
+      const items = Array.from(flaggedAsins).map(asin => ({ asin, reason: bulkReason, note: bulkNote.trim() || undefined }));
+      const res = await fetch(`/api/analyses/${analysisId}/competitors/bulk-refill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to remove/refill flagged competitors");
+      onBulkRefillComplete?.(data.results || []);
+      setFlaggedAsins(new Set());
+      setBulkNote("");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to remove/refill flagged competitors");
+    } finally {
+      setBulkSubmitting(false);
+    }
+  }
 
   // Fetched once here (not once per card) and threaded into every
   // CompetitorCard — lib/feature-flags.ts's isBuyerSentimentEnabled()/
@@ -378,6 +473,41 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
             className="px-3 py-1.5 text-[11px] font-semibold bg-warning/20 hover:bg-warning/30 text-warning rounded-lg transition-colors disabled:opacity-50 shrink-0"
           >
             {regeneratingSynthesis ? "Regenerating…" : "Regenerate"}
+          </button>
+        </div>
+      )}
+
+      {/* Remove + Refill single slot (Part 3) — bulk action bar, shown only
+          once at least one real competitor (either tier) has been flagged
+          via its own card's checkbox below. One shared reason for the
+          whole batch keeps this simple rather than asking per-item. */}
+      {flaggedAsins.size > 0 && (
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 rounded-xl border border-danger/30 bg-danger/5 px-5 py-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <Flag className="w-3.5 h-3.5 text-danger shrink-0" />
+            <span>{flaggedAsins.size} competitor{flaggedAsins.size === 1 ? "" : "s"} flagged.</span>
+            <label className="flex items-center gap-1.5 text-[10px] text-text-muted">
+              Reason:
+              <select
+                value={bulkReason}
+                onChange={(e) => setBulkReason(e.target.value)}
+                disabled={bulkSubmitting}
+                className="px-2 py-1 text-[10px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+              >
+                {CompetitorRemoveReasonValues.map((reasonValue) => (
+                  <option key={reasonValue} value={reasonValue}>{BULK_REMOVE_REASON_LABELS[reasonValue]}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={handleBulkRemoveRefill}
+            disabled={bulkSubmitting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold bg-danger hover:bg-danger/90 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0 self-end md:self-auto"
+          >
+            {bulkSubmitting ? <Spinner size="xs" className="text-white" /> : <Trash2 className="w-3.5 h-3.5" />}
+            <span>{bulkSubmitting ? "Removing & refilling…" : `Remove & refill ${flaggedAsins.size} flagged`}</span>
           </button>
         </div>
       )}
@@ -618,9 +748,34 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase1.competitors && phase1.competitors.length > 0 ? (
             phase1.competitors.map((comp, i) => (
-              comp.empty_slot
-                ? <EmptySlotCard key={i} reason={comp.reason || "No additional legacy competitor found."} />
-                : <CompetitorCard key={i} competitor={comp} tier="legacy" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))} onReplaced={onCompetitorReplaced} />
+              comp.empty_slot ? (
+                <EmptySlotCard
+                  key={i}
+                  reason={comp.removed ? describeRemovedSlot(comp) : (comp.reason || "No additional legacy competitor found.")}
+                  removedAsin={comp.removed_asin}
+                  onRefillRequested={onRefillRequested}
+                  refilling={!!comp.removed_asin && refillingAsin === comp.removed_asin}
+                />
+              ) : (
+                <div key={i} className="space-y-1.5">
+                  <label className="flex items-center gap-1.5 text-[10px] text-text-muted cursor-pointer select-none">
+                    <input type="checkbox" checked={flaggedAsins.has(comp.asin)} onChange={() => toggleFlag(comp.asin)} className="accent-danger" />
+                    <Flag className="w-3 h-3" />
+                    <span>Flag for bulk remove &amp; refill</span>
+                  </label>
+                  <CompetitorCard
+                    competitor={comp}
+                    tier="legacy"
+                    analysisId={analysisId}
+                    keyDiff={keyDiff}
+                    buyerSentimentEnabled={buyerSentimentEnabled}
+                    newsUpdatesEnabled={newsUpdatesEnabled}
+                    onFeaturesResolved={(r) => setPhase1Features(prev => ({ ...prev, [i]: r }))}
+                    onReplaced={onCompetitorReplaced}
+                    onRemoved={onRemoved}
+                  />
+                </div>
+              )
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No large-brand competitors were identified for this product.</p>
@@ -659,9 +814,34 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         <div className="competitors-list grid grid-cols-1 md:grid-cols-2 gap-4">
           {phase2.competitors && phase2.competitors.length > 0 ? (
             phase2.competitors.map((comp, i) => (
-              comp.empty_slot
-                ? <EmptySlotCard key={i} reason={comp.reason || "No additional emerging competitor found."} />
-                : <CompetitorCard key={i} competitor={comp} tier="emerging" analysisId={analysisId} keyDiff={keyDiff} buyerSentimentEnabled={buyerSentimentEnabled} newsUpdatesEnabled={newsUpdatesEnabled} onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))} onReplaced={onCompetitorReplaced} />
+              comp.empty_slot ? (
+                <EmptySlotCard
+                  key={i}
+                  reason={comp.removed ? describeRemovedSlot(comp) : (comp.reason || "No additional emerging competitor found.")}
+                  removedAsin={comp.removed_asin}
+                  onRefillRequested={onRefillRequested}
+                  refilling={!!comp.removed_asin && refillingAsin === comp.removed_asin}
+                />
+              ) : (
+                <div key={i} className="space-y-1.5">
+                  <label className="flex items-center gap-1.5 text-[10px] text-text-muted cursor-pointer select-none">
+                    <input type="checkbox" checked={flaggedAsins.has(comp.asin)} onChange={() => toggleFlag(comp.asin)} className="accent-danger" />
+                    <Flag className="w-3 h-3" />
+                    <span>Flag for bulk remove &amp; refill</span>
+                  </label>
+                  <CompetitorCard
+                    competitor={comp}
+                    tier="emerging"
+                    analysisId={analysisId}
+                    keyDiff={keyDiff}
+                    buyerSentimentEnabled={buyerSentimentEnabled}
+                    newsUpdatesEnabled={newsUpdatesEnabled}
+                    onFeaturesResolved={(r) => setPhase2Features(prev => ({ ...prev, [i]: r }))}
+                    onReplaced={onCompetitorReplaced}
+                    onRemoved={onRemoved}
+                  />
+                </div>
+              )
             ))
           ) : (
             <p className="col-span-full italic text-text-muted text-xs py-4 text-center">No indie & emerging competitors were identified for this product.</p>
