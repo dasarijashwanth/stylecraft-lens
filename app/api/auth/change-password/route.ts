@@ -57,10 +57,21 @@ export async function POST(request: NextRequest) {
         code: (verifyError as any).code,
         email: user.email,
       });
-      // Surface the real reason (e.g. a rate limit) instead of always
-      // claiming the password itself was wrong, which was masking the
-      // actual cause.
-      return NextResponse.json({ error: verifyError.message || "Current password is incorrect" }, { status: 400 });
+      // A wrong current-password re-verification returns Supabase's own
+      // generic "Invalid login credentials" text (same anti-enumeration
+      // wording app/api/auth/login/route.ts's real login also gets) — a
+      // confusing thing to show on THIS form, since a user reasonably
+      // reads "invalid login" as being about signing in, not about
+      // re-typing their current password one field over. Confirmed live:
+      // this exact wording was the entire cause of a "still invalid
+      // login?" support report that was actually a change-password-form
+      // re-verification failure the whole time — surfacing this app's own
+      // clear label instead. A genuine Supabase-side rate limit (status
+      // 429 — a different failure mode from a plain wrong password) still
+      // gets its own real message through, since that IS worth
+      // distinguishing.
+      const message = (verifyError as any).status === 429 ? verifyError.message : "Current password is incorrect";
+      return NextResponse.json({ error: message }, { status: 400 });
     }
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, { password: newPassword });
