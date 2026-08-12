@@ -10,6 +10,13 @@ import { checkRateLimit } from "@/lib/rate-limit";
 // replaceCompetitor — never re-ranks against siblings), records WHY via
 // competitor_corrections. Same auth/ownership pattern as
 // app/api/analyses/[id]/answer/route.ts.
+//
+// fetchAmazonProductFresh's real request/retry cycle can take well over
+// Vercel's default function duration for some listings (see the fuller
+// explanation on the sibling preview/route.ts) — without this, the request
+// gets killed by the platform before ever returning a real error.
+export const maxDuration = 60;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();

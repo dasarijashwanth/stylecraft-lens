@@ -13,6 +13,11 @@ import { RelatedProductPreviewSchema } from "@/lib/validations";
 // of reading it off an existing analysis, and has no duplicate-ASIN check
 // (duplicates across the 3 rows are checked client-side). Auth-only, no
 // ownership check needed since it doesn't touch any owned record.
+//
+// See the sibling competitor-preview route's fuller comment — getAmazonProduct
+// can legitimately take well over Vercel's default function duration.
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     await getAuthSession();

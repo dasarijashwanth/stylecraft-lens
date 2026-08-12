@@ -11,6 +11,17 @@ import { CompetitorPreviewSchema } from "@/lib/validations";
 // no forced-fresh refetch (a cached hit is fine for a preview; the actual
 // replace endpoint force-refetches). Same auth/ownership pattern as
 // app/api/analyses/[id]/answer/route.ts.
+//
+// getAmazonProduct's real request/retry cycle can legitimately take well
+// over Vercel's default (un-configured) function duration for some
+// listings — confirmed live: one lookup took ~19s. Without this, the
+// PLATFORM kills the request before this route's own try/catch ever gets a
+// chance to return a real error, so the client never receives valid JSON
+// at all and falls back to a generic "Could not preview that product"
+// message with zero indication it was actually a timeout. Same fix as
+// app/api/analyses/[id]/continue/route.ts already applies for the same reason.
+export const maxDuration = 60;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();

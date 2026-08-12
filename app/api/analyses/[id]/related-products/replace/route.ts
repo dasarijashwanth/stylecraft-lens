@@ -9,6 +9,12 @@ import { RelatedProductReplaceSchema } from "@/lib/validations";
 // route: no correction reason, no learning-loop record (see
 // lib/analysisEngine.ts's replaceRelatedProduct header comment). Same
 // auth/ownership pattern as every other analysis-scoped route here.
+//
+// See app/api/analyses/[id]/competitors/preview/route.ts's fuller comment —
+// the underlying Rainforest lookup this triggers can legitimately take well
+// over Vercel's default function duration for some listings.
+export const maxDuration = 60;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();

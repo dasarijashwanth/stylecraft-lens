@@ -18,6 +18,15 @@ import { checkRateLimit } from "@/lib/rate-limit";
 // a max-10-item bulk action can easily trigger (e.g. flagging 3 legacy +
 // 2 emerging picks at once). Still bounded/cheap: at most 10 items, each a
 // small in-process operation plus (at most) one live catalog search.
+//
+// maxDuration=60 is Vercel Hobby's actual ceiling (see CLAUDE.md) — a
+// pathological worst case (10 items, every single one falling through to a
+// slow Tier B live search) could still exceed it; that's an accepted edge
+// case, not something a longer duration could fix on this plan anyway. The
+// common case (most refills hit the instant Tier A runner-up pool) is
+// nowhere near this limit.
+export const maxDuration = 60;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();

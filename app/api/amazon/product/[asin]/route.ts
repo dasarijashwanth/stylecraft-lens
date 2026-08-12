@@ -7,6 +7,12 @@ import { getAuthSession } from "@/lib/auth";
 // middleware.ts already blocks fully-unauthenticated /api/** requests, so
 // this call is defense-in-depth consistency with every other route, not
 // closing an otherwise-open door.
+//
+// See app/api/analyses/[id]/competitors/preview/route.ts's fuller comment —
+// getAmazonProduct can legitimately take well over Vercel's default
+// function duration for some listings.
+export const maxDuration = 60;
+
 export async function GET(req: NextRequest, { params }: { params: { asin: string } }) {
   await getAuthSession();
   const asin = params.asin?.toUpperCase();

@@ -12,6 +12,13 @@ import { checkRateLimit } from "@/lib/rate-limit";
 // codebase's existing empty-slot "explicit empty is not a failure"
 // convention — not an error response. Only a structural problem (analysis
 // not found, no such removed slot) is a real error.
+//
+// refillCompetitorSlot's Tier B can invoke a real, multi-search-term live
+// Rainforest lookup (discoverCompetitorsLive) — see
+// app/api/analyses/[id]/competitors/preview/route.ts's fuller comment on
+// why this needs a longer-than-default function duration.
+export const maxDuration = 60;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
