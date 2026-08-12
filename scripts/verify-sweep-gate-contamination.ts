@@ -136,6 +136,7 @@ async function main() {
     scoringCtx,
     excludeAsins: new Set<string>(),
     analysisId: "test_analysis_sweep_1",
+    routeStartTime: Date.now(),
   };
 
   const incidentsBefore = (await getGroomingGateIncidents(500)).filter(i => i.candidate_asin === contaminantAsin).length;

@@ -2796,6 +2796,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         scoringCtx,
         excludeAsins: new Set<string>(),
         analysisId,
+        routeStartTime: startTime,
       });
 
       const realCompetitors = result.competitors.filter((c: any) => !c.empty_slot);
@@ -3086,6 +3087,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         scoringCtx,
         excludeAsins: new Set<string>(),
         analysisId,
+        routeStartTime: startTime,
       });
 
       const realEmergingCompetitors = result.competitors.filter((c: any) => !c.empty_slot);
@@ -3528,6 +3530,16 @@ export interface SlotRefillContext {
   scoringCtx: CompositeScoringContext;
   excludeAsins: Set<string>;
   analysisId: string;
+  // Wall-clock anchor for this specific request (Date.now() at its own
+  // start — NOT necessarily "when the analysis was created"). Required so
+  // fetchReplacementForSlot's Tier B (a real, unbounded-by-default live
+  // Rainforest search via discoverCompetitorsLive) never attempts a live
+  // search this request doesn't have time left for — a real bug fixed
+  // after it surfaced live as "Connection dropped — retrying" during Phase
+  // 2, because the original version called Tier B with zero budget
+  // awareness inside the SAME request that had already spent most of the
+  // shared RAINFOREST_STEP_DEADLINE_MS clock on enrichment/lineups/brand-site.
+  routeStartTime: number;
 }
 
 export interface SlotRefillResult {
@@ -3572,10 +3584,19 @@ export async function fetchReplacementForSlot(candidatePool: any[], ctx: SlotRef
   }
 
   // Tier B — only reachable when the saved runner-up pool has nothing
-  // qualifying left AND a live Rainforest search is actually possible.
-  if (hasRainforestKey) {
+  // qualifying left, a live Rainforest search is actually possible, AND
+  // this request still has enough of its own time budget left. Skipping
+  // this check once already caused discoverCompetitorsLive's own
+  // unbounded multi-search-term loop to run inside an already-nearly-
+  // exhausted Phase 1/2 request (the sweep's call site), surfacing live as
+  // "Connection dropped — retrying" from blowing past Vercel's 60s cap.
+  // MIN_BUDGET_FOR_LIVE_SEARCH_MS is a rough "enough time for a couple of
+  // real Rainforest round-trips," not a precise measurement.
+  const MIN_BUDGET_FOR_LIVE_SEARCH_MS = 8_000;
+  const budgetLeft = remainingRainforestBudget(ctx.routeStartTime);
+  if (hasRainforestKey && budgetLeft >= MIN_BUDGET_FOR_LIVE_SEARCH_MS) {
     const ourMotorLabel = ctx.scoringCtx.ourMotor ? formatMotorLabel(ctx.scoringCtx.ourMotor) : null;
-    const liveCandidates = await discoverCompetitorsLive(ctx.identity, ctx.tier, ctx.targetPriceRaw, ctx.toolTypes, [], ourMotorLabel);
+    const liveCandidates = await discoverCompetitorsLive(ctx.identity, ctx.tier, ctx.targetPriceRaw, ctx.toolTypes, [], ourMotorLabel, budgetLeft);
     const tierBPool = filterCandidatesByCategoryAndIdentity(
       liveCandidates.filter(notExcluded),
       ctx.tier,
@@ -3904,7 +3925,10 @@ export async function refillCompetitorSlot(
   for (const a of phase1Result?.removedAsins || []) excludeAsins.add(String(a).toUpperCase());
   for (const a of phase2Result?.removedAsins || []) excludeAsins.add(String(a).toUpperCase());
 
-  const slotCtx: SlotRefillContext = { identity, tier, targetPriceRaw, toolTypes, scoringCtx, excludeAsins, analysisId };
+  // Fresh Date.now() — this is a standalone request (the user-facing manual
+  // refill route), not sharing a clock with any other in-flight phase work,
+  // so its own start time is the correct anchor for Tier B's budget check.
+  const slotCtx: SlotRefillContext = { identity, tier, targetPriceRaw, toolTypes, scoringCtx, excludeAsins, analysisId, routeStartTime: Date.now() };
 
   const result = await fetchReplacementForSlot(phaseResult.runnerUpPool || [], slotCtx);
   if (!result.ok || !result.competitor) {
@@ -4425,7 +4449,7 @@ async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityC
 // Runs whenever Rainforest is configured, regardless of category — the
 // static getCategoryFallbackCompetitors data is now a last-resort only,
 // used solely when Rainforest itself is unavailable/fails outright.
-async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, toolTypes: ToolTypeRow[], excludeNames: string[] = [], motorHint?: string | null): Promise<any[]> {
+async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | "emerging", targetPriceRaw: number | null, toolTypes: ToolTypeRow[], excludeNames: string[] = [], motorHint?: string | null, deadlineMs?: number): Promise<any[]> {
   if (!hasRainforestKey) return [];
   const category = identity.subcategory || identity.category;
   if (!category) return [];
@@ -4471,9 +4495,19 @@ async function discoverCompetitorsLive(identity: IdentityCard, tier: "legacy" | 
   // has real candidates to filter/widen against instead of being handed
   // exactly 5 already-unfiltered results.
   const POOL_SIZE = 10;
+  // deadlineMs bounds this loop's own wall-clock time when a caller has a
+  // shared budget to respect (fetchReplacementForSlot's Tier B, itself
+  // bounded by the calling request's remaining RAINFOREST_STEP_DEADLINE_MS)
+  // — up to ~9 search terms run sequentially below with no per-call
+  // timeout otherwise, which is fine for this function's original callers
+  // (the no-AI-key offline mock generators, which have no shared budget to
+  // blow), but was a real, unbounded risk once reused inside an
+  // already-time-constrained live request.
+  const loopStart = Date.now();
 
   for (const term of searchTerms) {
     if (collected.length >= POOL_SIZE) break;
+    if (deadlineMs != null && Date.now() - loopStart > deadlineMs) break;
     const results = await searchAmazonCategory(term, 8);
     for (const r of results) {
       if (collected.length >= POOL_SIZE) break;
