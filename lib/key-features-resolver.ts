@@ -38,7 +38,14 @@ export interface KeyFeaturesResult {
   provenance?: SectionProvenanceData;
 }
 
-const MIN_FEATURES_TARGET = 4; // stop cascading once we have "enough" real features
+// Every tier (Amazon, Brand site, Retailer, Expert review) always runs now
+// — this used to stop early once MIN_FEATURES_TARGET (4) real features were
+// found, which meant a product with a strong Amazon listing alone silently
+// never got cross-checked against its own brand site/retailers/reviews at
+// all. The route's own header comment already anticipated "every fallback
+// tier has to run" as the worst case and budgeted for it (42s here, 60s
+// maxDuration on the route) — this just makes that the ALWAYS case instead
+// of the rare one. TIME_BUDGET_MS is still the one real backstop.
 const TIME_BUDGET_MS = 42_000; // this resolver's own route sets maxDuration; leaves headroom for the response itself
 const DEDUPE_SIMILARITY_THRESHOLD = 0.6;
 
@@ -126,8 +133,7 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
   const provenanceQueries: ProvenanceQuery[] = [];
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
-  const enough = () => features.length >= MIN_FEATURES_TARGET;
-  const skipReason = () => (enough() ? "enough features already found" : "time budget exceeded");
+  const skipReason = "time budget exceeded"; // the only remaining reason a tier is ever skipped
 
   // Tier 1: Amazon — already-fetched, no extra search/scrape needed.
   tiersTried.push("Amazon");
@@ -166,7 +172,7 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
   // confirmed live that a short truthy meta description was winning over
   // richer body text under a naive `||`, starving extraction of real
   // content. scrapeProductPage is kept only for a better page title.
-  if (!enough() && !overBudget()) {
+  if (!overBudget()) {
     tiersTried.push("Brand site");
     const tierT0 = Date.now();
     const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
@@ -195,11 +201,11 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
     });
     provenanceQueries.push({ tier: "Brand site", query, outcome: tierItemCount > 0 ? "success" : "empty", itemCount: hits.length, elapsedMs: Date.now() - tierT0, verified: true });
   } else {
-    provenanceTiers.push({ tier: "Brand site", attempted: false, outcome: "skipped", errorMessage: skipReason() });
+    provenanceTiers.push({ tier: "Brand site", attempted: false, outcome: "skipped", errorMessage: skipReason });
   }
 
   // Tier 3: retailer listings
-  if (!enough() && !overBudget()) {
+  if (!overBudget()) {
     tiersTried.push("Retailer");
     const tierT0 = Date.now();
     const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
@@ -228,11 +234,11 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
     });
     provenanceQueries.push({ tier: "Retailer", query, outcome: tierItemCount > 0 ? "success" : "empty", itemCount: hits.length, elapsedMs: Date.now() - tierT0, verified: true });
   } else {
-    provenanceTiers.push({ tier: "Retailer", attempted: false, outcome: "skipped", errorMessage: skipReason() });
+    provenanceTiers.push({ tier: "Retailer", attempted: false, outcome: "skipped", errorMessage: skipReason });
   }
 
   // Tier 4: expert reviews
-  if (!enough() && !overBudget()) {
+  if (!overBudget()) {
     tiersTried.push("Expert review");
     const tierT0 = Date.now();
     const toolTypeWord = requiredToolType && requiredToolType !== "combo" ? ` ${getToolTypeLabel(requiredToolType, toolTypes).toLowerCase()}` : "";
@@ -261,7 +267,7 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
     });
     provenanceQueries.push({ tier: "Expert review", query, outcome: tierItemCount > 0 ? "success" : "empty", itemCount: hits.length, elapsedMs: Date.now() - tierT0, verified: true });
   } else {
-    provenanceTiers.push({ tier: "Expert review", attempted: false, outcome: "skipped", errorMessage: skipReason() });
+    provenanceTiers.push({ tier: "Expert review", attempted: false, outcome: "skipped", errorMessage: skipReason });
   }
 
   features = dedupeFeatures(features);
