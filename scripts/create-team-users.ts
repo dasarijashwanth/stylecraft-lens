@@ -81,6 +81,7 @@ const TEAM_EMAILS = [
   "peterg@stylecraftus.com",
   "rafap@stylecraftus.com",
   "leolal@stylecraftus.com",
+  "andreap@stylecraftus.com",
 ];
 
 function displayNameFromEmail(email: string): string {
