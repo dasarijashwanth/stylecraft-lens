@@ -656,6 +656,17 @@ const REPORT_UPDATABLE_FIELDS = new Set([
   "pricing_analysis",
   "go_to_market",
   "content_form",
+  // Restored for the "Link Report" feature (components/project/LinkReportModal.tsx),
+  // which legitimately needs to reassign a report's project_id — removing it
+  // entirely (rather than requiring the caller to verify ownership) is what
+  // silently broke that feature (an empty update after allowlist-filtering).
+  // Safe ONLY because app/api/reports/[id]/route.ts's PATCH handler now
+  // verifies the target project_id actually belongs to session.orgId
+  // BEFORE ever calling updateReport — never trust this allowlist alone as
+  // the authorization boundary for this specific field. analysis_id is
+  // deliberately still excluded: nothing legitimate reassigns it via this
+  // endpoint, so there's no reason to reopen that half of the original IDOR.
+  "project_id",
 ]);
 
 function pickReportUpdatableFields(updates: any): Record<string, any> {
@@ -685,10 +696,10 @@ export async function updateReport(reportId: string, userId: string, updates: an
   // Translate the Supabase-shaped snake_case relational keys into the
   // internal camelCase fields used by Prisma/memoryDb. Content-blob keys
   // (competitive_analysis, pricing_analysis, go_to_market, content_form)
-  // and title/status pass through unchanged. project_id/analysis_id are
-  // never in `safeUpdates` (see REPORT_UPDATABLE_FIELDS above), so `rest`
-  // below can never carry them — the destructure is kept only so this
-  // fallback's shape still matches the Prisma model's own field names.
+  // and title/status pass through unchanged. project_id can be in
+  // `safeUpdates` (see REPORT_UPDATABLE_FIELDS above — the caller,
+  // app/api/reports/[id]/route.ts, verifies its ownership before this ever
+  // runs); analysis_id never is, so `rest` below can never carry it.
   const { project_id, analysis_id, ...rest } = safeUpdates;
   const prismaData: any = { ...rest };
   if (project_id !== undefined) prismaData.projectId = project_id;

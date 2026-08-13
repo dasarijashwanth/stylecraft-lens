@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { getReport, updateReport } from "@/lib/db/reports";
+import { getProject } from "@/lib/db/projects";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { prisma } from "@/lib/db";
 import { memoryDb } from "@/lib/memoryDb";
@@ -39,6 +40,22 @@ export async function PATCH(
     const session = await getAuthSession();
     const { id } = params;
     const body = await request.json();
+
+    // project_id is one of the few fields updateReport's own allowlist
+    // (REPORT_UPDATABLE_FIELDS) permits — but only reachable safely because
+    // THIS route verifies the target project actually belongs to the
+    // caller's org first (the "any new project-scoped route must verify
+    // ownership itself" convention this codebase already follows
+    // elsewhere). Without this check, restoring project_id to the allowlist
+    // would reopen the exact cross-tenant IDOR it was removed to close;
+    // without the check we'd be back to a "Link report to project" feature
+    // that silently no-ops (project_id stripped, nothing actually happens).
+    if (body && typeof body.project_id === "string" && body.project_id) {
+      const targetProject = await getProject(body.project_id, session.orgId);
+      if (!targetProject) {
+        return NextResponse.json({ error: "NOT_FOUND", message: "Project not found" }, { status: 404 });
+      }
+    }
 
     const report = await updateReport(id, session.userId, body, session.orgId);
     return NextResponse.json({ report });
