@@ -318,7 +318,11 @@ export async function getAmazonProduct(asin: string): Promise<RainforestProduct 
 // backfill script (scripts/backfill-amazon-fields.ts) so a re-fetch after
 // widening this file's mapping actually gets the new fields, instead of
 // replaying a pre-widening cached payload. Makes a real, credit-costing
-// Rainforest call every time — never call this from request-serving code.
+// Rainforest call every time — the ONE deliberate exception to "never call
+// this from request-serving code" is lib/analysisEngine.ts's
+// replaceCompetitor (a human-confirmed ASIN swap genuinely needs a forced-
+// fresh price/spec pull, not a stale cache hit); that route is rate-limited
+// (30/hr) specifically because of this cost.
 export async function fetchAmazonProductFresh(asin: string): Promise<RainforestProduct | null> {
   if (!hasRainforestKey) return null;
   if (!asin || !/^[A-Z0-9]{10}$/i.test(asin)) return null;

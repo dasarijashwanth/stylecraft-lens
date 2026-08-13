@@ -3079,13 +3079,24 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       result.removedAsins = [];
 
       // 1E post-selection sweep — same reasoning as Phase 1's own call.
+      // Unlike Phase 1 (which always finalizes before Phase 2 exists, so it
+      // has no "other tier" to exclude against), Phase 1's real competitors
+      // ARE already persisted by the time Phase 2 reaches its own finalize —
+      // excluded here so a sweep-triggered emerging replacement can never
+      // duplicate an ASIN already seated on the legacy side (same cross-tier
+      // union refillCompetitorSlot already builds for its own case).
+      const phase1CompetitorAsins = new Set<string>();
+      for (const c of record.phase1_result?.competitors || []) {
+        const a = (c.asin || "").toUpperCase();
+        if (/^[A-Z0-9]{10}$/.test(a)) phase1CompetitorAsins.add(a);
+      }
       result.competitors = await sweepGroomingGateContamination(result.competitors, result.runnerUpPool, {
         identity: identityCard,
         tier: "emerging",
         targetPriceRaw,
         toolTypes,
         scoringCtx,
-        excludeAsins: new Set<string>(),
+        excludeAsins: phase1CompetitorAsins,
         analysisId,
         routeStartTime: startTime,
       });
@@ -3356,7 +3367,17 @@ export async function replaceCompetitor(
   if (allExistingAsins.has(newAsin)) throw new Error(`ASIN "${newAsin}" is already one of this analysis's other competitors`);
 
   const product = await fetchAmazonProductFresh(newAsin);
-  if (!product) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}"`);
+  // Broad-audit finding — getAmazonProduct/fetchAmazonProductFresh collapse
+  // a genuine "no such product" result and a Rainforest auth/credit/outage
+  // error into the identical `null` (the distinction only survives in
+  // internal telemetry, never in what a caller can branch on) — this
+  // previously asserted false certainty ("could not fetch" reads as "this
+  // ASIN is wrong") when the real cause could just as easily be a service
+  // outage. Wording fixed to stop overclaiming; NOT a full fix of the
+  // underlying error-class collapse (that's a larger, riskier change
+  // touching getAmazonProduct's many other callers — flagged as a known
+  // follow-up, not attempted here).
+  if (!product) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}" — this could mean the ASIN is wrong, or that Amazon/Rainforest data is temporarily unavailable. Double-check the ASIN and try again in a moment.`);
   // No cache write-through needed here: newAsin has never been cached
   // under this analysis before, so any later getAmazonProduct(newAsin)
   // call (e.g. CompetitorCard's own review/news/key-features lookups)
@@ -3625,11 +3646,30 @@ export async function fetchReplacementForSlot(candidatePool: any[], ctx: SlotRef
 // shrinks the slot (an honest empty) rather than ever leaving a
 // contaminated pick in place. Exported (rather than file-private) so it's
 // directly unit-testable (scripts/verify-sweep-gate-contamination.ts).
+//
+// Broad-audit finding: re-checking with `ctx.scoringCtx.groomingGateRules`
+// (the SAME rules object `selectByCompositeScore` already gated every one
+// of these candidates against, moments earlier in this same request) made
+// this sweep structurally incapable of ever catching anything at its real
+// call sites — a pure function given identical inputs always agrees with
+// itself. Fixed by re-fetching rules fresh right here, which is also what
+// actually makes "the gate was already applied... but rules can change
+// between candidate-gating and this exact moment" (this function's own
+// original justification) literally true rather than aspirational; it also
+// keeps this sweep a genuine defense-in-depth backstop against a FUTURE
+// code path that adds candidates without gating them, which is the other
+// real reason to keep an already-redundant-looking check.
 export async function sweepGroomingGateContamination(
   finalList: any[],
   runnerUpPool: any[],
   ctx: SlotRefillContext & { scoringCtx: CompositeScoringContext }
 ): Promise<any[]> {
+  const freshRules = await listGroomingGateRules();
+  const freshCtx: SlotRefillContext & { scoringCtx: CompositeScoringContext } = {
+    ...ctx,
+    scoringCtx: { ...ctx.scoringCtx, groomingGateRules: freshRules },
+  };
+
   const rebuilt: any[] = [];
   for (const c of finalList) {
     if (c.empty_slot) {
@@ -3637,7 +3677,7 @@ export async function sweepGroomingGateContamination(
       continue;
     }
 
-    const result = passesGroomingIndustryGate(c, ctx.scoringCtx.groomingGateRules, {
+    const result = passesGroomingIndustryGate(c, freshRules, {
       stage: "post_enrichment",
       toolTypes: ctx.toolTypes,
       requiredToolType: ctx.identity.toolType,
@@ -3670,7 +3710,13 @@ export async function sweepGroomingGateContamination(
       console.warn("Failed to log grooming-gate sweep incident:", e);
     }
 
-    const replacement = await fetchReplacementForSlot(excludeAlreadySelected(runnerUpPool, finalList), ctx);
+    // Broad-audit finding — excluding only `finalList` let a SECOND
+    // contaminated candidate in the same sweep pick the SAME replacement
+    // already pushed onto `rebuilt` for the first one (both duplicate
+    // computations against the same static input), producing a visible
+    // duplicate competitor with no downstream dedup. Excluding the union of
+    // the original list AND everything already decided this pass closes it.
+    const replacement = await fetchReplacementForSlot(excludeAlreadySelected(runnerUpPool, [...finalList, ...rebuilt]), freshCtx);
     if (replacement.ok && replacement.competitor) {
       console.warn(`[grooming-gate] sweep replaced "${c.name}" with "${replacement.competitor.name}" (source: ${replacement.source})`);
       rebuilt.push(replacement.competitor);
@@ -3890,6 +3936,27 @@ export async function refillCompetitorSlot(
   // price scoring falls back to absolute-price-to-target automatically when
   // indieLineups/ourLineupPercentile aren't both present (see
   // selectByCompositeScore's own tier==="emerging" branch).
+  //
+  // Broad-audit finding — relatedProducts was previously omitted entirely
+  // here (every OTHER CompositeScoringContext built in this file sets it
+  // from `relatedProductProfiles`, computed once per phase step in
+  // runAnalysisStep — but that computation never reached refillCompetitorSlot,
+  // which resolves its own context via resolvePhase2Context instead). A
+  // refill would score every candidate on motor/price/features/the grooming
+  // gate, but silently skip the small additive Related Products bonus every
+  // other discovery pick in the same analysis got — never erroring, just
+  // quietly less-aligned. Recomputed here the same way runAnalysisStep does,
+  // straight from the analysis record already loaded above.
+  const relatedProductsForRefill: ResolvedRelatedProduct[] = Array.isArray(record.related_products) ? record.related_products : [];
+  const relatedProductProfilesForRefill: RelatedProductProfile[] = relatedProductsForRefill
+    .filter(rp => rp.eligibleForPoolSeeding && !rp.resolutionFailed)
+    .map(rp => ({
+      motorFamilyKey: rp.motor_family_key ?? null,
+      heatTechFamilyKey: rp.heat_tech_family_key ?? null,
+      priceRaw: rp.price_raw ?? null,
+      specs: extractCompetitorSpecs(rp as any),
+    }));
+
   const scoringCtx: CompositeScoringContext = {
     motorFamilies,
     brandedNames,
@@ -3904,6 +3971,7 @@ export async function refillCompetitorSlot(
     ourLineupPercentile,
     keyDiff: context.keyDiff ?? null,
     penalizedAsins: correctionSignals.penalizedAsins,
+    relatedProducts: relatedProductProfilesForRefill,
     groomingGateRules,
     groomingGateConfidenceThreshold,
     ourGroomingTag,
@@ -4007,7 +4075,8 @@ export async function replaceRelatedProduct(analysisId: string, oldAsin: string,
     toolTypes,
     Date.now()
   );
-  if (!resolved || resolved.resolutionFailed) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}"`);
+  // Same wording fix as replaceCompetitor above, same reason.
+  if (!resolved || resolved.resolutionFailed) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}" — this could mean the ASIN is wrong, or that Amazon/Rainforest data is temporarily unavailable. Double-check the ASIN and try again in a moment.`);
 
   const updated = [...existing];
   updated[idx] = resolved;

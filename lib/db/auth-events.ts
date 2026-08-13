@@ -39,7 +39,12 @@ export type AuthEventType =
   | "competitor_replace"
   | "competitor_remove"
   | "competitor_refill_slot"
-  | "competitor_bulk_refill";
+  | "competitor_bulk_refill"
+  // Broad-audit findings — competitors/preview and related-products/replace
+  // both trigger real (cached but not free) Rainforest cost with no cap at
+  // all before this.
+  | "competitor_preview"
+  | "related_product_replace";
 
 export interface AuthEventInput {
   eventType: AuthEventType;

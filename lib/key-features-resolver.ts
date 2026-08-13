@@ -99,6 +99,19 @@ Return ONLY valid JSON: { "features": [{ "headline": "...", "detail": "...", "qu
   };
 }
 
+// Broad-audit finding — `overBudget()` was only ever checked BETWEEN hits,
+// never bounding one already in flight. Tracing this file's own timeouts
+// (scrapeProductPage's AI-fallback path, extractFeaturesFromText's 35s
+// OpenAI call) through openai.ts's retry math, a single slow hit could take
+// well over a minute — blowing past both this resolver's own 42s budget and
+// the calling route's 60s maxDuration. Mirrors lib/indie-brand-lineup.ts's/
+// lib/legacy-brand-discovery.ts's own locally-duplicated withDeadline
+// exactly (same precedent, not a shared import).
+async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  const timeout = new Promise<T>(resolve => setTimeout(() => resolve(fallback), Math.max(0, ms)));
+  return Promise.race([promise, timeout]);
+}
+
 function dedupeFeatures(features: ResolvedFeature[]): ResolvedFeature[] {
   const kept: ResolvedFeature[] = [];
   for (const f of features) {
@@ -133,6 +146,7 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
   const provenanceQueries: ProvenanceQuery[] = [];
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
+  const remainingBudget = () => Math.max(0, TIME_BUDGET_MS - (Date.now() - startedAt));
   const skipReason = "time budget exceeded"; // the only remaining reason a tier is ever skipped
 
   // Tier 1: Amazon — already-fetched, no extra search/scrape needed.
@@ -184,9 +198,15 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
     const tierUrls: string[] = [];
     for (const hit of hits) {
       if (overBudget()) break;
-      const [scraped, pageText] = await Promise.all([scrapeProductPage(hit.url), fetchPageText(hit.url)]);
-      const text = pageText || scraped?.description || "";
-      const extracted = await extractFeaturesFromText(competitorName, text, "Brand site", hit.url, hit.title || scraped?.title || hit.url);
+      const extracted = await withDeadline(
+        (async () => {
+          const [scraped, pageText] = await Promise.all([scrapeProductPage(hit.url), fetchPageText(hit.url)]);
+          const text = pageText || scraped?.description || "";
+          return extractFeaturesFromText(competitorName, text, "Brand site", hit.url, hit.title || scraped?.title || hit.url);
+        })(),
+        remainingBudget(),
+        { features: [], rejectedCount: 1, rejectedReasons: [`${hit.title || hit.url} — timed out before extraction finished`] }
+      );
       if (extracted.features.length) { tiersSucceeded.push("Brand site"); tierUrls.push(hit.url); }
       features.push(...extracted.features);
       tierItemCount += extracted.features.length;
@@ -217,9 +237,15 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
     const tierUrls: string[] = [];
     for (const hit of hits) {
       if (overBudget()) break;
-      const [scraped, pageText] = await Promise.all([scrapeProductPage(hit.url), fetchPageText(hit.url)]);
-      const text = pageText || scraped?.description || "";
-      const extracted = await extractFeaturesFromText(competitorName, text, "Retailer", hit.url, hit.title || scraped?.title || hit.url);
+      const extracted = await withDeadline(
+        (async () => {
+          const [scraped, pageText] = await Promise.all([scrapeProductPage(hit.url), fetchPageText(hit.url)]);
+          const text = pageText || scraped?.description || "";
+          return extractFeaturesFromText(competitorName, text, "Retailer", hit.url, hit.title || scraped?.title || hit.url);
+        })(),
+        remainingBudget(),
+        { features: [], rejectedCount: 1, rejectedReasons: [`${hit.title || hit.url} — timed out before extraction finished`] }
+      );
       if (extracted.features.length) { tiersSucceeded.push("Retailer"); tierUrls.push(hit.url); }
       features.push(...extracted.features);
       tierItemCount += extracted.features.length;
@@ -250,9 +276,13 @@ export async function resolveKeyFeatures(competitorName: string, asin: string | 
     const tierUrls: string[] = [];
     for (const hit of hits) {
       if (overBudget()) break;
-      const text = await fetchPageText(hit.url);
+      const text = await withDeadline(fetchPageText(hit.url), remainingBudget(), null);
       if (!text) { tierRejectedCount++; tierRejectedReasons.push(`${hit.title || hit.url} — page text unavailable`); continue; }
-      const extracted = await extractFeaturesFromText(competitorName, text, "Expert review", hit.url, hit.title || hit.url);
+      const extracted = await withDeadline(
+        extractFeaturesFromText(competitorName, text, "Expert review", hit.url, hit.title || hit.url),
+        remainingBudget(),
+        { features: [], rejectedCount: 1, rejectedReasons: [`${hit.title || hit.url} — timed out before extraction finished`] }
+      );
       if (extracted.features.length) { tiersSucceeded.push("Expert review"); tierUrls.push(hit.url); }
       features.push(...extracted.features);
       tierItemCount += extracted.features.length;

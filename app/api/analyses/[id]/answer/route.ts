@@ -29,18 +29,20 @@ function normalizeToolTypeAnswer(answer: string, toolTypes: ToolTypeRow[]): Tool
 
 // Answers a paused question — Product Identification (see
 // lib/product-identification.ts's needsUserInput gate), a missing target
-// price, a missing motor type, or a missing lineup tier (see
-// lib/analysisEngine.ts's resolveDiscoveryTargetPrice/resolveOurMotorType/
+// price, a missing motor type, a missing heat/plate technology, or a
+// missing lineup tier (see lib/analysisEngine.ts's
+// resolveDiscoveryTargetPrice/resolveOurMotorType/resolveOurHeatTech/
 // resolveOurLineupTier gates in Phase 1/2). Merges the answer into the
 // matching context field and clears pending_question — phase stays where
 // it is, so the next POST .../continue simply re-attempts whatever paused,
 // which now trusts the user-supplied value directly rather than pausing
 // again. `pending_question.field` defaults to "category" for old paused
 // questions that predate this field (never explicitly set). "motorType"
-// merges into motorTech — the SAME context field the analyze/project-new
-// forms' existing "Motor technology" select already populates, so
-// resolveOurMotorType's existing motorTech-matching step picks it up with
-// no new context field needed.
+// merges into motorTech and "heatTechType" merges into heatTechRaw — the
+// SAME context fields the analyze/project-new forms' existing "Motor
+// technology"/"Heat/Plate technology" selects already populate, so
+// resolveOurMotorType's/resolveOurHeatTech's existing matching steps pick
+// it up with no new context field needed.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();
@@ -61,6 +63,16 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const field =
       pausedField === "pricePoint" ? "pricePoint" :
       pausedField === "motorType" ? "motorTech" :
+      // Missing entirely until now — resolveOurHeatTech (the
+      // heat_technology-criterion twin of resolveOurMotorType) reads
+      // context.heatTechRaw, but this route never mapped the "heatTechType"
+      // pause field to it. Any flat-iron/curling-iron/hair-dryer analysis
+      // whose heat/plate technology couldn't auto-resolve would fall
+      // through to the "category" default below instead, clobbering the
+      // real product category with the user's heat-tech answer and never
+      // actually unblocking the pause — the exact same question would just
+      // reappear on the next continue, forever.
+      pausedField === "heatTechType" ? "heatTechRaw" :
       pausedField === "lineupTier" ? "lineupTier" :
       pausedField === "toolType" ? "toolType" :
       "category";

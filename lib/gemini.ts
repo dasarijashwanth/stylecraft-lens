@@ -9,7 +9,21 @@ export const hasGeminiKey =
   !apiKey.includes("your-gemini") &&
   !apiKey.includes("xxxx");
 
-export const genAI = new GoogleGenAI({ apiKey: apiKey || "mock-key-for-development" });
+// Broad-audit finding — every Gemini call in this codebase (8 call sites)
+// had NO timeout at all. Confirmed by reading the SDK's own source
+// (node_modules/@google/genai): with no `httpOptions.timeout` set, its
+// internal `timeout_ms` resolves to -1, which the SDK explicitly treats as
+// "never attach an AbortSignal" — a stalled Google endpoint would hang for
+// however long the platform allows, exactly the "Connection dropped" class
+// of bug lib/rainforest.ts's own header comment already describes fixing
+// once for Rainforest (nothing ever logged server-side, the fetch just sat
+// there consuming the whole remaining request budget until Vercel force-
+// killed the function). Setting httpOptions.timeout here applies to every
+// call through this one shared client — 45s leaves real headroom under
+// Vercel's 60s hard cap for the calling route to still do something useful
+// with a timeout error, while still being generous enough for this app's
+// genuinely slow calls (web-search-augmented generation, vision analysis).
+export const genAI = new GoogleGenAI({ apiKey: apiKey || "mock-key-for-development", httpOptions: { timeout: 45_000 } });
 
 // Fast, cheap, current-generation model used for all text/JSON generation and
 // vision calls across the app (market research, sales kit, TDS, artwork, rewrite).

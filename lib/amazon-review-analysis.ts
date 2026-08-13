@@ -518,6 +518,23 @@ export async function analyzeReviews(
   const asinValid = /^[A-Z0-9]{10}$/i.test(asin || "");
   const includeSentiment = opts?.includeSentiment !== false;
 
+  // Broad-audit finding — this function chains up to 4 sequential AI/web
+  // calls (Tier A -> B -> C -> checkQuoteQuality) with zero overall deadline
+  // anywhere; tracing each call's own timeout through openai.ts's retry math,
+  // the full worst-case chain can approach/exceed 2 minutes — already
+  // confirmed live by this function's own caller
+  // (app/api/amazon/reviews-analysis/[asin]/route.ts's header comment:
+  // "confirmed live that the multi-tier resolver... sometimes takes right up
+  // to" its 60s maxDuration). Tiers B/C are both explicitly designed as
+  // fallbacks ("Only when Tier A/B... found nothing" — their own comments),
+  // so they're the right ones to skip under budget pressure; Tier A (real
+  // Amazon review data) and checkQuoteQuality (verifying whatever WAS found)
+  // never get skipped — this bounds the worst case without ever discarding
+  // already-found, already-verified real data.
+  const startedAt = Date.now();
+  const TIME_BUDGET_MS = 42_000;
+  const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
+
   if (!includeSentiment) {
     logCall("review-tier", { op: "sentiment-skip", outcome: "ok", errorMessage: "disabled via feature flag", elapsedMs: 0 });
   }
@@ -597,7 +614,7 @@ export async function analyzeReviews(
   let tierBItemCount = 0;
   const tierBRejected = { count: 0, reasons: [] as string[] };
 
-  if (strengths.length + weaknesses.length === 0 && product) {
+  if (strengths.length + weaknesses.length === 0 && product && !overBudget()) {
     const tierBReviews = topReviewsToAmazonReviews(product);
     tierBItemCount = tierBReviews.length;
     tierBAttempted = true;
@@ -631,7 +648,7 @@ export async function analyzeReviews(
   let tierCAttempted = false;
   let tierCQueries: ProvenanceQuery[] = [];
 
-  if (strengths.length + weaknesses.length === 0) {
+  if (strengths.length + weaknesses.length === 0 && !overBudget()) {
     tierCAttempted = true;
     // Fetched locally here (analyzeReviews's own natural async boundary) —
     // never pushed up to its callers, and never module-level state (see

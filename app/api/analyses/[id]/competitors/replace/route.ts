@@ -44,6 +44,19 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (rateLimit.limited) {
       return NextResponse.json({ error: "RATE_LIMITED", message: `Too many competitor replacements — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
     }
+    // Per-analysis burst guard, same mechanism/reasoning as
+    // app/api/analyses/[id]/continue/route.ts's own — replaceCompetitor
+    // does a read-the-whole-phase-result / mutate-in-memory / write-the-
+    // whole-column-back cycle (patchAnalysisPhaseResults is a plain column
+    // overwrite, not a DB-level merge). Two mutations against the SAME
+    // analysis (e.g. two competitor cards' actions clicked in quick
+    // succession, or two open tabs) racing this window could otherwise
+    // silently drop one edit — this serializes them instead of letting
+    // that happen silently.
+    const burstGuard = await checkRateLimit({ eventType: "competitor_replace", userId: `${session.userId}:${params.id}`, maxAttempts: 1, windowMinutes: 0.05 });
+    if (burstGuard.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: "Another change to this analysis is still in progress — please wait a moment and try again." }, { status: 429 });
+    }
 
     const { oldAsin, asinOrUrl, reason, note } = validation.data;
     const newAsin = resolveAsinFromInput(asinOrUrl);

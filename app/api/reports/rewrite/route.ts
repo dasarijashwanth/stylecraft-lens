@@ -3,6 +3,12 @@ import { getAuthSession } from "@/lib/auth";
 import { genAI, hasGeminiKey, GEMINI_MODEL } from "@/lib/gemini";
 import { openai, hasOpenAIKey, OPENAI_MODEL } from "@/lib/openai";
 
+// Broad-audit finding — this route calls OpenAI (bounded at 20s) then, on
+// failure, falls back to Gemini (see lib/gemini.ts's own header comment on
+// why every Gemini call needed a timeout added) with no maxDuration of its
+// own, unlike every sibling AI-calling route fixed this session.
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     await getAuthSession(); // Ensure user is logged in

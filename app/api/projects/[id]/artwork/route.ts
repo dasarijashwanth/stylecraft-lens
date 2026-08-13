@@ -7,6 +7,12 @@ import { getAuthSession } from "@/lib/auth";
 import { getProject } from "@/lib/db/projects";
 import { detectImageType } from "@/lib/file-magic-bytes";
 
+// Broad-audit finding — POST below uses Gemini Vision as its ONLY AI path
+// (no OpenAI fallback) with no maxDuration set, unlike every sibling
+// AI-calling route fixed this session (see lib/gemini.ts's own header
+// comment on why every Gemini call needed a timeout added regardless).
+export const maxDuration = 60;
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getAuthSession();

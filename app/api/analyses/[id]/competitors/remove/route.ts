@@ -31,6 +31,16 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (rateLimit.limited) {
       return NextResponse.json({ error: "RATE_LIMITED", message: `Too many competitor removals — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
     }
+    // Per-analysis burst guard — removeCompetitorSlot does a read-modify-
+    // write over the whole phase-result column (patchAnalysisPhaseResults),
+    // same exposure app/api/analyses/[id]/continue/route.ts's own burst
+    // guard protects against: two mutations against the SAME analysis
+    // landing close together (two card actions in quick succession, two
+    // open tabs) could otherwise silently drop one edit.
+    const burstGuard = await checkRateLimit({ eventType: "competitor_remove", userId: `${session.userId}:${params.id}`, maxAttempts: 1, windowMinutes: 0.05 });
+    if (burstGuard.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: "Another change to this analysis is still in progress — please wait a moment and try again." }, { status: 429 });
+    }
 
     const { asin, reason, note } = validation.data;
     const result = await removeCompetitorSlot(params.id, asin, session.userId, { reason, note });

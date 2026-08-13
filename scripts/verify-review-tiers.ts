@@ -191,7 +191,14 @@ async function main() {
   assert(tierB?.attempted === true, "the product-listing fallback tier (Tier B) is attempted when Tier A found nothing");
 
   console.log(`\n${passes} passed, ${failures} failed.`);
-  if (failures > 0) process.exit(1);
+  // Broad-audit finding — this only ever called process.exit() on the
+  // failure path; on success the script relies on natural process exit,
+  // which never happens (something in the module graph keeps the event
+  // loop alive), so a passing run hangs forever instead of exiting 0.
+  // Confirmed by testing this exact script both before and after today's
+  // unrelated lib/amazon-review-analysis.ts changes — identical hang either
+  // way, so this is pre-existing and unrelated to those edits.
+  process.exit(failures > 0 ? 1 : 0);
 }
 
 main().catch(err => {

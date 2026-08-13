@@ -162,6 +162,42 @@ async function main() {
   assert(newest?.candidate_name === "Electric Weed Wacker With Wheel", `the incident records the contaminant's real name (got ${newest?.candidate_name})`);
   assert(!!newest?.failed_rule, `the incident records which rule actually failed it (got ${newest?.failed_rule})`);
 
+  console.log("\n[3] Two contaminants, one runner-up available — no duplicate replacement (regression: excludeAsins previously only covered the original list, not replacements already chosen this same sweep pass)");
+  {
+    const secondContaminantAsin = "B0BADASIN6";
+    const twoContaminantsList = [
+      makeCompetitor(1, { name: "Wahl Senior Clipper", brand: "Wahl", asin: "B0AAA00001", price: 249.95 }),
+      makeCompetitor(2, { name: "Andis Master Clipper", brand: "Andis", asin: "B0AAA00002", price: 259.95 }),
+      makeCompetitor(3, { name: "Oster Classic 76 Clipper", brand: "Oster", asin: "B0AAA00003", price: 239.95 }),
+      {
+        ...makeCompetitor(4, { name: "Electric Weed Wacker With Wheel", brand: "GardenPro", asin: contaminantAsin, price: 254.95 }),
+        categories: ["Patio, Lawn & Garden"],
+        bestsellers_rank_full: [{ category: "Patio, Lawn & Garden", rank: 3 }],
+        top_feature_summary: "powerful brushless motor, cuts weeds and grass easily",
+        key_features: ["powerful brushless motor", "cuts weeds and grass easily"],
+        feature_bullets: ["Powerful brushless motor", "Cuts weeds and grass easily"],
+        description: "Electric weed wacker with wheel for lawn and garden use.",
+      },
+      {
+        ...makeCompetitor(5, { name: "Cordless Hedge Trimmer 3000", brand: "GardenPro", asin: secondContaminantAsin, price: 264.95 }),
+        categories: ["Patio, Lawn & Garden"],
+        bestsellers_rank_full: [{ category: "Patio, Lawn & Garden", rank: 5 }],
+        top_feature_summary: "powerful brushless motor, trims hedges easily",
+        key_features: ["powerful brushless motor", "trims hedges easily"],
+        feature_bullets: ["Powerful brushless motor", "Trims hedges easily"],
+        description: "Cordless hedge trimmer for lawn and garden use.",
+      },
+    ];
+    const oneRunnerUp = [makeCompetitor(6, { name: "RivalBrand Cordless Clipper 4000", brand: "RivalBrand", asin: "B0RUP00002", price: 244.95 })];
+
+    const sweptTwo = await sweepGroomingGateContamination(twoContaminantsList, oneRunnerUp, { ...ctx, analysisId: "test_analysis_sweep_2" });
+
+    assert(!sweptTwo.some((c: any) => c.asin === contaminantAsin || c.asin === secondContaminantAsin), "both contaminants are gone from the swept list");
+    const rivalCount = sweptTwo.filter((c: any) => c.asin === "B0RUP00002").length;
+    assert(rivalCount === 1, `the single available runner-up appears exactly once, never duplicated (got ${rivalCount})`);
+    assert(sweptTwo.length === 4, `the exhausted second slot honestly shrinks rather than duplicating (got ${sweptTwo.length} competitors, expected 4: 3 clean survivors + 1 replacement for the first contaminant, second contaminant dropped with no replacement)`);
+  }
+
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
 }

@@ -40,6 +40,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (rateLimit.limited) {
       return NextResponse.json({ error: "RATE_LIMITED", message: `Too many refill attempts — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
     }
+    // Per-analysis burst guard — same reasoning as the sibling remove/replace
+    // routes: refillCompetitorSlot does a read-modify-write over the whole
+    // phase-result column, so two refills against the SAME analysis landing
+    // close together could otherwise silently drop one edit.
+    const burstGuard = await checkRateLimit({ eventType: "competitor_refill_slot", userId: `${session.userId}:${params.id}`, maxAttempts: 1, windowMinutes: 0.05 });
+    if (burstGuard.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: "Another change to this analysis is still in progress — please wait a moment and try again." }, { status: 429 });
+    }
 
     const { removedAsin } = validation.data;
     const result = await refillCompetitorSlot(params.id, removedAsin, session.userId);

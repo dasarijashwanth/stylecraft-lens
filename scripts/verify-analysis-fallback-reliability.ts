@@ -97,7 +97,11 @@ async function main() {
   assert(r5 === "mock-only", "mock runs directly when both provider callbacks are null");
 
   console.log(`\n${passes} passed, ${failures} failed`);
-  if (failures > 0) process.exit(1);
+  // Same fix as scripts/verify-review-tiers.ts — only exited explicitly on
+  // failure, so a passing run relied on natural process exit that never
+  // actually happens (something in the module graph keeps the event loop
+  // alive), hanging forever instead of exiting 0.
+  process.exit(failures > 0 ? 1 : 0);
 }
 
 main().catch(err => {

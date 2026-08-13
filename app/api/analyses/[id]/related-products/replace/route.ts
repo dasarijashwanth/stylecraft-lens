@@ -3,6 +3,7 @@ import { getAuthSession } from "@/lib/auth";
 import { getAnalysis } from "@/lib/db/analyses";
 import { replaceRelatedProduct } from "@/lib/analysisEngine";
 import { RelatedProductReplaceSchema } from "@/lib/validations";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // "Fixing a mispaste re-fetches in place" (Related Products, Part 3.5) —
 // deliberately simpler than app/api/analyses/[id]/competitors/replace's
@@ -30,6 +31,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     if (existing.user_id !== session.userId) {
       return NextResponse.json({ error: "FORBIDDEN", message: "Not your analysis" }, { status: 403 });
+    }
+
+    // Broad-audit finding — this route had no rate limit at all despite
+    // forcing a real Rainforest lookup, unlike its sibling
+    // competitors/replace (30/hr). Same 30/hr cap, plus the same
+    // per-analysis burst guard the sibling single-slot mutation routes
+    // all now have (replaceRelatedProduct/patchRelatedProducts is the same
+    // read-modify-write-whole-column shape).
+    const rateLimit = await checkRateLimit({ eventType: "related_product_replace", userId: session.userId, maxAttempts: 30, windowMinutes: 60 });
+    if (rateLimit.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: `Too many related-product replacements — please wait ${rateLimit.retryAfterMinutes} minutes and try again.` }, { status: 429 });
+    }
+    const burstGuard = await checkRateLimit({ eventType: "related_product_replace", userId: `${session.userId}:${params.id}`, maxAttempts: 1, windowMinutes: 0.05 });
+    if (burstGuard.limited) {
+      return NextResponse.json({ error: "RATE_LIMITED", message: "Another change to this analysis is still in progress — please wait a moment and try again." }, { status: 429 });
     }
 
     const { oldAsin, asinOrUrl } = validation.data;
