@@ -1596,7 +1596,22 @@ export function selectByCompositeScore(
       // gate — this curated static fallback pool should never contain a
       // non-grooming item, but this is the exact loop the original
       // contamination bug lived in, so it's never trusted blindly.
-      const fbGateResult = passesGroomingIndustryGate({ name: fb.name || "" }, ctx.groomingGateRules, { stage: "pre_enrichment", toolTypes: ctx.toolTypes, requiredToolType: identity.toolType, ourIsPetGrooming: ctx.ourIsPetGrooming });
+      //
+      // Broad-audit finding — passing bare `fb.name` starved 1B's keyword
+      // check of any signal for real, correctly-typed entries whose own
+      // product name is brand+model only (e.g. "BaBylissPRO Nano Titanium
+      // Ionic Dryer" has no "hair"/"blow" token; "Wahl... Magic Clip" has no
+      // "clipper" token) — silently rejecting most of this "guaranteed"
+      // safety-net floor for exactly the categories that need it most.
+      // getCategoryFallbackCompetitors already keys this entry strictly on
+      // identity.toolType by construction, so its resolved label is a known
+      // true fact about it, not a guess — supplying it as `description`
+      // gives 1B real signal instead of none.
+      const fbGateResult = passesGroomingIndustryGate(
+        { name: fb.name || "", description: identity.toolType ? getToolTypeLabel(identity.toolType, ctx.toolTypes) : null },
+        ctx.groomingGateRules,
+        { stage: "pre_enrichment", toolTypes: ctx.toolTypes, requiredToolType: identity.toolType, ourIsPetGrooming: ctx.ourIsPetGrooming }
+      );
       if (!fbGateResult.ok) {
         console.warn(`[grooming-gate] rejected fallback candidate "${fb.name}" — ${fbGateResult.reason}`);
         continue;
@@ -3721,7 +3736,18 @@ export async function sweepGroomingGateContamination(
       console.warn(`[grooming-gate] sweep replaced "${c.name}" with "${replacement.competitor.name}" (source: ${replacement.source})`);
       rebuilt.push(replacement.competitor);
     } else {
-      console.warn(`[grooming-gate] sweep removed "${c.name}" — no qualifying replacement found in the runner-up pool or a live search; slot shrinks`);
+      // Broad-audit finding — dropping the slot with only a console.warn
+      // silently shrank the tier's total below 5 with zero indication to
+      // the user why. An honest empty-slot placeholder keeps the count
+      // right (real, replaced, or explicitly empty — never just missing)
+      // and lets the user's own "Refill this slot" action try again later.
+      console.warn(`[grooming-gate] sweep removed "${c.name}" — no qualifying replacement found in the runner-up pool or a live search; slot marked empty`);
+      rebuilt.push({
+        empty_slot: true,
+        tier: ctx.tier,
+        name: `No additional ${ctx.tier === "legacy" ? "legacy" : "emerging"} competitor found`,
+        reason: `"${c.name}" was removed by the industry gate on a post-selection re-check (${result.reason}), and no qualifying replacement was found. Use "Refill this slot" to search again.`,
+      });
     }
   }
   return rebuilt;
@@ -4279,9 +4305,9 @@ Do not narrate your search process or explain what you're doing between searches
 
 ${identity.toolType ? buildToolTypePromptGuard(identity.toolType, toolTypes) : ""}
 
-Your task: Research up to 8 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
+Your task: Research up to 10 ESTABLISHED, LARGE market leaders that compete with the identified product: a ${identity.subcategory || identity.category}.
 ${brandHint ? `Known major brands in this category to check first: ${brandHint.join(", ")} — but do not limit yourself to only these; include any other established brand your search finds.` : "Search broadly for the established, large brands that actually compete in this specific category — do not assume any particular brand."}
-For each brand, find their ONE best matching product THAT FALLS WITHIN THE ACCEPTABLE PRICE RANGE below, in the SAME category as the identified product — among in-band candidates only, prioritize matching key attributes first. Return up to 8 products total.
+For each brand, find their ONE best matching product THAT FALLS WITHIN THE ACCEPTABLE PRICE RANGE below, in the SAME category as the identified product — among in-band candidates only, prioritize matching key attributes first. Return up to 10 products total — a wider margin than the 5 actually needed, since some candidates will be screened out downstream (see rule 8 below), and it costs nothing to propose a few extra real, qualifying ones.
 
 DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize matching ${criterionTerm} "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : criterionTerm ? ` No ${criterionTerm} was specified, so proximity to ${targetDisplay} is the leading signal.` : ` Proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}" — before falling back to a plain brand+category search.${ourMotorLabel && criterionTerm ? ` For each brand, prefer their model that ALSO uses ${ourMotorLabel} (or the closest related ${criterionTerm} in their lineup) over a model that merely matches on price. If a brand's only in-range model uses a different ${criterionTypeWord} type, still include it (never leave a brand slot empty over ${criterionTypeWord} mismatch alone) but make that clear in its inclusion_rationale.` : ""}
 
@@ -4293,6 +4319,7 @@ CRITICAL RULES:
 5. PRICE IS A HARD CONSTRAINT, NOT A TIEBREAKER: the acceptable price range for every candidate is ${bandLabel} (the user's target price of ${targetDisplay} ± 30%). Reject any product whose real Amazon price falls outside this range, even if it is an excellent brand/attribute match — prefer a different, in-range product from the same or another major brand instead. Do not substitute an out-of-range product to fill a slot.
 6. NEVER invent a filler/placeholder company to reach the requested count (e.g. generic-sounding names like "Vanguard Corp", "Prime Tech", "Heritage Brand", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up a few real, in-range competitors, return only those. Returning fewer real results is correct; inventing fake ones is not.
 7. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+8. NEVER propose any of the following — they are automatically rejected downstream regardless of how well they otherwise match on motor type, price, or brand, so proposing one always wastes a slot: (a) lawn/garden/outdoor power equipment (weed trimmers/wackers, hedge trimmers, lawn mowers, string trimmers — even if their listing mentions a "brushless"/"motor" spec); (b) a bare motor, battery, or replacement part sold standalone as a component (not a finished, ready-to-use grooming/styling tool a consumer buys and uses directly); (c) any product whose primary stated use is unrelated to hair/beard/grooming/beauty (marine, drone, automotive, industrial, or general power-tool use) even if it superficially shares a technical spec with the identified product. Every real candidate must be an actual, finished, ready-to-use ${toolTypeLabel.toLowerCase()} a consumer or professional buys for hair/grooming/beauty use.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -4326,7 +4353,7 @@ Return this EXACT JSON schema:
   ]
 }`;
 
-  const userPrompt = `Research up to 8 established large brand competitors for this identified product:
+  const userPrompt = `Research up to 10 established large brand competitors for this identified product:
 
 Product Name: ${context.productName}
 Identified Category: ${identity.category}
@@ -4397,7 +4424,7 @@ Do not narrate your search process or explain what you're doing between searches
 
 ${identity.toolType ? buildToolTypePromptGuard(identity.toolType, toolTypes) : ""}
 
-Your task: Research up to 8 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category}.
+Your task: Research up to 10 INDIE, EMERGING, or NEWER brand products that compete with the identified product: a ${identity.subcategory || identity.category} — a wider margin than the 5 actually needed, since some candidates will be screened out downstream (see rule 8 below), and it costs nothing to propose a few extra real, qualifying ones.
 ${brandHint ? `Exclude these already-covered large brands: ${brandHint.join(", ")}.` : "Exclude whatever large established brands would already be covered by a separate established-competitor search — focus on indie/DTC/newer names."}
 
 DISCOVERY PRIORITY (combined — search using ALL of these together, not as separate passes): propose ONLY ${toolTypeLabel} products.${ourMotorLabel ? ` Prioritize indie/emerging brands specifically known for similar ${criterionTerm} "${ourMotorLabel}" first, then proximity to ${targetDisplay}.` : criterionTerm ? ` No ${criterionTerm} was specified, so proximity to ${targetDisplay} is the leading signal.` : ` Proximity to ${targetDisplay} is the leading signal.`}${context.keyDiff ? ` Products that also share the stated differentiating feature "${context.keyDiff}" rank higher when found — call this out in inclusion_rationale.` : ""} Example search combining all of this: "${combinedExampleQuery}", or "best ${combinedExampleQuery} ${new Date().getFullYear()}" — before falling back to generic category searches.${ourMotorLabel && criterionTypeWord ? ` A candidate whose ${criterionTypeWord} type you cannot confirm from its own listing should still be included if nothing better is found, but note in its inclusion_rationale that ${criterionTypeWord} type could not be verified.` : ""}
@@ -4410,6 +4437,7 @@ CRITICAL RULES:
 5. PRICE IS A HARD CONSTRAINT: the acceptable price range for every candidate is ${bandLabel} (the user's target price of ${targetDisplay}). Value/indie challengers priced meaningfully below this range are still legitimately relevant competitors, which is why this range already extends lower than the established-brand search — but reject anything above the range, and never below 50% of the target price. Reject any product priced outside ${bandLabel}, even if it is an excellent category/attribute match.
 6. NEVER invent a filler/placeholder company to reach the requested count (e.g. generic-sounding names like "NovaDyne", "Flux DTC", "Zenith Lab", or any company name combined with "${context.productName}" itself — that is fabrication, not a real competitor). If your search only turns up a few real, in-range competitors, return only those. Returning fewer real results is correct; inventing fake ones is not.
 7. Return ONLY valid JSON matching the exact schema below — no markdown, no preamble, no explanation.
+8. NEVER propose any of the following — they are automatically rejected downstream regardless of how well they otherwise match on motor type, price, or brand, so proposing one always wastes a slot: (a) lawn/garden/outdoor power equipment (weed trimmers/wackers, hedge trimmers, lawn mowers, string trimmers — even if their listing mentions a "brushless"/"motor" spec); (b) a bare motor, battery, or replacement part sold standalone as a component (not a finished, ready-to-use grooming/styling tool a consumer buys and uses directly); (c) any product whose primary stated use is unrelated to hair/beard/grooming/beauty (marine, drone, automotive, industrial, or general power-tool use) even if it superficially shares a technical spec with the identified product. Every real candidate must be an actual, finished, ready-to-use ${toolTypeLabel.toLowerCase()} a consumer or professional buys for hair/grooming/beauty use.
 
 Note: strengths, weaknesses, and recent buyer sentiment are NOT part of this schema — those are sourced separately and exclusively from real Amazon customer reviews (see enrichCompetitorsWithRainforest / the reviews-analysis endpoint), never from your own knowledge or web search.
 
@@ -4443,7 +4471,7 @@ Return this EXACT JSON schema:
   ]
 }`;
 
-  const userPrompt = `Research up to 8 indie/emerging competitor products for this identified product:
+  const userPrompt = `Research up to 10 indie/emerging competitor products for this identified product:
 
 Product Name: ${context.productName}
 Identified Category: ${identity.category}

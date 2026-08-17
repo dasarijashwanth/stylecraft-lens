@@ -195,7 +195,9 @@ async function main() {
     assert(!sweptTwo.some((c: any) => c.asin === contaminantAsin || c.asin === secondContaminantAsin), "both contaminants are gone from the swept list");
     const rivalCount = sweptTwo.filter((c: any) => c.asin === "B0RUP00002").length;
     assert(rivalCount === 1, `the single available runner-up appears exactly once, never duplicated (got ${rivalCount})`);
-    assert(sweptTwo.length === 4, `the exhausted second slot honestly shrinks rather than duplicating (got ${sweptTwo.length} competitors, expected 4: 3 clean survivors + 1 replacement for the first contaminant, second contaminant dropped with no replacement)`);
+    assert(sweptTwo.length === 5, `the exhausted second slot becomes an honest empty-slot placeholder rather than shrinking the count or duplicating (got ${sweptTwo.length} competitors, expected 5: 3 clean survivors + 1 replacement for the first contaminant + 1 empty-slot placeholder for the second)`);
+    const secondSlot = sweptTwo.find((c: any) => c.empty_slot === true);
+    assert(!!secondSlot && secondSlot.tier === "legacy", "the exhausted slot is a real empty_slot placeholder, tagged with the correct tier");
   }
 
   console.log(`\n${passes} passed, ${failures} failed`);

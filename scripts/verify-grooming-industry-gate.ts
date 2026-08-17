@@ -117,6 +117,26 @@ async function main() {
   assert(outdoorTrimmer.ok === false, `bare "trimmer" + an outdoor/garden signal with no beard/hair/barber/body co-signal is rejected (got ok=${outdoorTrimmer.ok})`);
   assert(outdoorTrimmer.reason === "trimmer_missing_cosignal", `rejected specifically via trimmer_missing_cosignal (got reason=${outdoorTrimmer.reason})`);
 
+  console.log("\n[f] Broad-audit fix — a real, correctly-typed static-fallback entry with a bare brand+model name (no keyword) is rejected with no context, but passes once given its known-true tool-type label as description");
+  // "Wahl Professional 5-Star Cordless Magic Clip" is a REAL entry in
+  // lib/analysisEngine.ts's getCategoryFallbackCompetitors static clipper
+  // fallback pool — this exact name has no "clipper"/"hair"/etc. token, so
+  // the pre-fix static-fallback-topup loop (which passed only `fb.name`)
+  // silently rejected most of what's supposed to be a guaranteed floor.
+  const bareBrandModel = passesGroomingIndustryGate(
+    { name: "Wahl Professional 5-Star Cordless Magic Clip" },
+    rules,
+    { stage: "pre_enrichment", toolTypes, requiredToolType: "clipper" }
+  );
+  assert(bareBrandModel.ok === false, `bare brand+model with no context and no keyword is rejected pre-fix-equivalent (got ok=${bareBrandModel.ok})`);
+
+  const withKnownTrueLabel = passesGroomingIndustryGate(
+    { name: "Wahl Professional 5-Star Cordless Magic Clip", description: "Clipper" },
+    rules,
+    { stage: "pre_enrichment", toolTypes, requiredToolType: "clipper" }
+  );
+  assert(withKnownTrueLabel.ok === true, `the SAME entry passes once given its own known-true tool-type label as description (got ok=${withKnownTrueLabel.ok}, reason=${withKnownTrueLabel.reason})`);
+
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
 }
