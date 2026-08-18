@@ -674,18 +674,27 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
             confirmed_technical_specs: { motor_type: "Vector Motor", rpm: "9,500 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "DLC Carbon Steel", body_material: "Polycarbonate/Metal" }
           },
           {
-            name: "BaBylissPRO GoldFX Outlining Clipper",
+            // Live-verified 2026-08-18 — the previous ASIN (B07P41S83V,
+            // "GoldFX Outlining Clipper") no longer resolves to a real
+            // Rainforest/Amazon listing (confirmed via a direct lookup:
+            // request succeeded but returned no product). BaByliss appears
+            // to have retired the "GoldFX" naming for this line in favor of
+            // "FXONE" — replaced with the real, currently-listed FXONE
+            // outlining trimmer, same product category. All fields below
+            // (price/rating/reviews/bsr/specs) are from a live Rainforest
+            // pull of this exact ASIN, not carried over from the old entry.
+            name: "BaBylissPRO FXONE Professional Cordless Outlining Trimmer",
             brand: "BaBylissPRO",
-            asin: "B07P41S83V",
-            price: "$219.99",
-            rating: "4.7",
-            reviewCount: "15,291",
-            sales: "3,000+ bought in past month",
-            bsr: "#843 in Beauty & Personal Care",
+            asin: "B0CFSQJZ3Z",
+            price: "$249.99",
+            rating: "4.5",
+            reviewCount: "635",
+            sales: "—",
+            bsr: "#63,458 in Beauty & Personal Care",
             initials: "BB",
-            top_positive_review_themes: ["All-metal robust housing", "Extremely sharp zero-gap T-blade", "Long-lasting battery life"],
-            top_negative_review_themes: ["Heavy body triggers fatigue", "Metal casing gets cold to touch", "Loud high-frequency buzz"],
-            confirmed_technical_specs: { motor_type: "Ferrari Designed Brushless", rpm: "7,200 RPM", run_time: "120 min", charging_time: "180 min", blade_material: "DLC Titanium", body_material: "All-Metal" }
+            top_positive_review_themes: ["All-metal housing with knurled grip", "Zero-gap adjustable titanium T-blade", "Interchangeable battery with LED charge indicator"],
+            top_negative_review_themes: ["Requires the separate FXONE battery system", "Premium price for a detail/outlining-only tool", "Metal body adds some weight"],
+            confirmed_technical_specs: { motor_type: "N1 Brushless", rpm: "—", run_time: "180 min", charging_time: "—", blade_material: "Titanium (Zero-Gap T-Blade)", body_material: "All-Metal" }
           },
           {
             name: "JRL FreshFade 2020C Professional",
@@ -716,18 +725,25 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
             confirmed_technical_specs: { motor_type: "Vector Motor", rpm: "10,000 RPM", run_time: "120 min", charging_time: "90 min", blade_material: "DLC Carbon", body_material: "Injection Molded Plastic" }
           },
           {
-            name: "StyleCraft Saber Professional Brushless Clipper",
+            // Live-verified 2026-08-18 — the previous ASIN (B09KGBM3R4,
+            // "Saber Professional Brushless Clipper") no longer resolves to
+            // a real listing either. Replaced with the real, currently-
+            // listed "Saber 2" successor model (StyleCraft's own real
+            // current catalog product — see lib/db/catalog-products.ts's
+            // "Saber 2 Professional Hair Clipper with EON Digital Brushless
+            // Motor"). All fields below are from a live Rainforest pull.
+            name: "StyleCraft Saber 2 Professional Cordless Brushless Motor Hair Clipper",
             brand: "StyleCraft",
-            asin: "B09KGBM3R4",
-            price: "$199.95",
-            rating: "4.6",
-            reviewCount: "1,820",
-            sales: "800+ bought in past month",
-            bsr: "#3,124 in Beauty & Personal Care",
+            asin: "B0DFDSXTQF",
+            price: "$299.95",
+            rating: "4.2",
+            reviewCount: "209",
+            sales: "—",
+            bsr: "#42,263 in Beauty & Personal Care",
             initials: "SC",
-            top_positive_review_themes: ["Quiet brushless high torque", "Heavy duty metal housing", "Custom body skin choices"],
-            top_negative_review_themes: ["Heavy grip fatigue", "Charging stand takes up space", "Click lever gets loose"],
-            confirmed_technical_specs: { motor_type: "Digital Brushless", rpm: "7,500 RPM", run_time: "180 min", charging_time: "120 min", blade_material: "DLC Diamond Carbon", body_material: "Metal Front Panel" }
+            top_positive_review_themes: ["EON brushless motor runs at 7,200 RPM", "DLC Echo fixed blade for a smoother cut", "Heavy-duty full metal body"],
+            top_negative_review_themes: ["2.5-hour runtime is shorter than some rivals", "Higher price point than the original Saber trimmer", "Full metal body adds weight"],
+            confirmed_technical_specs: { motor_type: "EON Digital Brushless", rpm: "7,200 RPM", run_time: "150 min", charging_time: "120 min", blade_material: "DLC Echo Fixed Blade", body_material: "Full Metal" }
           }
         ]
       : [
