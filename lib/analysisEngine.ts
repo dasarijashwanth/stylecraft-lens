@@ -2687,7 +2687,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
           const aiResult: any = await withAiFallback(
             "Phase 1",
             hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, round1ExtraInstruction, primaryCriterion) : null,
-            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, round1ExtraInstruction, primaryCriterion) : null,
+            hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, round1ExtraInstruction, primaryCriterion, startTime) : null,
             () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
             startTime
           );
@@ -2712,7 +2712,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         const aiResult: any = await withAiFallback(
           `Phase 1 (fill round ${fill.round})`,
           hasGeminiKey ? () => executePhase1Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion) : null,
-          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion) : null,
+          hasOpenAIKey ? () => executePhase1OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion, startTime) : null,
           () => generateMockPhase1(context, identityCard, targetPriceRaw, toolTypes),
           startTime
         );
@@ -2909,7 +2909,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
         const result: any = await withAiFallback(
           fill.round === 1 ? "Phase 2" : `Phase 2 (fill round ${fill.round})`,
           hasGeminiKey ? () => executePhase2Gemini(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion) : null,
-          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion) : null,
+          hasOpenAIKey ? () => executePhase2OpenAI(context, identityCard, targetPriceRaw, onSearchUsed, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion, startTime) : null,
           () => generateMockPhase2(context, identityCard, targetPriceRaw, toolTypes, phase1Result),
           startTime
         );
@@ -3166,7 +3166,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const result: any = await withAiFallback(
         "Phase 3",
         hasGeminiKey ? () => executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
-        hasOpenAIKey ? () => executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed) : null,
+        hasOpenAIKey ? () => executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed, undefined, startTime) : null,
         () => generateMockPhase3(context, identityCard, phase1Result, phase2Result),
         startTime
       );
@@ -3208,7 +3208,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
                 .map((c: any) => `${c.name} at ${c.price || "an unlisted price"}`);
               const extraInstruction = `The draft was generic. Rewrite strictly about ${identityCard.subcategory} using these specific competitor facts: ${facts.join("; ") || "the competitor data above"}.`;
               const retried = hasOpenAIKey
-                ? await executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction)
+                ? await executePhase3OpenAI(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction, startTime)
                 : await executePhase3Gemini(context, identityCard, phase1Result, phase2Result, onSearchUsed, extraInstruction);
               if (retried && typeof retried.positioning_recommendation === "string") {
                 result = retried;
@@ -4266,7 +4266,27 @@ export async function withAiFallback<T>(
 // live Rainforest-search fallback / honest mock data — never fake data.
 const OPENAI_REQUEST_TIMEOUT_MS = 45_000;
 
-async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Promise<{ text: string; queries: string[] }> {
+// Confirmed live (two real analyses stuck retrying "Phase 2 of 4" for
+// 5-14 minutes with zero forward progress, __phase1Fill.round unchanged
+// across every attempt): the fixed 45s ceiling above was measured against
+// an EMPTY route budget, but by the time this call actually fires,
+// earlier same-request work (identity/context fetch, correction signals,
+// related-product neighbor search, curated-brand lookups) has already
+// spent real wall-clock too. A 45s call on top of that can push the
+// TOTAL past Vercel's 60s cap — which kills the whole function with no
+// response at all (no catch block runs, nothing gets saved), unlike a
+// clean timeout the app's own fallback chain can react to. Capping the
+// EFFECTIVE timeout to whatever's actually left of ROUTE_TIME_BUDGET_MS
+// (measured from the same routeStartTime already threaded into
+// withAiFallback) guarantees this call always fails fast enough to reach
+// the Gemini-fallback/mock path and a real DB write, instead of racing
+// Vercel's hard kill on every single retry.
+function effectiveOpenAiWebSearchTimeoutMs(routeStartTime: number): number {
+  const remaining = ROUTE_TIME_BUDGET_MS - (Date.now() - routeStartTime);
+  return Math.max(5_000, Math.min(OPENAI_REQUEST_TIMEOUT_MS, remaining));
+}
+
+async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string, routeStartTime: number): Promise<{ text: string; queries: string[] }> {
   const response: any = await openai.responses.create(
     {
       model: OPENAI_MODEL,
@@ -4276,7 +4296,7 @@ async function runOpenAiWebSearch(systemPrompt: string, userPrompt: string): Pro
       instructions: systemPrompt,
       input: userPrompt,
     } as any,
-    { timeout: OPENAI_REQUEST_TIMEOUT_MS }
+    { timeout: effectiveOpenAiWebSearchTimeoutMs(routeStartTime) }
   );
 
   const queries: string[] = (response.output || [])
@@ -4409,9 +4429,9 @@ function assertHasCompetitors(parsed: any): any {
   return parsed;
 }
 
-async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
+async function executePhase1OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor", routeStartTime: number = Date.now()) {
   const { systemPrompt, userPrompt } = buildPhase1Prompt(context, identity, targetPriceRaw, toolTypes, ourMotorLabel, extraInstruction, primaryCriterion);
-  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
+  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt, routeStartTime);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -4515,9 +4535,9 @@ async function executePhase2Gemini(context: AnalysisContext, identity: IdentityC
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
 
-async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor") {
+async function executePhase2OpenAI(context: AnalysisContext, identity: IdentityCard, targetPriceRaw: number, onSearchUsed: (query: string) => void, toolTypes: ToolTypeRow[], brandHintOverride?: string[] | null, ourMotorLabel?: string | null, extraInstruction?: string, primaryCriterion: "motor" | "heat_technology" | "none" = "motor", routeStartTime: number = Date.now()) {
   const { systemPrompt, userPrompt } = buildPhase2Prompt(context, identity, targetPriceRaw, toolTypes, brandHintOverride, ourMotorLabel, extraInstruction, primaryCriterion);
-  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
+  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt, routeStartTime);
   queries.forEach(onSearchUsed);
   return assertHasCompetitors(JSON.parse(cleanJsonString(text)));
 }
@@ -4537,13 +4557,13 @@ async function executePhase3Gemini(context: AnalysisContext, identity: IdentityC
   return JSON.parse(cleanJsonString(text));
 }
 
-async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string) {
+async function executePhase3OpenAI(context: AnalysisContext, identity: IdentityCard, phase1: any, phase2: any, onSearchUsed: (query: string) => void, extraInstruction?: string, routeStartTime: number = Date.now()) {
   const { systemPrompt, userPrompt } = await buildPhase3Prompt(context, identity, phase1, phase2, extraInstruction);
 
   // Needed so the model can actually search when marketData is null (see
   // buildPhase3Prompt's marketDataInstruction) — runOpenAiWebSearch always
   // attaches the web_search tool, so "search the web" has something to call.
-  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt);
+  const { text, queries } = await runOpenAiWebSearch(systemPrompt, userPrompt, routeStartTime);
   if (queries.length > 0) {
     queries.forEach(onSearchUsed);
   } else {

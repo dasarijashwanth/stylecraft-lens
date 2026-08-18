@@ -122,7 +122,7 @@ async function main() {
   assert(!styleBlock.includes("marketing_content_ideas:"), "marketing_content_ideas was deliberately omitted from the exemplar (only a mid-sentence fragment existed) — never rendered, never fabricated");
 
   console.log(`\n${passes} passed, ${failures} failed`);
-  if (failures > 0) process.exit(1);
+  process.exit(failures > 0 ? 1 : 0);
 }
 
 main().catch(err => {

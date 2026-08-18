@@ -13,10 +13,14 @@
   --border:          rgba(255, 255, 255, 0.08);
   --border-strong:   rgba(255, 255, 255, 0.14);
 
-  /* Text */
+  /* Text — --text-muted was #52525B (zinc-600), only ~2.3:1 contrast
+     against --surface-1/2/3 (near-black) — well under WCAG AA's 4.5:1
+     for normal text, which is what read as "very dim" in dark mode.
+     #8B8B96 gives ~5:1 even against the lightest surface (surface-3)
+     while staying visually distinct from --text-secondary (#A1A1AA). */
   --text-primary:    #F4F4F5;
   --text-secondary:  #A1A1AA;
-  --text-muted:      #52525B;
+  --text-muted:      #8B8B96;
 
   /* Accent — electric indigo */
   --accent:          #6366F1;

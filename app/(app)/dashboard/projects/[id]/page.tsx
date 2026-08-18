@@ -1632,6 +1632,9 @@ function flagReason(detail: any): string {
   if (!detail) return "Flagged";
   if (detail.reason === "ungrounded") return `Rejected — AI's answer ("${detail.rejectedAnswer}") wasn't found in any source`;
   if (detail.reason === "boilerplate") return `Too similar to another product's answer for this field: "${detail.similarTo}"`;
+  if (detail.reason === "possible-competitor-brand-name") return `Mentions a competitor brand ("${detail.brand}") — please verify or rewrite generically`;
+  if (detail.reason === "char-limit-truncated") return "The AI's draft exceeded this field's character limit and was truncated to fit — review the cut-off point";
+  if (detail.reason === "voice_violation") return "Didn't pass the brand voice check even after one retry — review before using";
   if (detail.conflict) return `Sources disagree: ${detail.conflict.map((c: any) => `${c.source}="${c.answer}"`).join(" vs ")}`;
   return "Flagged for review";
 }

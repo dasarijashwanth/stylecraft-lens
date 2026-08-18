@@ -72,7 +72,17 @@ async function runNarrativeGroup(
   label: string,
   brandTokens: string[]
 ): Promise<Record<string, ContentFormAnswer>> {
-  const raw = await callAiForJson<Record<string, any>>(buildPrompt(), `Product: ${productName}`, label, { timeoutMs: 25_000 });
+  // 30s, not 25s — matches every sibling GTM narrative-group call
+  // (lib/gtm-marketing-direction.ts, lib/gtm-product-faqs.ts). Confirmed
+  // live (scripts/reproduce-content-form-gap.ts) that a real gpt-5
+  // low-effort call for this shape of prompt can take 25s+ on its own,
+  // making the OLD 25s primary timeout fire routinely rather than as a
+  // rare edge case — each firing burns this group's Gemini fallback
+  // attempt too (see lib/tds-doc-facts.ts's own note on this exact
+  // failure mode), so titles/descriptions ended up permanently
+  // finalized as "Not found" from ordinary latency, not a real absence
+  // of grounding facts.
+  const raw = await callAiForJson<Record<string, any>>(buildPrompt(), `Product: ${productName}`, label, { timeoutMs: 30_000 });
   if (!raw) return {};
 
   const drafts: Record<string, string> = {};
@@ -108,7 +118,7 @@ async function runNarrativeGroup(
       reasons.push("At least one field exceeded its stated character limit — rewrite it to genuinely fit within the limit, do not just truncate mid-word.");
     }
 
-    const retryRaw = await callAiForJson<Record<string, any>>(buildPrompt(reasons.join(" ")), `Product: ${productName}`, `${label}-Retry`, { timeoutMs: 25_000 });
+    const retryRaw = await callAiForJson<Record<string, any>>(buildPrompt(reasons.join(" ")), `Product: ${productName}`, `${label}-Retry`, { timeoutMs: 30_000 });
     if (retryRaw) {
       for (const { s } of violating) {
         const v = retryRaw[s.key];
@@ -221,7 +231,7 @@ async function runBulletsGroup(
   productName: string, factsBlock: string, voiceBlock: string, tdsGroundingBlock: string, brandTokens: string[]
 ): Promise<Record<string, ContentFormAnswer>> {
   const raw = await callAiForJson<{ bullet_top3?: string[]; bullet_long?: string[]; bullet_condensed?: string[] }>(
-    buildBulletsPrompt(productName, factsBlock, voiceBlock, tdsGroundingBlock), `Product: ${productName}`, "ContentForm-Bullets", { timeoutMs: 25_000 }
+    buildBulletsPrompt(productName, factsBlock, voiceBlock, tdsGroundingBlock), `Product: ${productName}`, "ContentForm-Bullets", { timeoutMs: 30_000 }
   );
   if (!raw) return {};
 
@@ -253,7 +263,7 @@ async function runAdSheetAndWebGroup(
   productName: string, factsBlock: string, voiceBlock: string, tdsGroundingBlock: string, brandTokens: string[]
 ): Promise<Record<string, ContentFormAnswer>> {
   const raw = await callAiForJson<{ ad_sheet_headline?: string; ad_sheet_sub_header?: string; website_copy_short?: string[]; website_copy_long?: string[]; keywords?: string }>(
-    buildAdSheetAndWebPrompt(productName, factsBlock, voiceBlock, tdsGroundingBlock), `Product: ${productName}`, "ContentForm-AdSheetWeb", { timeoutMs: 25_000 }
+    buildAdSheetAndWebPrompt(productName, factsBlock, voiceBlock, tdsGroundingBlock), `Product: ${productName}`, "ContentForm-AdSheetWeb", { timeoutMs: 30_000 }
   );
   if (!raw) return {};
 

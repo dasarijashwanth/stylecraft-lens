@@ -47,6 +47,21 @@ import { getUploadedTdsContext, applyUploadedTdsFacts, buildUploadedTdsPromptBlo
 // real time still left before the platform limit, rather than racing it.
 const PIPELINE_TIME_BUDGET_MS = 30_000;
 
+// Hard ceiling for firing Tier 6.5's own AI calls at all — measured from
+// the SAME pipelineStart clock as PIPELINE_TIME_BUDGET_MS above, but a
+// later/larger checkpoint: by the time Tier 6.5 runs, Tier 1 (AI-per-
+// section) has already had its own chance to run long (confirmed live,
+// a single gpt-5 low-effort call can take 25-40s+ before its own
+// timeout/retry gives up), on top of whatever Tier 5's web-search
+// fallback used. Tier 6.5 was parallelized (see below) to stop it being a
+// SEQUENTIAL 15-30s+ tax on top of that, but a parallelized block still
+// takes as long as its slowest single call — with no budget check at
+// all, it always fired regardless of how much of the route's 60s Vercel
+// cap Tier 1/5 had already spent, risking a hard 504 (nothing saved for
+// ANY tier) instead of a graceful skip (Tier 7/finalize still run and
+// save whatever WAS resolved).
+const TIER_6_5_HARD_DEADLINE_MS = 48_000;
+
 // A single call covering all 77 fields with web search enabled was
 // confirmed live to time out even at 38s (OpenAI's own request timeout) —
 // once genuine web search is involved across that many fields, one call
@@ -538,12 +553,16 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // the main AI call, a major contributor to GTM generation routinely
   // running long/timing out.
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
-  await Promise.all([
-    applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock),
-    applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock, tdsGroundingBlock),
-    applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
-    applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
-  ]);
+  if (Date.now() - pipelineStart < TIER_6_5_HARD_DEADLINE_MS) {
+    await Promise.all([
+      applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock),
+      applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock, tdsGroundingBlock),
+      applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
+      applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
+    ]);
+  } else {
+    console.warn(`[gtm-generate] Skipping Tier 6.5 (Features/ExpertTip/CollectionKernel/CoreConsumer/BoxOnly) — ${Date.now() - pipelineStart}ms already elapsed, leaving too little of the route's 60s budget to risk a hard 504. Tier 7/finalize will still run for whatever these fields fall through to.`);
+  }
 
   // Tier 7 — category-level "typical for this kind of product" default,
   // the last and lowest-confidence fill before an honest "not determinable".
