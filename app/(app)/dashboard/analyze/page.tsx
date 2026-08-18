@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Loader2, Sparkles, Package, Pencil, Search, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
@@ -160,6 +160,14 @@ export default function AnalyzePage() {
   const [heatTechFamily, setHeatTechFamily] = useState("");
   const [heatTechBrandedName, setHeatTechBrandedName] = useState("");
   const [keyDiff, setKeyDiff] = useState("");
+  // Description autofill — Positioning context / Key differentiating
+  // feature suggested from whatever's already typed into Description, so a
+  // user doesn't have to re-type facts they already wrote once. Only ever
+  // fills a field that's still empty (never overwrites something the user
+  // typed), and only fires once per description text (descriptionAutofilledFor
+  // tracks what it already ran against) so it can't spam calls while typing.
+  const [autofillingFromDescription, setAutofillingFromDescription] = useState(false);
+  const descriptionAutofilledFor = useRef<string>("");
   const [relatedProductRows, setRelatedProductRows] = useState<RelatedProductRow[]>([
     { ...EMPTY_RELATED_ROW }, { ...EMPTY_RELATED_ROW }, { ...EMPTY_RELATED_ROW },
   ]);
@@ -750,6 +758,40 @@ export default function AnalyzePage() {
     void resolveRelatedRow(index, row.input, relatedProductRows.map((r) => r.asin), row.addedAt, toolType);
   }
 
+  async function handleDescriptionBlur() {
+    const trimmed = description.trim();
+    if (trimmed.length < 10) return;
+    if (companyContext.trim() && keyDiff.trim()) return; // both already filled — nothing to suggest
+    if (descriptionAutofilledFor.current === trimmed) return; // already tried this exact text
+    descriptionAutofilledFor.current = trimmed;
+
+    setAutofillingFromDescription(true);
+    try {
+      const res = await fetch("/api/analyze/autofill-from-description", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productName: productName.trim() || "this product", description: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) return; // best-effort suggestion — a failure here should never block the form
+
+      let filledSomething = false;
+      if (data.keyDiff && !keyDiff.trim()) {
+        setKeyDiff(data.keyDiff);
+        filledSomething = true;
+      }
+      if (data.positioningContext && !companyContext.trim()) {
+        setCompanyContext(data.positioningContext);
+        filledSomething = true;
+      }
+      if (filledSomething) toast.success("Suggested Positioning context / Key differentiating feature from your description — review and edit as needed");
+    } catch {
+      // Best-effort — never surfaces an error for a suggestion feature.
+    } finally {
+      setAutofillingFromDescription(false);
+    }
+  }
+
   // {asin,url,addedAt} triples for the submit body / project pre-fill —
   // only resolved, non-errored rows count.
   function resolvedRelatedAsins(): { asin: string; url?: string; addedAt: string }[] {
@@ -1274,12 +1316,18 @@ export default function AnalyzePage() {
                   setDescription(e.target.value);
                   if (errors.description) setErrors(prev => { const n = { ...prev }; delete n.description; return n; });
                 }}
+                onBlur={handleDescriptionBlur}
                 placeholder="Describe key specs, blade/motor type, battery life, target audience..."
                 className={`w-full px-3 py-2 border rounded-lg bg-surface-1 outline-none text-text-primary focus:border-accent resize-y ${
                   errors.description ? "border-danger" : "border-border"
                 }`}
               />
               {errors.description && <p className="text-[10px] text-danger">{errors.description}</p>}
+              {autofillingFromDescription && (
+                <p className="text-[10px] text-text-muted flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Suggesting Positioning context / Key differentiating feature from your description…
+                </p>
+              )}
             </div>
           </div>
 

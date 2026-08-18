@@ -193,13 +193,17 @@ export function structurallyInapplicableFieldIds(primaryCriterion: string | null
 // (lib/our-product-position.ts's matchCatalogProductByName). A project with
 // no catalog link (ad-hoc/manual entry) resolves both to null, which is
 // exactly today's behavior everywhere that reads them.
-async function resolveCatalogProductKind(sources: GtmSources): Promise<{ productKind: string | null; collection: string | null; brand: string }> {
+async function resolveCatalogProductKind(sources: GtmSources): Promise<{ productKind: string | null; collection: string | null; brand: string; description: string | null }> {
   const catalogProducts = await listCatalogProducts();
   const matched = matchCatalogProductByName(sources.project.productName, catalogProducts);
   // Brand Voice Guide work — reuses this SAME catalog match (no extra
   // fetch) rather than calling resolveBrandForProduct separately, which
   // would re-fetch listCatalogProducts() a second time.
-  return { productKind: matched?.product_kind ?? null, collection: matched?.collection ?? null, brand: matched?.brand || "StyleCraft" };
+  // description — real feature/callout text lib/catalog-import.ts can
+  // populate straight from a spreadsheet's "Features & Benefits" column
+  // (see lib/gtm-features-and-tip.ts's deriveFeaturesFullListDeterministic,
+  // which merges this alongside the project's own free-text Description).
+  return { productKind: matched?.product_kind ?? null, collection: matched?.collection ?? null, brand: matched?.brand || "StyleCraft", description: matched?.description ?? null };
 }
 
 // Text blob for lib/gtm-tier6-inference.ts's keyword-based hair_type
@@ -435,7 +439,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // structurallyInapplicableFieldIds above.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
   const family = resolveGtmFamily(sources.project, toolTypes);
-  const { productKind, collection, brand } = await resolveCatalogProductKind(sources);
+  const { productKind, collection, brand, description: catalogDescription } = await resolveCatalogProductKind(sources);
   const structuralNaIds = structurallyInapplicableFieldIds(primaryCriterion, productKind, family);
   const pipelineSchema = schema.filter(f => !structuralNaIds.has(f.id));
 
@@ -570,7 +574,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch) + (referenceLinksPromptText ? `\n\nREFERENCE SOURCES:\n${referenceLinksPromptText}` : "");
   if (Date.now() - pipelineStart < TIER_6_5_HARD_DEADLINE_MS) {
     await Promise.all([
-      applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock),
+      applyFeaturesAndExpertTip(grounded, pipelineSchema, sources, productName, pipelineStart, voiceBlock, tdsGroundingBlock, catalogDescription),
       applyCollectionKernelAdaptation(grounded, pipelineSchema, productName, collection, voiceBlock, tdsGroundingBlock),
       applyCoreConsumerBothNote(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
       applyBoxOnlyDerivation(grounded, pipelineSchema, productName, voiceBlock, tdsGroundingBlock),
@@ -616,7 +620,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // same as the full-document pipeline. See structurallyInapplicableFieldIds.
   const primaryCriterion = toolTypes.find(t => t.type_key === sources.project.toolType)?.primary_criterion;
   const family = resolveGtmFamily(sources.project, toolTypes);
-  const { productKind, collection, brand } = await resolveCatalogProductKind(sources);
+  const { productKind, collection, brand, description: catalogDescription } = await resolveCatalogProductKind(sources);
   if (structurallyInapplicableFieldIds(primaryCriterion, productKind, family).has(fieldId)) {
     return { answer: "N/A", source: "none" };
   }
@@ -693,7 +697,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   // (each guards on its own distinct field id(s)), but running them
   // concurrently is still strictly no worse and keeps both call sites consistent.
   await Promise.all([
-    applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock, tdsGroundingBlock),
+    applyFeaturesAndExpertTip(guarded, [schemaField], sources, productName, Date.now(), voiceBlock, tdsGroundingBlock, catalogDescription),
     applyCollectionKernelAdaptation(guarded, [schemaField], productName, collection, voiceBlock, tdsGroundingBlock),
     applyCoreConsumerBothNote(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock),
     applyBoxOnlyDerivation(guarded, [schemaField], productName, voiceBlock, tdsGroundingBlock),

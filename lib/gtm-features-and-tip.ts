@@ -103,11 +103,23 @@ function stripSourceTag(rowAnswer: string): string {
 // Deterministic floor — never depends on the Sales Kit or an AI call
 // succeeding. Returns null only when literally nothing is available from
 // either the catalog input or TDS (a brand-new project with no data yet).
+// Two possible "input" sources, both real callout text a human already
+// wrote (never AI-invented): the project's own free-text Description (typed
+// on the analyze/new-project form) AND, when this product is linked to a
+// catalog record, that record's own `description` — which lib/catalog-import.ts
+// sometimes populates straight from a spreadsheet's "Features & Benefits"
+// column, so it can carry real feature callouts even when the project's own
+// Description was left sparse or blank. Merged and deduped rather than
+// either replacing the other, since either one alone might be the richer of
+// the two for a given project.
 export function deriveFeaturesFullListDeterministic(
-  catalogDescription: string | null | undefined,
-  tds: Record<string, string> | null
+  projectDescription: string | null | undefined,
+  tds: Record<string, string> | null,
+  catalogDescription: string | null | undefined = null
 ): FeatureBullet[] {
-  const inputBullets = buildInputBullets(catalogDescription);
+  const projectBullets = buildInputBullets(projectDescription);
+  const catalogBullets = buildInputBullets(catalogDescription).filter(b => !dedupeAgainst(projectBullets, b));
+  const inputBullets = [...projectBullets, ...catalogBullets];
   const listingBulletsRaw = buildOurListingBullets(tds);
   const listingBullets = listingBulletsRaw.filter(b => !dedupeAgainst(inputBullets, b));
 
@@ -176,8 +188,8 @@ ${competitorFeatureText}`;
 // Returns the merged bullet list (deterministic floor + AI competitor
 // top-up when still short), capped at the group's row count — the caller
 // (applyFeaturesAndExpertTip) writes one bullet per row.
-export async function deriveFeaturesFullList(sources: GtmSources, voiceBlock: string = "", tdsGroundingBlock: string = ""): Promise<FeatureBullet[]> {
-  const floor = deriveFeaturesFullListDeterministic(sources.project.description, sources.tds);
+export async function deriveFeaturesFullList(sources: GtmSources, voiceBlock: string = "", tdsGroundingBlock: string = "", catalogDescription: string | null = null): Promise<FeatureBullet[]> {
+  const floor = deriveFeaturesFullListDeterministic(sources.project.description, sources.tds, catalogDescription);
   const ca = sources.activeReport?.competitive_analysis || {};
   const competitors: CompetitorSpecSource[] = [...(ca.large_brand_competitors || []), ...(ca.indie_emerging_competitors || [])];
   const ourSpecs = extractOurSpecsFromTds(sources.tds);
@@ -339,13 +351,14 @@ export async function applyFeaturesAndExpertTip(
   productName: string,
   pipelineStart: number,
   voiceBlock: string = "",
-  tdsGroundingBlock: string = ""
+  tdsGroundingBlock: string = "",
+  catalogDescription: string | null = null
 ): Promise<void> {
   // Features (full list) is a 10-row group — gate on row 1 as the
   // representative "still needs deriving" check, same as any other field.
   const wantsFeatures = schema.some(f => f.id === "features_full_list_1") && isUnresolved(fields, "features_full_list_1");
   if (wantsFeatures) {
-    const bullets = await deriveFeaturesFullList(sources, voiceBlock, tdsGroundingBlock);
+    const bullets = await deriveFeaturesFullList(sources, voiceBlock, tdsGroundingBlock, catalogDescription);
     bullets.forEach((bullet, i) => {
       fields[`features_full_list_${i + 1}`] = {
         answer: renderFeatureRowAnswer(bullet),

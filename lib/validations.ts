@@ -191,6 +191,13 @@ export const RelatedProductPreviewSchema = z.object({
   requiredToolType: ToolTypeValue.optional(),
 });
 
+// Analyze form's Description-autofill (Positioning context / Key
+// differentiating feature) — see lib/analyze-form-autofill.ts.
+export const DescriptionAutofillSchema = z.object({
+  productName: z.string().min(1, "Product name is required").max(300),
+  description: z.string().min(1).max(5000),
+});
+
 // Related Products "fixing a mispaste re-fetches in place" swap — no
 // CorrectionReason (a mispaste fix isn't a discovery-learning signal, see
 // lib/db/competitor-corrections.ts) and no tool-type-mismatch block (the

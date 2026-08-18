@@ -111,6 +111,27 @@ async function main() {
   assert(featureBullets.some(b => b.source === "our_listing"), "Features includes at least one [Our listing]-tagged bullet from TDS specs");
   assert(featureBullets.every(b => b.source !== "unconfirmed"), "the deterministic floor alone never produces an [Unconfirmed] line (that only comes from the AI top-up)");
 
+  // Catalog-record description merge — a project whose own free-text
+  // Description is blank/sparse still gets real [Input] bullets from the
+  // matched catalog record's own description (lib/catalog-import.ts can
+  // populate that straight from a spreadsheet's "Features & Benefits"
+  // column), rather than falling through with zero input bullets.
+  const catalogOnlyBullets = deriveFeaturesFullListDeterministic(
+    "",
+    tds,
+    "Titanium DLC blade, whisper-quiet operation, 4-hour cordless runtime"
+  );
+  assert(catalogOnlyBullets.some(b => b.source === "input" && b.text.includes("Titanium DLC blade")), "a blank project Description still yields [Input] bullets sourced from the catalog record's own description");
+
+  const mergedNoDupe = deriveFeaturesFullListDeterministic(
+    "Titanium DLC blade, ergonomic grip",
+    tds,
+    "Titanium DLC blade, whisper-quiet operation"
+  );
+  const titaniumMentions = mergedNoDupe.filter(b => b.text.toLowerCase().includes("titanium dlc blade")).length;
+  assert(titaniumMentions === 1, `a callout present in BOTH the project Description and the catalog description is merged, not duplicated (got ${titaniumMentions} mentions)`);
+  assert(mergedNoDupe.some(b => b.text.includes("whisper-quiet operation")), "a catalog-only callout not already in the project Description is still included");
+
   const confirmedFeatureLines = featureBullets.map(b => b.text);
   const groundedTip = "For the cleanest fade, let the X-Pro wide DLC blade do the heavy lifting on bulk removal before switching to a finer guard.";
   const ungroundedTip = "This trimmer includes a built-in laser leveling guide for perfectly symmetrical lines.";
