@@ -33,6 +33,28 @@ export function parseImportFile(fileBuffer: Buffer): ParsedImportRow[] {
   return XLSX.utils.sheet_to_json<ParsedImportRow>(sheet, { defval: null, raw: false });
 }
 
+// Whether a row's CURRENT field values (not raw import text) still count
+// as "incomplete" — the single source of truth used both here at import
+// time and by the admin edit route (app/api/admin/catalog-products/[id]/
+// route.ts) to recompute the flag after a manual edit, so a product an
+// admin has now fully filled in stops showing "Incomplete" instead of
+// permanently carrying whatever this said at import time. Whether a motor/
+// heat-tech family is even required is derived from the tool type's own
+// primary_criterion (a product whose type genuinely has neither, e.g.
+// primary_criterion "none", is never incomplete for lacking one) rather
+// than the fragile "was the raw import text literally 'n/a'" heuristic
+// that only made sense at parse time and has no equivalent once the row
+// only has resolved family keys left, not the original free text.
+export function isCatalogRowIncomplete(
+  row: { targetPrice: number | null; description: string | null; toolType: string | null; motorFamily: string | null; heatTechFamily: string | null },
+  toolTypes: ToolTypeRow[]
+): boolean {
+  const primaryCriterion = toolTypes.find(t => t.type_key === row.toolType)?.primary_criterion ?? null;
+  const needsMotorOrHeatTech = primaryCriterion === "motor" || primaryCriterion === "heat_technology";
+  const hasMotorOrHeatTech = !!row.motorFamily || !!row.heatTechFamily;
+  return !row.targetPrice || !row.description || (needsMotorOrHeatTech && !hasMotorOrHeatTech);
+}
+
 function pick(raw: ParsedImportRow, keys: string[]): string | null {
   const lowerMap = new Map(Object.keys(raw).map(k => [k.trim().toLowerCase(), k]));
   for (const key of keys) {
@@ -173,7 +195,7 @@ export function normalizeImportRow(raw: ParsedImportRow, ctx: CatalogTaxonomyCon
     }
   }
 
-  if (!targetPrice || !description || (!motorFamily && !heatTechFamily && !motorIsMotorless)) {
+  if (isCatalogRowIncomplete({ targetPrice, description, toolType, motorFamily, heatTechFamily }, ctx.toolTypes)) {
     flags.push("incomplete");
   }
 
