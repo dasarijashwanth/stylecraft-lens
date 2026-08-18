@@ -44,6 +44,10 @@ interface ProjectInput {
   // the enriched Rainforest/motor data (see lib/db/analyses.ts's
   // related_products) — that's always refetched fresh per analysis run.
   relatedProducts?: { asin: string; url?: string; addedAt: string }[];
+  // Reference Links — up to 5 URLs (product pages, competitor/brand sites)
+  // entered on the Sources tab, checked first for GTM/Content Form
+  // generation ahead of the AI's own web search. See lib/gtm-reference-links.ts.
+  referenceUrls?: string[];
 }
 
 // Supabase columns are snake_case, but the rest of this app (Prisma models,
@@ -71,6 +75,7 @@ function toProjectShape(row: any) {
     asin: row.asin,
     sku: row.sku,
     relatedProducts: row.related_products ?? [],
+    referenceUrls: row.reference_urls ?? [],
     // GTM Multi-Template work — null (default) auto-routes the workbook
     // export/schema to the tool type's own family; 'barber'/'beauty' pins
     // it for a mixed-collection product. See lib/gtm-field-schema.ts's
@@ -114,6 +119,7 @@ export async function createProject(userId: string, orgId: string, data: Project
         asin: data.asin ?? null,
         sku: data.sku ?? null,
         related_products: data.relatedProducts ?? [],
+        reference_urls: data.referenceUrls ?? [],
         last_used_at: new Date().toISOString(),
       })
       .select()
@@ -164,6 +170,7 @@ export async function createProject(userId: string, orgId: string, data: Project
       asin: data.asin || null,
       sku: data.sku || null,
       relatedProducts: data.relatedProducts ?? [],
+      referenceUrls: data.referenceUrls ?? [],
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -276,6 +283,7 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   asin: "asin",
   sku: "sku",
   relatedProducts: "related_products",
+  referenceUrls: "reference_urls",
   gtmTemplateOverride: "gtm_template_override",
   savedDefaults: "saved_defaults",
   latestAnalysisId: "latest_analysis_id",

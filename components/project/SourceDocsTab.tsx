@@ -38,6 +38,18 @@ interface Props {
   // survives switching away from Sources — see ProjectDetailPage's own
   // fillState effect).
   onSourceUploaded?: () => void;
+  // Reference Links — same "parent holds the project record, child owns its
+  // own save" convention as ProductKnowledgeSection's projectSku/onSkuChange.
+  projectReferenceUrls?: string[];
+  onReferenceUrlsChange?: (urls: string[]) => void;
+}
+
+const REFERENCE_LINK_SLOTS = 5;
+
+function padReferenceUrls(urls: string[] | undefined): string[] {
+  const padded = [...(urls || [])];
+  while (padded.length < REFERENCE_LINK_SLOTS) padded.push("");
+  return padded.slice(0, REFERENCE_LINK_SLOTS);
 }
 
 const DOC_TYPES: { key: SourceDocRow["doc_type"]; label: string; hint: string }[] = [
@@ -98,8 +110,40 @@ async function fetchJson(url: string, init?: RequestInit) {
   return data;
 }
 
-export function SourceDocsTab({ projectId, onSourceUploaded }: Props) {
+export function SourceDocsTab({ projectId, onSourceUploaded, projectReferenceUrls, onReferenceUrlsChange }: Props) {
   const [docs, setDocs] = useState<SourceDocRow[]>([]);
+  const [referenceUrls, setReferenceUrls] = useState<string[]>(() => padReferenceUrls(projectReferenceUrls));
+  const [savingLinkIndex, setSavingLinkIndex] = useState<number | null>(null);
+  const referenceLinkDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { setReferenceUrls(padReferenceUrls(projectReferenceUrls)); }, [projectReferenceUrls]);
+
+  async function saveReferenceUrls(urls: string[], changedIndex: number) {
+    setSavingLinkIndex(changedIndex);
+    try {
+      const trimmed = urls.map(u => u.trim()).filter(Boolean);
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referenceUrls: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to save reference link");
+      onReferenceUrlsChange?.(trimmed);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save reference link");
+    } finally {
+      setSavingLinkIndex(null);
+    }
+  }
+
+  function handleReferenceUrlChange(index: number, value: string) {
+    const next = [...referenceUrls];
+    next[index] = value;
+    setReferenceUrls(next);
+    if (referenceLinkDebounce.current) clearTimeout(referenceLinkDebounce.current);
+    referenceLinkDebounce.current = setTimeout(() => saveReferenceUrls(next, index), 800);
+  }
   const [loading, setLoading] = useState(true);
   const [uploadState, setUploadState] = useState<Record<string, SlotUploadState>>({});
   const [dragOverType, setDragOverType] = useState<string | null>(null);
@@ -371,6 +415,29 @@ export function SourceDocsTab({ projectId, onSourceUploaded }: Props) {
       <p className="text-[10px] text-text-muted">
         Accepted: PDF, DOC, DOCX, XLS, XLSX, CSV — up to 15 MB. Drag a file onto a slot, or click Upload.
       </p>
+
+      <div className="border border-border rounded-xl p-4 space-y-2">
+        <div>
+          <h3 className="text-xs font-bold text-text-primary">Reference Links</h3>
+          <p className="text-[10px] text-text-muted mt-0.5">
+            Paste up to 5 URLs (the product&apos;s own page, a competitor&apos;s listing, a brand site) — these are checked FIRST when filling GTM/Content Form fields, before general AI knowledge or a separate web search. Leave blank to skip.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          {referenceUrls.map((url, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input
+                type="url"
+                value={url}
+                placeholder={`https://... (reference link ${i + 1})`}
+                onChange={e => handleReferenceUrlChange(i, e.target.value)}
+                className="flex-1 px-2.5 py-1.5 text-[11px] border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
+              />
+              {savingLinkIndex === i && <Loader2 className="w-3.5 h-3.5 text-text-muted animate-spin shrink-0" />}
+            </div>
+          ))}
+        </div>
+      </div>
 
       {conflicts.length > 0 && (
         <div className="rounded-xl border border-warning/30 bg-warning-bg overflow-hidden">

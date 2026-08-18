@@ -7,6 +7,7 @@ import { Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import BackgroundStage from "@/components/scroll/BackgroundStage";
+import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 
 // Reached only via the emailed recovery link -> /api/auth/callback's code
 // exchange, which establishes a real (short-lived, single-use-token-backed)
@@ -34,8 +35,8 @@ export default function ResetPasswordPage() {
       toast.error("New password and confirmation don't match");
       return;
     }
-    if (newPassword.length < 10) {
-      toast.error("New password must be at least 10 characters");
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      toast.error(`New password must be at least ${MIN_PASSWORD_LENGTH} characters`);
       return;
     }
 
@@ -86,7 +87,7 @@ export default function ResetPasswordPage() {
                 type="password"
                 autoComplete="new-password"
                 required
-                minLength={10}
+                minLength={MIN_PASSWORD_LENGTH}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"
@@ -98,7 +99,7 @@ export default function ResetPasswordPage() {
                 type="password"
                 autoComplete="new-password"
                 required
-                minLength={10}
+                minLength={MIN_PASSWORD_LENGTH}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent"

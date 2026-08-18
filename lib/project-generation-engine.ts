@@ -15,6 +15,7 @@ import { generateAllFields, GtmSources } from "./gtm-generate";
 import { getOrCreateDocument, saveDocumentFields, setDocumentSnapshot, setDocumentVoiceGuide, setDocumentSourceDocVersions, getTdsFieldsForProject, getDocumentFields, flattenDocumentFields } from "./db/documents";
 import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock } from "./brand-voice";
 import { getUploadedTdsContext, buildTdsGroundingBlock } from "./gtm-uploaded-tds";
+import { getReferenceLinksContext, buildReferenceLinksPromptBlock } from "./gtm-reference-links";
 import { TDS_FIELD_SCHEMA } from "./tds-field-schema";
 import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
 import { reconcileTdsFromGtm } from "./tds-gtm-reconcile";
@@ -153,6 +154,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           targetMarket: project.targetMarket,
           productUrl: project.productUrl,
           asin: project.asin,
+          referenceUrls: (project as any).referenceUrls,
         },
         salesKit,
         tds,
@@ -244,6 +246,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
               targetMarket: project.targetMarket,
               productUrl: project.productUrl,
               asin: project.asin,
+              referenceUrls: (project as any).referenceUrls,
             },
             salesKit,
             tds,
@@ -257,7 +260,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           const cfVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(cfBrand));
           const cfIsPreLaunch = !project.productUrl && !project.asin;
           const cfUploadedTdsContext = await getUploadedTdsContext(projectId);
-          const cfTdsGroundingBlock = buildTdsGroundingBlock(cfUploadedTdsContext, cfIsPreLaunch);
+          const cfReferenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+          const cfTdsGroundingBlock = buildTdsGroundingBlock(cfUploadedTdsContext, cfIsPreLaunch)
+            + (cfReferenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(cfReferenceLinksContext)}` : "");
 
           const contentFormFields = await generateContentForm(sources, gtmFieldsFlat, matchedCatalogProduct, cfVoiceBlock, cfTdsGroundingBlock);
           const finalized = finalizeFieldAnswers(contentFormFields, CONTENT_FORM_SCHEMA, 1);
@@ -328,6 +333,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
             targetMarket: project.targetMarket,
             productUrl: project.productUrl,
             asin: project.asin,
+            referenceUrls: (project as any).referenceUrls,
           },
           salesKit,
           tds,
@@ -341,7 +347,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         const faqVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(faqBrand));
         const faqIsPreLaunch = !project.productUrl && !project.asin;
         const faqUploadedTdsContext = await getUploadedTdsContext(projectId);
-        const faqTdsGroundingBlock = buildTdsGroundingBlock(faqUploadedTdsContext, faqIsPreLaunch);
+        const faqReferenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+        const faqTdsGroundingBlock = buildTdsGroundingBlock(faqUploadedTdsContext, faqIsPreLaunch)
+          + (faqReferenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(faqReferenceLinksContext)}` : "");
         const faqFields = await generateProductFaqs(sources, gtmFieldsFlat, faqVoiceBlock, faqTdsGroundingBlock);
         // Anything generateProductFaqs didn't resolve (a failed AI call for
         // one FAQ, or the margin/quantity internal-kind fields, which are
@@ -398,6 +406,7 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
               targetMarket: project.targetMarket,
               productUrl: project.productUrl,
               asin: project.asin,
+              referenceUrls: (project as any).referenceUrls,
             },
             salesKit,
             tds,
@@ -412,7 +421,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           const mdVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(mdBrand));
           const mdIsPreLaunch = !project.productUrl && !project.asin;
           const mdUploadedTdsContext = await getUploadedTdsContext(projectId);
-          const mdTdsGroundingBlock = buildTdsGroundingBlock(mdUploadedTdsContext, mdIsPreLaunch);
+          const mdReferenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+          const mdTdsGroundingBlock = buildTdsGroundingBlock(mdUploadedTdsContext, mdIsPreLaunch)
+            + (mdReferenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(mdReferenceLinksContext)}` : "");
 
           const marketingDirectionFields = await generateMarketingDirection(
             sources,

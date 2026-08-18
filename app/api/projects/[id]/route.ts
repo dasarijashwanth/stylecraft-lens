@@ -53,6 +53,17 @@ export async function PATCH(
     if (body.pricePoint !== undefined) updateData.pricePoint = body.pricePoint || null;
     if (body.sku !== undefined) updateData.sku = body.sku || null;
     if (body.relatedProducts !== undefined) updateData.relatedProducts = body.relatedProducts;
+    // Reference Links — at most 5, plain strings only, trimmed and capped
+    // in length; a bad/unreachable URL just fails its own fetch later
+    // (lib/gtm-reference-links.ts's fetchPageText never throws) rather than
+    // being rejected here.
+    if (body.referenceUrls !== undefined) {
+      const raw = Array.isArray(body.referenceUrls) ? body.referenceUrls : [];
+      updateData.referenceUrls = raw
+        .filter((u: any) => typeof u === "string")
+        .map((u: string) => u.trim().slice(0, 500))
+        .slice(0, 5);
+    }
     if (body.gtmTemplateOverride !== undefined) updateData.gtmTemplateOverride = body.gtmTemplateOverride || null;
     if (body.savedDefaults !== undefined) updateData.savedDefaults = body.savedDefaults;
     if (body.latestAnalysisId !== undefined) updateData.latestAnalysisId = body.latestAnalysisId;

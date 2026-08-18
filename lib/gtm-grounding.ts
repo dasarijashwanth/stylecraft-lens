@@ -19,6 +19,11 @@ export interface SourceTexts {
   tds: string;
   salesKit: string;
   uploadedTds: string;
+  // Reference Links — see lib/gtm-reference-links.ts. Included here so an
+  // AI answer that traces back to one of these pages still passes the
+  // substring grounding check below instead of being wrongly discarded as
+  // "ungrounded".
+  referenceLinks: string;
 }
 
 export interface GroundableField {

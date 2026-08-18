@@ -58,6 +58,8 @@ export interface ProjectRecord {
   // GTM Multi-Template work — mixed-collection override ('barber'|'beauty'),
   // see lib/gtm-field-schema.ts's resolveGtmFamily.
   gtmTemplateOverride?: string | null;
+  // Reference Links — see lib/gtm-reference-links.ts.
+  referenceUrls?: string[] | null;
 }
 
 // Core Consumer's 3 fixed options map 1:1 onto the project's own

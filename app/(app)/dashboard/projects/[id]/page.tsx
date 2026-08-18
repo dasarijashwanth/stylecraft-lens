@@ -442,7 +442,7 @@ export default function ProjectDetailPage() {
             {/* Tab Content Canvas */}
             <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
               {activeTab === "sources" ? (
-                <SourceDocsTab projectId={id} onSourceUploaded={() => pollFillState.current()} />
+                <SourceDocsTab projectId={id} onSourceUploaded={() => pollFillState.current()} projectReferenceUrls={project?.referenceUrls} onReferenceUrlsChange={(urls: string[]) => setProject((p: any) => (p ? { ...p, referenceUrls: urls } : p))} />
               ) : activeTab === "project-deck" ? (
                 <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : activeTab === "content-form" ? (

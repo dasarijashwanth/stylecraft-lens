@@ -63,6 +63,10 @@ export interface MockProject {
   // to whichever template matches the product's tool type family; 'barber'/
   // 'beauty' pins it regardless of the resolved family (mixed-collection override).
   gtmTemplateOverride?: "barber" | "beauty" | null;
+  // Reference Links — up to 5 user-supplied URLs (product pages, competitor/
+  // brand sites) checked first for GTM/Content Form generation, ahead of the
+  // AI's own web search. See lib/gtm-reference-links.ts.
+  referenceUrls?: string[];
 }
 
 export interface MockAnalysis {

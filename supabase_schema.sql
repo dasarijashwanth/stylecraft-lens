@@ -2072,3 +2072,12 @@ ALTER TABLE grooming_gate_incidents ENABLE ROW LEVEL SECURITY;
 -- row) from the existing replace flow (new_asin always populated).
 ALTER TABLE competitor_corrections ALTER COLUMN new_asin DROP NOT NULL;
 ALTER TABLE competitor_corrections ADD COLUMN IF NOT EXISTS correction_type VARCHAR(20) NOT NULL DEFAULT 'replace';
+
+-- 58. REFERENCE LINKS — up to 5 user-supplied reference URLs (product pages,
+-- competitor/brand sites) per project, added on the Sources tab. Checked
+-- FIRST (their fetched page text is prepended to GTM/Content Form generation
+-- prompts as a top-priority external source, ahead of the AI's own web
+-- search) before any field falls back to general AI knowledge/web search.
+-- A plain JSONB array (not a separate table) — a small, fixed-size (5),
+-- user-edited list, not a growing per-file record like source docs.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS reference_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
