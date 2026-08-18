@@ -250,7 +250,10 @@ async function main() {
   // confirmed via a raw OOXML dump of this exact fixture. Ad Sheet Headline/
   // Sub Header (Content Form item 13) has no matching row and is never
   // written, by design — not asserted here since there's nothing to check.
-  const fc = outWorkbook.getSheetXml("Final Copy");
+  // Looked up by its OUTPUT name ("Content Form") — repositionAndRenameSheet
+  // relabels this tab in the rendered file (see below), while every write
+  // above happened against its real original name ("Final Copy").
+  const fc = outWorkbook.getSheetXml("Content Form");
   assert(readCellText(fc, outWorkbook.sharedStrings, "C6") === "Precision that whispers.", "Final Copy: Sexy Tagline lands on row 6");
   assert(readCellText(fc, outWorkbook.sharedStrings, "C7") === "IN2 brushless motor, zero-gap blade geometry.", "Final Copy: Techie Tagline lands on row 7");
   assert(readCellText(fc, outWorkbook.sharedStrings, "C9") === "Built for barbers who demand more from every line.", "Final Copy: Romance Copy lands on row 9");
@@ -302,6 +305,18 @@ async function main() {
     Buffer.from(outZip.file("xl/worksheets/sheet7.xml")!.asUint8Array())
   ) !== 0;
   assert(sheet7Changed, "Final Copy (sheet7.xml) DID change — confirms it's now actually being filled, not silently skipped");
+
+  // Content Form tab reposition/rename — requested so the whole GTM +
+  // Content Form output lives in one workbook, with the tab positioned
+  // right next to BOX ONLY instead of buried near the end as "Final Copy".
+  const outSheetsXml = outZip.file("xl/workbook.xml")!.asText().match(/<sheets>[\s\S]*?<\/sheets>/)![0];
+  const outSheetNames = Array.from(outSheetsXml.matchAll(/name="([^"]*)"/g)).map(m => m[1]);
+  assert(!outSheetNames.includes("Final Copy"), "the output workbook no longer has a tab literally named \"Final Copy\"");
+  assert(outSheetNames.includes("Content Form"), "the output workbook has a tab named \"Content Form\"");
+  const boxOnlyIdx = outSheetNames.indexOf("BOX ONLY");
+  const contentFormIdx = outSheetNames.indexOf("Content Form");
+  assert(contentFormIdx === boxOnlyIdx + 1, `Content Form sits immediately after BOX ONLY in tab order (BOX ONLY at ${boxOnlyIdx}, Content Form at ${contentFormIdx})`);
+  assert(!outSheetsXml.includes('name="Final Copy"') && outSheetNames.length === 12, "no duplicate/orphaned sheet entry was left behind — still exactly 12 tabs, just reordered + one renamed");
 
   // ---- Section 2: FAQ grounding (the AI call itself needs a live key —
   // not exercised offline; this verifies the deterministic guard around it) ----

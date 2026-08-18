@@ -21,6 +21,7 @@ import {
   findAllRowsByLabel,
   writeCell,
   insertFaqRows,
+  repositionAndRenameSheet,
   OpenGtmWorkbook,
 } from "./gtm-workbook-render";
 
@@ -553,6 +554,25 @@ export function renderGtmWorkbook(templateBuffer: Buffer, input: GtmWorkbookMapp
   }
   workbook.setSheetXml("Product FAQ", faqXml);
   applySteps(workbook, "Product FAQ", "A", "B", null, FAQ_LABELED_STEPS, input.fields, repairs, unmapped);
+
+  // Content Form / "Final Copy" — the request was to surface this tab
+  // right next to BOX ONLY, labeled "Content Form", so the whole GTM +
+  // Content Form output lives in one downloaded workbook instead of two
+  // separate exports. This ONLY reorders/relabels the tab in the output
+  // file (see repositionAndRenameSheet's own comment) — every write above
+  // already happened against the sheet's real, original name ("Final
+  // Copy"), so this must run last. ad_sheet_headline/ad_sheet_sub_header
+  // still have no destination row anywhere in the real uploaded template
+  // (see FINAL_COPY_STEPS' own comment) — inserting new rows here was
+  // evaluated and deliberately NOT done: the sheet's later sections
+  // (WEB ONLY - SPEC CHART at row 62, and 3 more repeated form copies with
+  // their own merge cells/data validations through row 113) all reference
+  // absolute row numbers that a mid-sheet insertion would need to shift
+  // correctly, with no way to confirm the sheet's <drawing> part has no
+  // row-anchored content in that range without importing and auditing
+  // xl/drawings/drawing1.xml too — a real risk to a delicate, real
+  // business template for 2 of 33 fields. Those 2 remain in-app-only.
+  repositionAndRenameSheet(workbook.zip, "Final Copy", "BOX ONLY", "Content Form");
 
   return { buffer: generateGtmWorkbookBuffer(workbook), repairs, unmapped };
 }

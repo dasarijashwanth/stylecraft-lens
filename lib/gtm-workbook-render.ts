@@ -268,3 +268,34 @@ export function openGtmWorkbook(templateBuffer: Buffer): OpenGtmWorkbook {
 export function generateGtmWorkbookBuffer(workbook: OpenGtmWorkbook): Buffer {
   return workbook.zip.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
+
+// Reorders + relabels a tab in the OUTPUT file only — xl/workbook.xml's
+// <sheets> list order is what Excel actually uses for left-to-right tab
+// position (independent of sheetId/the physical sheetN.xml part number), so
+// this never touches the sheet's own worksheet XML, styles, or any other
+// zip part. Every OTHER call site in this module (applySteps,
+// mapSheetNamesToParts, etc.) still looks the sheet up by its ORIGINAL name
+// via workbook.sheetParts (resolved once at openGtmWorkbook() time) — this
+// must therefore run LAST, after every getSheetXml/setSheetXml call for that
+// sheet has already completed, matching how renderGtmWorkbook calls it.
+// A no-op (never throws) if either sheet name isn't found — a future
+// template re-upload that renamed/removed a tab degrades to "unchanged
+// order" rather than a broken export.
+export function repositionAndRenameSheet(zip: PizZip, sheetName: string, afterSheetName: string, newDisplayName: string): void {
+  const workbookXml = zip.file("xl/workbook.xml")?.asText();
+  if (!workbookXml) return;
+
+  const sheetTagPattern = (name: string) => new RegExp(`<sheet\\b[^>]*name="${escapeRegex(name)}"[^>]*/>`);
+  const targetMatch = workbookXml.match(sheetTagPattern(sheetName));
+  const afterMatch = workbookXml.match(sheetTagPattern(afterSheetName));
+  if (!targetMatch || !afterMatch) return;
+
+  const targetTag = targetMatch[0];
+  const afterTag = afterMatch[0];
+  const renamedTag = targetTag.replace(`name="${sheetName}"`, `name="${newDisplayName}"`);
+
+  const withoutTarget = workbookXml.replace(targetTag, "");
+  const reordered = withoutTarget.replace(afterTag, `${afterTag}${renamedTag}`);
+
+  zip.file("xl/workbook.xml", reordered);
+}
