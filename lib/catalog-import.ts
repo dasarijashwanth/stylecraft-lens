@@ -108,22 +108,44 @@ export function normalizeImportRow(raw: ParsedImportRow, ctx: CatalogTaxonomyCon
   const industry = normalizeIndustry(pick(raw, ["industry"]));
   const targetMarket = normalizeTargetMarket(pick(raw, ["target market", "market"]));
 
+  const priceText = pick(raw, ["price", "target price"]);
+  const targetPrice = parsePrice(priceText);
+
+  const description = pick(raw, ["description", "features & benefits", "features and benefits"]);
+
+  // Tool type — the spreadsheet's own "Tool Type"/"Type" column is tried
+  // first (an explicit, human-entered value beats an inferred one), but a
+  // blank or unresolvable column no longer gives up immediately: the same
+  // resolveToolType() alias-matching already used for a product TITLE
+  // elsewhere in this app (lib/analysisEngine.ts, lib/tool-type-taxonomy.ts)
+  // is tried next against the product's own Name, then its Description —
+  // both real, already-known text, not a guess. Only flagged for manual
+  // review when none of the three sources resolve to exactly one type.
   const toolTypeText = pick(raw, ["tool type", "type"]);
   let toolType: string | null = null;
+  let toolTypeAmbiguous = false;
   if (toolTypeText) {
     const resolved = resolveToolType(toolTypeText, ctx.toolTypes);
     if (resolved && !resolved.ambiguous) toolType = resolved.type;
+    else if (resolved?.ambiguous) toolTypeAmbiguous = true;
     else if (/multistyler/i.test(toolTypeText)) {
       toolType = "dryer";
       flags.push("tool_type_needs_review");
     }
   }
+  if (!toolType && !toolTypeAmbiguous) {
+    for (const candidateText of [name, description]) {
+      if (!candidateText) continue;
+      const resolved = resolveToolType(candidateText, ctx.toolTypes);
+      if (resolved && !resolved.ambiguous && resolved.type) {
+        toolType = resolved.type;
+        flags.push("tool_type_inferred_from_product");
+        break;
+      }
+      if (resolved?.ambiguous) toolTypeAmbiguous = true;
+    }
+  }
   if (!toolType) flags.push("tool_type_needs_review");
-
-  const priceText = pick(raw, ["price", "target price"]);
-  const targetPrice = parsePrice(priceText);
-
-  const description = pick(raw, ["description", "features & benefits", "features and benefits"]);
 
   const motorText = pick(raw, ["motor", "motor type", "motor (branded)", "motor (branded to canonical)"]);
   const toolTypeRow = ctx.toolTypes.find(t => t.type_key === toolType);

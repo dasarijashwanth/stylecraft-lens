@@ -39,6 +39,7 @@ const MARKET_LABELS: Record<string, string> = { pro: "Pro / Salon", consumer: "R
 const FLAG_LABELS: Record<string, string> = {
   incomplete: "Incomplete",
   tool_type_needs_review: "Tool type needs review",
+  tool_type_inferred_from_product: "Tool type inferred from product name/description — please confirm",
   motor_needs_confirmation: "Motor needs confirmation",
   heat_tech_needs_confirmation: "Heat/plate tech needs confirmation",
 };

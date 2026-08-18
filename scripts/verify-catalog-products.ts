@@ -145,6 +145,38 @@ async function main() {
     assert(diff.missingFromFile.length === existing.length - 2, "every existing product not present in the file is reported missingFromFile (informational only — never deleted)");
   }
 
+  // ─── Test 6: tool type inferred from product name/description when the
+  // spreadsheet's own "Tool Type" column is blank or unresolvable ─────────
+  {
+    const ctx = {
+      motorFamilies: await listMotorFamilies(),
+      brandedMotorNames: await listBrandedMotorNames(),
+      heatTechFamilies: await listHeatTechFamilies(),
+      brandedHeatTechNames: await listBrandedHeatTechNames(),
+      toolTypes: await listToolTypes(),
+    };
+
+    const csv = [
+      "Name,Industry,Target Market,Tool Type,Price,Description,Motor",
+      `"Awesome New Trimmer",Grooming and barbering,Pro Barber,,229.95,"Zero-gap blade, 3-hour cordless runtime",EON Digital Brushless`,
+      `"Totally Unrecognizable Widget",Grooming and barbering,Pro Barber,,49.95,"Does something, has parts",`,
+    ].join("\n");
+    const buffer = Buffer.from(csv, "utf-8");
+    const rawRows = parseImportFile(buffer);
+    const normalizedRows = rawRows.map(r => normalizeImportRow(r, ctx)).filter((r): r is NonNullable<typeof r> => r !== null);
+
+    const trimmerRow = normalizedRows.find(r => r.name === "Awesome New Trimmer");
+    assert(!!trimmerRow, "the trimmer row parses");
+    assert(trimmerRow?.toolType === "trimmer", `a blank Tool Type column resolves from the product's own Name ("Trimmer") — got ${trimmerRow?.toolType}`);
+    assert(!!trimmerRow?.importFlags.includes("tool_type_inferred_from_product"), "the inferred-from-product-text case is flagged for admin confirmation, not silently trusted");
+    assert(!trimmerRow?.importFlags.includes("tool_type_needs_review"), "a successfully-inferred tool type is never ALSO flagged needs_review");
+
+    const widgetRow = normalizedRows.find(r => r.name === "Totally Unrecognizable Widget");
+    assert(!!widgetRow, "the widget row parses");
+    assert(widgetRow?.toolType === null, "a product with no resolvable tool-type vocabulary anywhere (column, name, or description) stays null rather than a guess");
+    assert(!!widgetRow?.importFlags.includes("tool_type_needs_review"), "the genuinely-unresolvable case is flagged needs_review");
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) throw new Error(`${failed} assertion(s) failed`);
 }

@@ -24,12 +24,24 @@ interface ConfirmRow {
 // intentionally lenient on industry/targetMarket (real string, not a
 // strict enum) since this ingests legacy/historical spreadsheet data that
 // doesn't always match the newer 2-value enum used by the analyze form.
+//
+// industry/targetMarket/toolType are genuinely nullable at this point —
+// lib/catalog-import.ts's normalizeImportRow already leaves any of the
+// three null when the spreadsheet's own column is blank or doesn't match a
+// known value (flagged "*_needs_review" in importFlags, not silently
+// dropped). Requiring non-null here (as this schema previously did, via
+// z.string().min(1) with no .nullable()) meant a SINGLE incomplete row
+// anywhere in the file failed z.array's validation for the ENTIRE batch —
+// "Product Catalog import file validation failed" for every row, not just
+// the incomplete one. The per-row completeness check below (`!row.industry
+// || ...`) already exists specifically to skip an incomplete row on its
+// own — this schema must allow null through to reach it.
 const ConfirmRowSchema = z.object({
   row: z.looseObject({
     name: z.string().min(1).max(255),
-    industry: z.string().min(1).max(100),
-    targetMarket: z.string().min(1).max(50),
-    toolType: z.string().min(1).max(100),
+    industry: z.string().max(100).nullable(),
+    targetMarket: z.string().max(50).nullable(),
+    toolType: z.string().max(100).nullable(),
     targetPrice: z.number().nullable().optional(),
     description: z.string().max(2000).nullable().optional(),
     motorFamily: z.string().max(100).nullable().optional(),
