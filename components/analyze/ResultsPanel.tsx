@@ -337,7 +337,7 @@ export function ResultsPanel({ analysis, analysisId, onSaveAsReport, savingRepor
         },
         content_form: {
           product_name: analysis.productName,
-          key_messages: phase3.top_opportunities.map((o: any) => o.action || o.detail || o.description || ""),
+          key_messages: (phase3.top_opportunities || []).map((o: any) => o.action || o.detail || o.description || ""),
           target_audience: "",
           notes: "",
         }

@@ -10,9 +10,14 @@ import { listCatalogProducts } from "@/lib/db/catalog-products";
 import { matchCatalogProductByName } from "@/lib/our-product-position";
 import { resolveBrandForProduct, getActiveVoiceGuide, buildVoiceBlock } from "@/lib/brand-voice";
 import { getUploadedTdsContext, buildTdsGroundingBlock } from "@/lib/gtm-uploaded-tds";
+import { getReferenceLinksContext, buildReferenceLinksPromptBlock } from "@/lib/gtm-reference-links";
 import { checkRateLimit } from "@/lib/rate-limit";
 
-export const maxDuration = 45;
+// Was 45 — generateContentForm's 4 groups can each take up to ~60s worst
+// case (30s primary call + a possible 30s retry, lib/content-form-generate.ts),
+// so 45 risked Vercel killing this request before a slow-but-legitimate
+// regenerate ever got a chance to return.
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest, { params }: { params: { id: string; fieldId: string } }) {
   try {
@@ -59,6 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
         targetMarket: project.targetMarket,
         productUrl: (project as any).productUrl,
         asin: (project as any).asin,
+        referenceUrls: (project as any).referenceUrls,
       },
       salesKit,
       tds,
@@ -70,9 +76,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const matchedProduct = matchCatalogProductByName(project.productName, catalogProducts);
     const brand = await resolveBrandForProduct(project.productName);
     const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
-    const isPreLaunch = !(project as any).productUrl && !(project as any).asin;
     const uploadedTdsContext = await getUploadedTdsContext(document.project_id);
-    const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
+    const referenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+    // Reference Links count as real web presence — see gtm-generate.ts's
+    // isPreLaunch comment for why.
+    const isPreLaunch = !(project as any).productUrl && !(project as any).asin && !referenceLinksContext.hasLinks;
+    const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch)
+      + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "");
 
     const result = await regenerateContentFormField(params.fieldId, sources, gtmFieldsFlat, matchedProduct, voiceBlock, tdsGroundingBlock);
     if (!result) return NextResponse.json({ error: "No grounded facts available yet — generate Product Knowledge first." }, { status: 400 });

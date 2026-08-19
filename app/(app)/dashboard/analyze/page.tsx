@@ -399,6 +399,14 @@ export default function AnalyzePage() {
     setMotorBrandedName(product.motor_branded || "");
     setHeatTechFamily(product.heat_tech_family || "");
     setHeatTechBrandedName(product.heat_tech_branded || "");
+    // Same "auto-fill from description" suggestion the Description
+    // textarea's onBlur triggers manually — firing it here too means
+    // picking a catalog product immediately suggests Positioning
+    // context/Key differentiating feature from ITS description, instead of
+    // only after the user happens to click into and back out of the
+    // Description box. companyContext was just cleared above (line ~397),
+    // so pass "" explicitly rather than reading the pre-selection state.
+    void triggerDescriptionAutofill(product.name, product.description || "", keyDiff, "");
   }
 
   // Completed Results State (Aggregated results object)
@@ -758,10 +766,15 @@ export default function AnalyzePage() {
     void resolveRelatedRow(index, row.input, relatedProductRows.map((r) => r.asin), row.addedAt, toolType);
   }
 
-  async function handleDescriptionBlur() {
-    const trimmed = description.trim();
+  // Shared by the Description textarea's onBlur AND catalog-product
+  // selection below — takes the name/description/current-field values as
+  // explicit params (never reads them off state) so it works correctly
+  // right after handleCatalogProductSelect sets description/clears
+  // companyContext in the same tick, before React has re-rendered.
+  async function triggerDescriptionAutofill(nameText: string, descriptionText: string, currentKeyDiff: string, currentCompanyContext: string) {
+    const trimmed = descriptionText.trim();
     if (trimmed.length < 10) return;
-    if (companyContext.trim() && keyDiff.trim()) return; // both already filled — nothing to suggest
+    if (currentCompanyContext.trim() && currentKeyDiff.trim()) return; // both already filled — nothing to suggest
     if (descriptionAutofilledFor.current === trimmed) return; // already tried this exact text
     descriptionAutofilledFor.current = trimmed;
 
@@ -770,17 +783,17 @@ export default function AnalyzePage() {
       const res = await fetch("/api/analyze/autofill-from-description", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productName: productName.trim() || "this product", description: trimmed }),
+        body: JSON.stringify({ productName: nameText.trim() || "this product", description: trimmed }),
       });
       const data = await res.json();
       if (!res.ok) return; // best-effort suggestion — a failure here should never block the form
 
       let filledSomething = false;
-      if (data.keyDiff && !keyDiff.trim()) {
+      if (data.keyDiff && !currentKeyDiff.trim()) {
         setKeyDiff(data.keyDiff);
         filledSomething = true;
       }
-      if (data.positioningContext && !companyContext.trim()) {
+      if (data.positioningContext && !currentCompanyContext.trim()) {
         setCompanyContext(data.positioningContext);
         filledSomething = true;
       }
@@ -790,6 +803,10 @@ export default function AnalyzePage() {
     } finally {
       setAutofillingFromDescription(false);
     }
+  }
+
+  function handleDescriptionBlur() {
+    return triggerDescriptionAutofill(productName, description, keyDiff, companyContext);
   }
 
   // {asin,url,addedAt} triples for the submit body / project pre-fill —

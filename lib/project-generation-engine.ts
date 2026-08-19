@@ -258,9 +258,11 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           const matchedCatalogProduct = matchCatalogProductByName(project.productName, catalogProducts);
           const cfBrand = await resolveBrandForProduct(project.productName);
           const cfVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(cfBrand));
-          const cfIsPreLaunch = !project.productUrl && !project.asin;
           const cfUploadedTdsContext = await getUploadedTdsContext(projectId);
           const cfReferenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+          // Reference Links count as real web presence — see gtm-generate.ts's
+          // isPreLaunch comment for why.
+          const cfIsPreLaunch = !project.productUrl && !project.asin && !cfReferenceLinksContext.hasLinks;
           const cfTdsGroundingBlock = buildTdsGroundingBlock(cfUploadedTdsContext, cfIsPreLaunch)
             + (cfReferenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(cfReferenceLinksContext)}` : "");
 
@@ -345,9 +347,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
         const faqSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Product FAQ");
         const faqBrand = await resolveBrandForProduct(project.productName);
         const faqVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(faqBrand));
-        const faqIsPreLaunch = !project.productUrl && !project.asin;
         const faqUploadedTdsContext = await getUploadedTdsContext(projectId);
         const faqReferenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+        const faqIsPreLaunch = !project.productUrl && !project.asin && !faqReferenceLinksContext.hasLinks;
         const faqTdsGroundingBlock = buildTdsGroundingBlock(faqUploadedTdsContext, faqIsPreLaunch)
           + (faqReferenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(faqReferenceLinksContext)}` : "");
         const faqFields = await generateProductFaqs(sources, gtmFieldsFlat, faqVoiceBlock, faqTdsGroundingBlock);
@@ -419,9 +421,9 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
           const marketingDirectionSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Marketing Direction");
           const mdBrand = await resolveBrandForProduct(project.productName);
           const mdVoiceBlock = buildVoiceBlock(await getActiveVoiceGuide(mdBrand));
-          const mdIsPreLaunch = !project.productUrl && !project.asin;
           const mdUploadedTdsContext = await getUploadedTdsContext(projectId);
           const mdReferenceLinksContext = await getReferenceLinksContext((project as any).referenceUrls);
+          const mdIsPreLaunch = !project.productUrl && !project.asin && !mdReferenceLinksContext.hasLinks;
           const mdTdsGroundingBlock = buildTdsGroundingBlock(mdUploadedTdsContext, mdIsPreLaunch)
             + (mdReferenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(mdReferenceLinksContext)}` : "");
 

@@ -39,8 +39,15 @@ export interface WebFallbackAnswer {
 // large sweep finish reliably instead of timing out.
 const CHUNK_SIZE = 6;
 const CHUNK_THRESHOLD = 10;
-const SINGLE_CALL_TIMEOUT_MS = 10_000;
-const CHUNK_CALL_TIMEOUT_MS = 20_000;
+// Bumped from 10s/20s — confirmed live this session that a real web_search-
+// enabled gpt-5 call routinely needs 25-40s+, making the old values an
+// effectively-neutered fallback tier (almost always timing out before ever
+// returning a real answer). Kept below the sibling full-generation calls'
+// 30s (rather than matching them) since this tier is already gated by the
+// caller's own overall elapsed-time budget (timeBudgetMs) — a bigger jump
+// here would risk eating too much of what's left for Tier 6/6.5 afterward.
+const SINGLE_CALL_TIMEOUT_MS = 15_000;
+const CHUNK_CALL_TIMEOUT_MS = 25_000;
 
 interface WebSearchResult {
   parsed: Record<string, any>;
@@ -52,7 +59,16 @@ async function runOneWebSearchCall(
   productName: string,
   timeoutMs: number,
   toolTypes: ToolTypeRow[],
-  requiredToolType?: ToolType | null
+  requiredToolType?: ToolType | null,
+  // Brand Voice Guide — a field resolved here becomes its FINAL answer just
+  // like one resolved by the main AI call, so a "written"-kind GTM field
+  // (positioning/reason-to-buy/etc.) that falls through to this tier needs
+  // the same voice grounding, not just whatever gtm-generate.ts's later
+  // guardWrittenFieldsQuality pass happens to catch as a deterministic rule
+  // violation (a flat/generic-but-not-rule-violating answer could slip
+  // through that check untouched). No-op for TDS's caller, which has no
+  // "written"-kind fields to begin with.
+  voiceBlock: string = ""
 ): Promise<WebSearchResult | null> {
   const fieldList = eligible.map(f => `- ${f.id}: ${f.question}`).join("\n");
   // This path has no independent page-fetch/quote-verification step (unlike
@@ -72,7 +88,7 @@ Do not narrate your search process — search silently, then respond with ONLY t
 Return ONLY valid JSON, no markdown, keyed by field id: { "<field_id>": { "answer": "...", "source_hint": "the site/page name or article title this came from" } }
 
 FIELDS:
-${fieldList}`;
+${fieldList}${voiceBlock}`;
 
   // OpenAI is primary — its own native web_search tool handles the lookup.
   // Gemini's googleSearch is the fallback if OpenAI is unavailable/fails.
@@ -134,11 +150,16 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   toolTypes: ToolTypeRow[],
   requiredToolType?: ToolType | null,
   // Uploaded TDS Ingestion — a pre-launch/custom product (no productUrl/
-  // asin) has no web presence for this tier to find anything; passing a
-  // reason skips the attempt entirely instead of searching for nothing.
-  // lib/field-finalize.ts's terminalReasonOverride surfaces WHY a field
-  // still ended up unresolved, so the honest reason threads through both.
-  skipReason?: string
+  // asin/Reference Links) has no web presence for this tier to find
+  // anything; passing a reason skips the attempt entirely instead of
+  // searching for nothing. lib/field-finalize.ts's terminalReasonOverride
+  // surfaces WHY a field still ended up unresolved, so the honest reason
+  // threads through both.
+  skipReason?: string,
+  // Brand Voice Guide — see runOneWebSearchCall's own comment on why a
+  // field resolved here needs the same voice grounding as one resolved by
+  // the main AI call.
+  voiceBlock: string = ""
 ): Promise<void> {
   const eligible = schema.filter(f => !isRealAnswer(fields[f.id]?.answer));
   if (eligible.length === 0 || (!hasOpenAIKey && !hasGeminiKey)) return;
@@ -169,7 +190,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   };
 
   if (eligible.length <= CHUNK_THRESHOLD) {
-    const result = await runOneWebSearchCall(eligible, productName, SINGLE_CALL_TIMEOUT_MS, toolTypes, requiredToolType);
+    const result = await runOneWebSearchCall(eligible, productName, SINGLE_CALL_TIMEOUT_MS, toolTypes, requiredToolType, voiceBlock);
     applyResult(eligible, result);
     return;
   }
@@ -184,7 +205,7 @@ export async function applyWebSearchFallback<T extends WebFallbackAnswer>(
   await Promise.all(
     chunks.map(async chunk => {
       if (Date.now() - pipelineStart > timeBudgetMs) return;
-      const result = await runOneWebSearchCall(chunk, productName, CHUNK_CALL_TIMEOUT_MS, toolTypes, requiredToolType);
+      const result = await runOneWebSearchCall(chunk, productName, CHUNK_CALL_TIMEOUT_MS, toolTypes, requiredToolType, voiceBlock);
       applyResult(chunk, result);
     })
   );

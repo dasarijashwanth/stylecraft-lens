@@ -125,7 +125,11 @@ export async function generateTdsFields(
   const aiEligibleSchema = schema.filter(f => f.kind !== "internal");
   const systemInstruction = buildSystemInstruction(productTitle, aiEligibleSchema);
   const userContent = buildUserContent(snapshotText, recordText);
-  const aiRaw = await callAiForFields(systemInstruction, userContent, "TDS", { projectId });
+  // 30s, not the 25s implicit default — matches every sibling full-schema
+  // generation call (lib/gtm-generate.ts's callAi, lib/content-form-generate.ts).
+  // A real gpt-5 low-effort call over a schema this size routinely needs
+  // more than 25s.
+  const aiRaw = await callAiForFields(systemInstruction, userContent, "TDS", { projectId, timeoutMs: 30_000 });
 
   const result: Record<string, TdsFieldAnswer> = {};
   for (const f of schema) {

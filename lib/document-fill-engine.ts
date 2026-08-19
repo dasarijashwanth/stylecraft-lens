@@ -15,6 +15,7 @@ import { getLatestOutput } from "@/lib/project-outputs";
 import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 import { deriveFieldsFromSources } from "@/lib/gtm-derive";
 import { getUploadedTdsContext, applyUploadedTdsFacts, buildTdsGroundingBlock } from "@/lib/gtm-uploaded-tds";
+import { getReferenceLinksContext, buildReferenceLinksPromptBlock } from "@/lib/gtm-reference-links";
 import type { GtmSources } from "@/lib/gtm-generate";
 import { listActiveDocsForProject } from "@/lib/db/uploaded-source-docs";
 import { deriveFactsForDoc } from "@/lib/tds-doc-ingest";
@@ -31,6 +32,18 @@ import { generateContentForm } from "@/lib/content-form-generate";
 import { getDocumentFillState, updateDocumentFillState, reclaimStaleRunningFillState, type DocumentFillStateRow, type FillStep } from "@/lib/db/document-fill-state";
 
 const UNTOUCHABLE_SOURCES = new Set(["manual_edit", "project_record", "active_report"]);
+
+// Unlike lib/gtm-generate.ts / lib/project-generation-engine.ts, this file
+// chained multiple real AI phases (stale-fact retries, then FAQ + Marketing
+// Direction, then Box Only) in one request with NO overall elapsed-time
+// gate at all — each phase individually budgeted, but nothing stopping
+// their sum from exceeding the calling routes' maxDuration and getting
+// killed by Vercel mid-request (no response ever sent, surfacing as a
+// stuck/retrying "Fill blanks from sources" button). 48s leaves ~12s of
+// headroom under a 60s route cap for whatever DB writes/serialization
+// still need to happen after — same margin convention as gtm-generate.ts's
+// TIER_6_5_HARD_DEADLINE_MS.
+const FILL_ENGINE_TIME_BUDGET_MS = 48_000;
 
 function isBlank(answer: string | null | undefined): boolean {
   return !isRealAnswer(answer) || isAwaitingInternalInput(answer) || isNotDeterminable(answer);
@@ -49,6 +62,7 @@ async function buildProjectSources(project: any, userId: string): Promise<GtmSou
       motorFamily: project.motorFamily, motorBrandedName: project.motorBrandedName, motorTech: project.motorTech,
       keyDiff: project.keyDiff, pricePoint: project.pricePoint, companyContext: project.companyContext,
       targetMarket: project.targetMarket, productUrl: project.productUrl, asin: project.asin,
+      referenceUrls: project.referenceUrls,
     },
     salesKit, tds,
     activeReport: latestReport
@@ -72,10 +86,16 @@ export interface FillStepResult {
 async function retryStaleExtractions(projectId: string, productName: string, routeStartTime: number): Promise<number> {
   const activeDocs = await listActiveDocsForProject(projectId);
   const staleDocs = activeDocs.filter(d => d.extraction_status === "complete" && d.facts_extraction_status !== "complete");
+  let retried = 0;
   for (const staleDoc of staleDocs) {
+    if (Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS) {
+      console.warn(`[document-fill-engine] Stopping stale-extraction retries after ${retried}/${staleDocs.length} docs — over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget. Remaining docs stay stale until the next fill run.`);
+      break;
+    }
     await deriveFactsForDoc(staleDoc.id, projectId, productName, routeStartTime);
+    retried++;
   }
-  return staleDocs.length;
+  return retried;
 }
 
 // GTM document — grounded/spec fields (verbatim override), then Marketing
@@ -147,10 +167,16 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
   const wantsFaqs = faqSchema.some(f => isBlank(fieldsById.get(f.id)?.answer));
 
   const regeneratedIds: string[] = [];
-  const isPreLaunch = !project.productUrl && !project.asin;
-  const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
+  const referenceLinksContext = await getReferenceLinksContext(project.referenceUrls);
+  const isPreLaunch = !project.productUrl && !project.asin && !referenceLinksContext.hasLinks;
+  const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch)
+    + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "");
+  const overBudgetAfterPass1 = Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS;
+  if (overBudgetAfterPass1 && (wantsMarketing || wantsFaqs)) {
+    console.warn(`[document-fill-engine] Skipping Marketing Direction/FAQ regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget after Pass 1/stale-extraction retries. These fields stay blank until the next fill run.`);
+  }
 
-  if (wantsMarketing || wantsFaqs) {
+  if (!overBudgetAfterPass1 && (wantsMarketing || wantsFaqs)) {
     const brand = await resolveBrandForProduct(project.productName);
     const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
     const gtmFieldsFlat = flattenDocumentFields(fields);
@@ -192,7 +218,11 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
   // ---- Pass 3: Box Only section ----
   const boxOnlySchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Box Only");
   const wantsBoxOnly = boxOnlySchema.some(f => isBlank(fieldsById.get(f.id)?.answer));
-  if (wantsBoxOnly) {
+  const overBudgetAfterPass2 = Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS;
+  if (overBudgetAfterPass2 && wantsBoxOnly) {
+    console.warn(`[document-fill-engine] Skipping Box Only regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget. These fields stay blank until the next fill run.`);
+  }
+  if (!overBudgetAfterPass2 && wantsBoxOnly) {
     const latestFields = flattenDocumentFields(await getDocumentFields(document.id));
     const boxFieldsMap: Record<string, { answer: string; source: string }> = {};
     for (const [id, answer] of Object.entries(latestFields)) boxFieldsMap[id] = { answer, source: "existing" };
@@ -261,6 +291,11 @@ export async function refillContentFormFromSources(projectId: string, orgId: str
   const isPreLaunch = !project.productUrl && !project.asin;
   const uploadedTdsContext = await getUploadedTdsContext(projectId);
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
+
+  if (Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS) {
+    console.warn(`[document-fill-engine] Skipping Content Form regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget after stale-extraction retries. Fields stay blank until the next fill run.`);
+    return { filled: 0, regenerated: 0, stillAwaiting: fields.filter(f => isBlank(f.answer)).length, changedFieldIds: [], factsRetried };
+  }
 
   const generated = await generateContentForm(sources, gtmFieldsFlat, matchedCatalogProduct, voiceBlock, tdsGroundingBlock);
 

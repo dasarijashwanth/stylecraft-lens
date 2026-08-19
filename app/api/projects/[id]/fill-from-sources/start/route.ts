@@ -4,7 +4,7 @@ import { getProject } from "@/lib/db/projects";
 import { startDocumentFillState, type FillStep } from "@/lib/db/document-fill-state";
 import { runNextFillStep } from "@/lib/document-fill-engine";
 
-export const maxDuration = 45;
+export const maxDuration = 60; // was 45 - lib/document-fill-engine.ts now gates its own phases against a 48s budget, but the route should still allow the full Vercel Hobby ceiling as margin.
 
 // Automatic Source-Doc Fact Extraction & Cross-Document Fill — starts the
 // resumable "fill GTM -> fill Content Form" chain and immediately performs

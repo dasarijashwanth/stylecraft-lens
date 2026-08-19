@@ -5,7 +5,7 @@ import { getProject } from "@/lib/db/projects";
 import { refillContentFormFromSources } from "@/lib/document-fill-engine";
 import { checkRateLimit } from "@/lib/rate-limit";
 
-export const maxDuration = 45;
+export const maxDuration = 60; // was 45 - lib/document-fill-engine.ts now gates its own phases against a 48s budget, but the route should still allow the full Vercel Hobby ceiling as margin.
 
 // Automatic Source-Doc Fact Extraction & Cross-Document Fill — the manual
 // "Fill blanks from sources" trigger for Content Form (genuinely new; no

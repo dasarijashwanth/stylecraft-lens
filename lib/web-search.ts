@@ -16,7 +16,12 @@ export interface SearchHit {
   title: string;
 }
 
-const SEARCH_TIMEOUT_MS = 25_000;
+// 30s, not 25s — matches the other direct openai.responses.create web-
+// search callers (lib/analysisEngine.ts's OPENAI_REQUEST_TIMEOUT_MS,
+// lib/openai.ts's searchAndExtractJson default) after this session's
+// confirmed-live finding that gpt-5 low-effort web-search calls routinely
+// need more than 25s.
+const SEARCH_TIMEOUT_MS = 30_000;
 
 export function normalizeUrl(url: string): string {
   return (url || "").split("?")[0].replace(/\/$/, "").toLowerCase();

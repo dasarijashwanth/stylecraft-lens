@@ -454,19 +454,27 @@ export async function generateAllFields(productName: string, sources: GtmSources
 
   // Uploaded TDS Ingestion — resolved once per generation run, same
   // caching-by-call-shape discipline as the voice guide above. A
-  // "pre-launch/custom" product (no productUrl/asin — no live web presence
-  // for the AI web-search tier below to find anything) gets the hard
-  // "no market/web claims" narrative rule; the fact override itself
-  // (applyUploadedTdsFacts below) applies regardless of pre-launch status.
-  const isPreLaunch = !sources.project.productUrl && !sources.project.asin;
+  // "pre-launch/custom" product (no productUrl/asin AND no Reference Links
+  // — genuinely no external grounding for the AI web-search tier below to
+  // find anything) gets the hard "no market/web claims" narrative rule and
+  // skips Tier 5 (web fallback) with an honest, specific reason rather than
+  // searching for nothing; the fact override itself (applyUploadedTdsFacts
+  // below) applies regardless of pre-launch status. Reference Links count
+  // as real web presence here — a project with none typed into productUrl/
+  // asin but with team-supplied reference pages is NOT "no web presence",
+  // and treating it as such was surfacing a confusing literal "Not found —
+  // pre-launch: no web presence" answer on fields those reference pages
+  // could have actually answered.
   const uploadedTdsContext = await getUploadedTdsContext(projectId);
   const uploadedTdsPromptText = buildUploadedTdsPromptBlock(uploadedTdsContext);
-  const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
 
   // Reference Links — fetched fresh each run, same discipline as
   // uploadedTdsContext above (never cached across phases/regenerates).
   const referenceLinksContext = await getReferenceLinksContext(sources.project.referenceUrls);
   const referenceLinksPromptText = buildReferenceLinksPromptBlock(referenceLinksContext);
+
+  const isPreLaunch = !sources.project.productUrl && !sources.project.asin && !referenceLinksContext.hasLinks;
+  const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
 
   const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText, referenceLinksPromptText);
   const userContent = buildUserContent(sourceTexts);
@@ -543,7 +551,8 @@ export async function generateAllFields(productName: string, sources: GtmSources
     PIPELINE_TIME_BUDGET_MS,
     toolTypes,
     sources.project?.toolType as any,
-    isPreLaunch ? "pre-launch: no web presence" : undefined
+    isPreLaunch ? "pre-launch — add a product URL/ASIN or a Reference Link under Sources to fill this in" : undefined,
+    voiceBlock
   );
 
   // Tier 6 (computed derivation, e.g. good_better_best/hair_type) runs
@@ -627,13 +636,14 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
 
   // Uploaded TDS Ingestion — same resolution as generateAllFields above.
-  const isPreLaunch = !sources.project.productUrl && !sources.project.asin;
   const uploadedTdsContext = await getUploadedTdsContext(projectId);
   const uploadedTdsPromptText = buildUploadedTdsPromptBlock(uploadedTdsContext);
-  const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
 
-  // Reference Links — same resolution as generateAllFields above.
+  // Reference Links — same resolution as generateAllFields above; also
+  // counts as real web presence for isPreLaunch, same reasoning as there.
   const referenceLinksContext = await getReferenceLinksContext(sources.project.referenceUrls);
+  const isPreLaunch = !sources.project.productUrl && !sources.project.asin && !referenceLinksContext.hasLinks;
+  const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
   const referenceLinksPromptText = buildReferenceLinksPromptBlock(referenceLinksContext);
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch) + (referenceLinksPromptText ? `\n\nREFERENCE SOURCES:\n${referenceLinksPromptText}` : "");
 
@@ -685,7 +695,8 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const guarded = { [fieldId]: grounded };
   await applyWebSearchFallback(
     guarded, [schemaField], productName, Date.now(), PIPELINE_TIME_BUDGET_MS, toolTypes, sources.project?.toolType as any,
-    isPreLaunch ? "pre-launch: no web presence" : undefined
+    isPreLaunch ? "pre-launch — add a product URL/ASIN or a Reference Link under Sources to fill this in" : undefined,
+    voiceBlock
   );
   const tier6Extra = await buildTier6ExtraInputs(sources, toolTypes);
   applyTier6Inference(guarded, [schemaField], {

@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
         targetMarket: project.targetMarket,
         productUrl: (project as any).productUrl,
         asin: (project as any).asin,
+        referenceUrls: (project as any).referenceUrls,
         gtmTemplateOverride: (project as any).gtmTemplateOverride,
       },
       salesKit,

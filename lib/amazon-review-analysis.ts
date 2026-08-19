@@ -272,7 +272,7 @@ ${recent.length ? formatReviewBlock(recent) : "(none fetched)"}` : ""}`;
 
 async function callAi(systemPrompt: string, userPrompt: string): Promise<any> {
   if (hasOpenAIKey) {
-    const result = await callOpenAiForJson(systemPrompt, userPrompt, "review analysis", { timeoutMs: 25_000 });
+    const result = await callOpenAiForJson(systemPrompt, userPrompt, "review analysis", { timeoutMs: 30_000 });
     if (result) return result;
   }
   if (hasGeminiKey) {
