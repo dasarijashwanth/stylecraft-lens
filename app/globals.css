@@ -267,11 +267,28 @@ h3 {
   text-decoration: underline;
 }
 
-/* Glassmorphism styling helpers */
+/* Glassmorphism styling helpers — deliberately dark regardless of theme
+   (same "cinematic surface stays dark" precedent as --cinema-gold/.cinema-
+   glass below), so the text/border tokens must be re-pinned to their
+   dark-mode values here too. Confirmed real bug: in light mode,
+   --text-primary/secondary/muted and --border/--border-strong flip to
+   colors meant for a near-white background — dark text on this
+   permanently-dark glass, illegible. Re-declaring these custom properties
+   on the selector itself means every descendant using text-text-primary/
+   border-border/etc. picks up the dark-appropriate value via the normal
+   CSS cascade, with zero changes needed in the many component files that
+   render inside a glass surface. */
 .glass-panel {
   background: rgba(22, 22, 26, 0.7);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border);
+  --text-primary:    #F4F4F5;
+  --text-secondary:  #A1A1AA;
+  --text-muted:      #8B8B96;
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-strong:   rgba(255, 255, 255, 0.14);
+  --accent-text:     #A5B4FC;
+  color: var(--text-primary);
 }
 
 /* ============================================================
@@ -669,12 +686,29 @@ h3 {
 }
 
 /* Content sitting on top of hero imagery — blur(12px) + subtle border per
-   spec's "legibility system." */
+   spec's "legibility system." Used across MANY dashboard components
+   (useGlassMode() is true on essentially every non-admin route, not just
+   the auth pages), all rendering their labels/values via the normal
+   text-text-primary/text-text-muted/border-border Tailwind classes. Since
+   this card is deliberately dark regardless of the app's light/dark theme
+   toggle (see BackgroundStage's own header comment — a cinematic backdrop
+   stays dark on purpose), those tokens must be re-pinned to their dark-
+   mode values here too — otherwise every one of those components goes
+   dark-text-on-dark-glass the moment a user is in light mode. Same fix
+   as .glass-panel above; re-declared here too since standard CSS custom
+   properties aren't inherited automatically between unrelated classes. */
 .cinema-glass {
   background: rgba(22, 22, 26, 0.55); /* --surface-2 at partial alpha */
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  --text-primary:    #F4F4F5;
+  --text-secondary:  #A1A1AA;
+  --text-muted:      #8B8B96;
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-strong:   rgba(255, 255, 255, 0.14);
+  --accent-text:     #A5B4FC;
+  color: var(--text-primary);
 }
 
 /* Thin fixed top progress bar, gold accent — mounted once per surface via

@@ -38,12 +38,26 @@
    every existing MagicBentoCard usage across the app gets this treatment for
    free, no call-site changes needed. Mirrors .cinema-scrim's blur/tint
    values (app/globals.css) so cards floating over the cinematic background
-   read as one coherent "glass" system rather than two different looks. */
+   read as one coherent "glass" system rather than two different looks.
+   Deliberately dark regardless of theme (same as .cinema-glass/.glass-panel
+   in app/globals.css) — text/border tokens re-pinned to their dark-mode
+   values here too, since every card's real content (KPI numbers, table
+   rows, form fields — "whatever real content already lives in each tab")
+   renders via the normal text-text-primary/border-border classes, which
+   otherwise flip to light-mode's dark colors and go illegible against this
+   permanently-dark card. */
 .magic-bento-card--glass {
   background: rgba(22, 22, 26, 0.55);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-color: rgba(255, 255, 255, 0.12);
+  --text-primary:    #F4F4F5;
+  --text-secondary:  #A1A1AA;
+  --text-muted:      #8B8B96;
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-strong:   rgba(255, 255, 255, 0.14);
+  --accent-text:     #A5B4FC;
+  color: var(--text-primary);
 }
 
 /* Browsers without backdrop-filter support (rare in 2026, but a real
