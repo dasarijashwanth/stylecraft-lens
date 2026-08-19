@@ -264,7 +264,7 @@ export default function ProjectDetailPage() {
       <div className="flex flex-col gap-4">
         <button
           onClick={() => router.back()}
-          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary self-start transition-colors"
+          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary self-start transition-colors cinema-text"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to projects</span>
@@ -410,7 +410,7 @@ export default function ProjectDetailPage() {
           <div className="space-y-4">
             {/* 5-Tab Navigation — always visible; Project Deck doesn't
                 depend on a linked report */}
-            <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
+            <div className="flex items-center gap-1 border-b border-border overflow-x-auto cinema-text">
               {(["competitive-analysis", "pricing", "go-to-market", "content-form", "project-deck", "sources"] as Tab[]).map(tab => (
                 <button
                   key={tab}

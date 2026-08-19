@@ -250,7 +250,7 @@ export default function CompetitorsPage() {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-display font-sans">Competitors</h1>
+          <h1 className="text-display font-sans cinema-text">Competitors</h1>
           <span className="inline-flex items-center justify-center bg-surface-3 border border-border px-2.5 py-0.5 rounded-full text-[10px] font-bold text-text-secondary">
             {allFetched.length + uniqueAnalysis.length} total
           </span>
@@ -465,7 +465,7 @@ export default function CompetitorsPage() {
           {/* SECTION 2: DISCOVERED & ADDED COMPETITORS */}
           <div className="space-y-3.5">
             <div className="border-b border-border pb-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-surface-3/10 px-3 py-2 rounded-t-lg">
-              <div>
+              <div className="cinema-text">
                 <h2 className="text-sm font-bold text-text-primary">Discovered & Added Competitors</h2>
                 <p className="text-[10px] text-text-muted mt-0.5">Competitors added manually or mapped via analysis engines</p>
               </div>

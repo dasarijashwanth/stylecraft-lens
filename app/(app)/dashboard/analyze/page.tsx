@@ -1002,7 +1002,7 @@ export default function AnalyzePage() {
     <div className="space-y-6">
       {/* Dynamic Header */}
       {viewState === "form" && (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 cinema-text">
           <h1 className="text-display">New competitive analysis</h1>
           <p className="text-xs text-text-secondary leading-normal max-w-2xl">
             Gemini searches the web and Amazon indices to discover 10 competing products (5 established, 5 emerging) then maps prices, specifications, and synthesises strategic intelligence recommendations. Takes 1–2 minutes.

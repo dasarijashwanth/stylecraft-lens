@@ -127,7 +127,7 @@ export default function ReportsPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-display">Reports</h1>
+          <h1 className="text-display cinema-text">Reports</h1>
           <span className="inline-flex items-center justify-center bg-surface-3 border border-border px-2 py-0.5 rounded-full text-xs font-semibold text-text-secondary">
             {reports.length} total
           </span>

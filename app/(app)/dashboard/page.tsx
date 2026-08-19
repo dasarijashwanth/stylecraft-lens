@@ -184,7 +184,7 @@ export default function DashboardOverview() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2">
-        <h1 className="text-display">Dashboard</h1>
+        <h1 className="text-display cinema-text">Dashboard</h1>
         <FaqHelpLink category="Dashboard" />
       </div>
 

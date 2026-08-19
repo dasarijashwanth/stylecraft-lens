@@ -308,14 +308,14 @@ export default function NewProjectPage() {
       <div>
         <button
           onClick={() => router.back()}
-          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors"
+          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors cinema-text"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to projects</span>
         </button>
       </div>
 
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 cinema-text">
         <h1 className="text-display">Create new project</h1>
         <p className="text-xs text-text-muted">
           Define your product offering and market context to align AI competitor analyses.

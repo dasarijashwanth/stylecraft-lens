@@ -219,7 +219,7 @@ export default function CompetitorDetailPage() {
       <div className="flex flex-col gap-4">
         <button
           onClick={() => router.back()}
-          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary self-start transition-colors"
+          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary self-start transition-colors cinema-text"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to competitors</span>

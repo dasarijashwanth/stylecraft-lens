@@ -108,7 +108,7 @@ export default function SettingsPage() {
       {/* Title */}
       <div className="flex items-center gap-2">
         <Settings className="w-5 h-5 text-accent" />
-        <h1 className="text-display">Settings</h1>
+        <h1 className="text-display cinema-text">Settings</h1>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

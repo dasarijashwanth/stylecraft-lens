@@ -225,10 +225,10 @@ export default function ReportDetailPage() {
       {/* Header Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <button onClick={() => router.push("/dashboard/reports")} className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors">
+          <button onClick={() => router.push("/dashboard/reports")} className="p-1.5 rounded-lg hover:bg-surface-3 text-text-secondary transition-colors cinema-text">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div>
+          <div className="cinema-text">
             <h1 className="text-display leading-tight">{report.title}</h1>
             <p className="text-[10px] text-text-muted mt-0.5 leading-none">
               Status: <span className="font-semibold text-text-secondary">{report.status}</span>

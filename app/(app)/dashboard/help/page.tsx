@@ -233,10 +233,10 @@ export default function HelpPage() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center gap-2">
         <HelpCircle className="w-5 h-5 text-accent" />
-        <h1 className="text-display">Help &amp; Support</h1>
+        <h1 className="text-display cinema-text">Help &amp; Support</h1>
       </div>
 
-      <div className="flex items-center gap-1 border-b border-border">
+      <div className="flex items-center gap-1 border-b border-border cinema-text">
         <div className="px-3 py-2 border-b-2 border-accent text-accent font-bold text-xs flex items-center gap-1.5">
           <HelpCircle className="w-3.5 h-3.5" /> FAQ
         </div>

@@ -711,6 +711,27 @@ h3 {
   color: var(--text-primary);
 }
 
+/* Same dark-mode token re-pin as .cinema-glass above, but with no
+   background/blur/border of its own — for page-header text (an h1 title +
+   its subtitle) that sits DIRECTLY on the raw BackgroundStage image+scrim,
+   never inside a card at all. Every dashboard page with a route background
+   (see lib/background-stage-config.ts — analyze/projects/reports/
+   competitors/help/settings/Overview/project-detail all have one) renders
+   its own title this way; without this class that heading uses the normal
+   theme-flipping text-text-primary/text-text-secondary classes, which in
+   light mode resolve to dark text directly on the same permanently-dark
+   image+scrim — invisible, the exact bug this class exists to fix. Applied
+   directly to the header wrapper only (never a whole page), since a plain
+   solid-background card nested inside must keep flipping normally with the
+   theme. */
+.cinema-text {
+  --text-primary:    #F4F4F5;
+  --text-secondary:  #A1A1AA;
+  --text-muted:      #8B8B96;
+  --accent-text:     #A5B4FC;
+  color: var(--text-primary);
+}
+
 /* Thin fixed top progress bar, gold accent — mounted once per surface via
    components/scroll/ScrollProgressBar.tsx. Starts at scaleX(0); GSAP
    animates scaleX up to 1 as the page scrolls (skipped under reduced
