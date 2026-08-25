@@ -5,7 +5,7 @@ import { getDocumentById, updateDocumentField, updateDocumentFieldMeta, revertDo
 
 // lib/db/documents.ts has no org/user awareness of its own — ownership is
 // checked here via the document's parent project, same pattern as the
-// GTM document GET routes and the regenerate/export-csv siblings.
+// GTM document GET routes and the regenerate/export-xlsx siblings.
 async function assertOwnsDocument(documentId: string, orgId: string) {
   const document = await getDocumentById(documentId);
   if (!document) throw Object.assign(new Error("Document not found"), { status: 404 });

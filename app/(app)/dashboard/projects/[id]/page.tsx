@@ -2112,13 +2112,6 @@ function ProductKnowledgeSection({
               </button>
             )}
             <a
-              href={`/api/documents/gtm/${documentId}/export-csv`}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Download CSV</span>
-            </a>
-            <a
               href={`/api/documents/gtm/${documentId}/export-xlsx`}
               title="Official 12-tab GTM workbook — Product Knowledge, BOX ONLY, Product FAQ, Marketing Direction, and Final Copy filled; every other tab untouched"
               className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"

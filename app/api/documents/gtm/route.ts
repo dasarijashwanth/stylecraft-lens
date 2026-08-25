@@ -9,7 +9,7 @@ import { listToolTypes } from "@/lib/db/tool-types";
 // Looks up a project's GTM document by project id — the UI only knows the
 // project it's on, not the document's own id, until one exists. Ownership
 // is checked via the PROJECT (lib/db/documents.ts itself has no org/user
-// awareness), same pattern as the regenerate/export-csv siblings below.
+// awareness), same pattern as the regenerate/export-xlsx siblings below.
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("projectId");
   if (!projectId) return NextResponse.json({ error: "projectId is required" }, { status: 400 });

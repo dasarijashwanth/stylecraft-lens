@@ -17,7 +17,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (!document) return NextResponse.json({ error: "Document not found" }, { status: 404 });
 
     // lib/db/documents.ts has no org/user awareness of its own — ownership
-    // is checked via the parent project, same as the regenerate/export-csv
+    // is checked via the parent project, same as the regenerate/export-xlsx
     // siblings in app/api/documents/gtm/[id]/fields/[fieldId]/.
     const project = await getProject(document.project_id, session.orgId);
     if (!project) return NextResponse.json({ error: "Document not found" }, { status: 404 });

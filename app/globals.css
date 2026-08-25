@@ -711,6 +711,58 @@ h3 {
   color: var(--text-primary);
 }
 
+/* Real bug, confirmed live in the GTM tab: .cinema-glass's re-pin above is
+   correct for text sitting BARE on the glass's own translucent dark
+   background, but it cascades to EVERY descendant, including ones that
+   nest a genuinely opaque, theme-flipping surface of their own (an
+   editable field's bg-surface-1 input, a status chip's bg-surface-3
+   pill — both real, solid backgrounds that already correctly flip
+   light/dark on their own). Those need their TEXT to flip with them too,
+   not stay pinned to cinema-glass's dark-mode value — in light mode that
+   produced near-white text pinned on top of a bg-surface-1 input/
+   bg-surface-3 chip that had itself correctly flipped to a light
+   background, i.e. invisible again, just the opposite polarity of the
+   original bug. Targets Tailwind's own bg-surface-1, bg-surface-2, and
+   bg-surface-3 utility class names directly (including their opacity-
+   modifier variants, e.g. bg-surface-3 with a slash-fraction suffix) so
+   every current and future
+   opaque-surface element automatically gets the correct reset with zero
+   changes needed in the many component files that render inside a glass
+   container — the same reasoning that put the original re-pin on the
+   container class instead of hunting down every text-text-primary usage. */
+.cinema-glass [class*="bg-surface-1"],
+.cinema-glass [class*="bg-surface-2"],
+.cinema-glass [class*="bg-surface-3"],
+.glass-panel [class*="bg-surface-1"],
+.glass-panel [class*="bg-surface-2"],
+.glass-panel [class*="bg-surface-3"],
+.magic-bento-card--glass [class*="bg-surface-1"],
+.magic-bento-card--glass [class*="bg-surface-2"],
+.magic-bento-card--glass [class*="bg-surface-3"] {
+  --text-primary:    #F4F4F5;
+  --text-secondary:  #A1A1AA;
+  --text-muted:      #8B8B96;
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-strong:   rgba(255, 255, 255, 0.14);
+  --accent-text:     #A5B4FC;
+}
+:root[data-theme="light"] .cinema-glass [class*="bg-surface-1"],
+:root[data-theme="light"] .cinema-glass [class*="bg-surface-2"],
+:root[data-theme="light"] .cinema-glass [class*="bg-surface-3"],
+:root[data-theme="light"] .glass-panel [class*="bg-surface-1"],
+:root[data-theme="light"] .glass-panel [class*="bg-surface-2"],
+:root[data-theme="light"] .glass-panel [class*="bg-surface-3"],
+:root[data-theme="light"] .magic-bento-card--glass [class*="bg-surface-1"],
+:root[data-theme="light"] .magic-bento-card--glass [class*="bg-surface-2"],
+:root[data-theme="light"] .magic-bento-card--glass [class*="bg-surface-3"] {
+  --text-primary:    #18181B;
+  --text-secondary:  #4B5563;
+  --text-muted:      #71717A;
+  --border:          rgba(0, 0, 0, 0.08);
+  --border-strong:   rgba(0, 0, 0, 0.14);
+  --accent-text:     #4F46E5;
+}
+
 /* Same dark-mode token re-pin as .cinema-glass above, but with no
    background/blur/border of its own — for page-header text (an h1 title +
    its subtitle) that sits DIRECTLY on the raw BackgroundStage image+scrim,
