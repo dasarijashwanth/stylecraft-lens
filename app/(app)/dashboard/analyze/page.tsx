@@ -621,10 +621,11 @@ export default function AnalyzePage() {
             setMotorBrandedName(p.motorFamily ? p.motorBrandedName || "" : p.motorTech || "");
             setKeyDiff(p.keyDiff || "");
             if (Array.isArray(p.relatedProducts) && p.relatedProducts.length) {
-              const saved = p.relatedProducts as { asin: string; url?: string; addedAt?: string }[];
-              setRelatedProductRows((rows) => rows.map((row, i) => (saved[i] ? { ...EMPTY_RELATED_ROW, input: saved[i].url || saved[i].asin } : row)));
+              const saved = p.relatedProducts as { asin: string | null; url?: string; addedAt?: string }[];
+              setRelatedProductRows((rows) => rows.map((row, i) => (saved[i] ? { ...EMPTY_RELATED_ROW, input: saved[i].url || saved[i].asin || "" } : row)));
               saved.slice(0, 3).forEach((sp, i) => {
-                void resolveRelatedRow(i, sp.url || sp.asin, [], sp.addedAt || null, p.toolType || "");
+                const savedInput = sp.url || sp.asin;
+                if (savedInput) void resolveRelatedRow(i, savedInput, [], sp.addedAt || null, p.toolType || "");
               });
             }
             toast.success(`Loaded specifications from project "${p.name}"`);
@@ -729,11 +730,16 @@ export default function AnalyzePage() {
     }
 
     const asin = resolveAsinLocal(raw);
-    if (!asin) {
-      updateRelatedRow(index, { error: "Enter a valid ASIN or Amazon product URL", asin: null, title: null, brand: null, price: null, image: null, mismatchWarning: null });
+    // Not an ASIN/Amazon URL — still accept it if it's at least a
+    // well-formed URL (any other product/competitor page). The server
+    // preview call below resolves it via a lightweight page-title fetch
+    // instead of Rainforest; only genuinely non-URL garbage input errors
+    // here without ever reaching the network.
+    if (!asin && !/^https?:\/\//i.test(raw.trim())) {
+      updateRelatedRow(index, { error: "Enter a valid ASIN, Amazon product URL, or any other product page URL", asin: null, title: null, brand: null, price: null, image: null, mismatchWarning: null });
       return;
     }
-    if (existingAsins.some((a, i) => i !== index && a === asin)) {
+    if (asin && existingAsins.some((a, i) => i !== index && a === asin)) {
       updateRelatedRow(index, { error: "Already added in another row", asin: null, title: null, brand: null, price: null, image: null, mismatchWarning: null });
       return;
     }
@@ -810,12 +816,15 @@ export default function AnalyzePage() {
   }
 
   // {asin,url,addedAt} triples for the submit body / project pre-fill —
-  // only resolved, non-errored rows count.
-  function resolvedRelatedAsins(): { asin: string; url?: string; addedAt: string }[] {
+  // only resolved, non-errored rows count. asin is null for a non-Amazon
+  // related product (see resolveRelatedRow) — url carries it instead, so
+  // it's required in that case (a resolved external row always has one,
+  // set from the input itself when the preview call succeeded).
+  function resolvedRelatedAsins(): { asin: string | null; url?: string; addedAt: string }[] {
     return relatedProductRows
-      .filter((r) => r.asin && !r.error)
+      .filter((r) => (r.asin || r.title) && !r.error)
       .map((r) => ({
-        asin: r.asin!,
+        asin: r.asin,
         url: /^https?:\/\//i.test(r.input.trim()) ? r.input.trim() : undefined,
         addedAt: r.addedAt || new Date().toISOString(),
       }));
@@ -1370,7 +1379,7 @@ export default function AnalyzePage() {
               <div>
                 <label className="font-semibold text-text-primary block">Related Products</label>
                 <p className="text-[10px] text-text-muted">
-                  Paste Amazon URLs of up to 3 products similar to yours. These help Claude find nearby, comparable competitors — and they&apos;ll appear in the analysis alongside the discovered competitors.
+                  Paste Amazon URLs (or any other product page URL) of up to 3 products similar to yours. These help Claude find nearby, comparable competitors — and they&apos;ll appear in the analysis alongside the discovered competitors. Non-Amazon links are shown for reference and used as discovery context, but won&apos;t carry price/rating data.
                 </p>
               </div>
               {relatedProductRows.map((row, i) => (
@@ -1381,20 +1390,22 @@ export default function AnalyzePage() {
                       value={row.input}
                       onChange={(e) => updateRelatedRow(i, { input: e.target.value, error: null, mismatchWarning: null })}
                       onBlur={() => handleRelatedProductBlur(i)}
-                      placeholder={`Related product ${i + 1} — Amazon URL or ASIN (optional)`}
+                      placeholder={`Related product ${i + 1} — Amazon URL, ASIN, or any other product page URL (optional)`}
                       className="flex-1 px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-sm"
                     />
                     {row.loading && <span className="text-[10px] text-text-muted whitespace-nowrap">Checking…</span>}
                   </div>
                   {row.error && <p className="text-[10px] text-danger">{row.error}</p>}
                   {row.mismatchWarning && <p className="text-[10px] text-warning">{row.mismatchWarning}</p>}
-                  {row.asin && !row.error && (
+                  {(row.asin || row.title) && !row.error && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <div className="flex items-center gap-2 px-3 py-2 bg-surface-1 border border-border rounded-lg">
                       {row.image && <img src={row.image} alt="" className="w-8 h-8 object-contain rounded flex-shrink-0" />}
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-medium text-text-primary truncate">{row.title}</p>
-                        <p className="text-[10px] text-text-muted">{[row.brand, row.price].filter(Boolean).join(" · ")}</p>
+                        <p className="text-[10px] text-text-muted">
+                          {row.asin ? [row.brand, row.price].filter(Boolean).join(" · ") : `${row.brand || "external reference"} · no price/rating data`}
+                        </p>
                       </div>
                     </div>
                   )}

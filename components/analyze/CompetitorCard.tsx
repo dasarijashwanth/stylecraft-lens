@@ -51,7 +51,13 @@ interface Competitor {
   // as a real competitor (counts, PDF, exports).
   empty_slot?:        boolean;
   reason?:            string;
-  asin:               string;
+  // null for a non-Amazon related product (Related Products field accepts
+  // any product page URL now, not just Amazon) — see external/url below.
+  asin:               string | null;
+  // Set alongside a null asin — the actual URL the user pasted, since
+  // there's no /dp/{asin} link to construct for a non-Amazon page.
+  url?:               string | null;
+  external?:          boolean;
   price:              string;
   rating:             string;
   review_count:       string;
@@ -500,8 +506,8 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
   const { data: live, loading, error } = useAmazonProduct(c.verified_by_rainforest === undefined ? c.asin : null);
 
   const isValidAsin = /^[A-Z0-9]{10}$/i.test(c.asin ?? "");
-  const asinPathSegment = isValidAsin ? c.asin.toUpperCase() : "NONE";
-  const amazonUrl = isValidAsin ? `https://www.amazon.com/dp/${c.asin.toUpperCase()}` : null;
+  const asinPathSegment = isValidAsin && c.asin ? c.asin.toUpperCase() : "NONE";
+  const amazonUrl = isValidAsin && c.asin ? `https://www.amazon.com/dp/${c.asin.toUpperCase()}` : null;
 
   async function loadFeatures(refresh = false) {
     setFeaturesState({ status: "loading" });
@@ -644,7 +650,10 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || "Failed to replace related product");
-        onReplaced?.(c.asin, data.relatedProduct, false);
+        // Non-null: the pencil button that opens this editor is hidden for
+        // a related product with no asin (see its render condition above),
+        // so this branch is only ever reachable when c.asin is real.
+        onReplaced?.(c.asin!, data.relatedProduct, false);
       } else {
         const res = await fetch(`/api/analyses/${analysisId}/competitors/replace`, {
           method: "POST",
@@ -653,7 +662,9 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || "Failed to replace competitor");
-        onReplaced?.(c.asin, data.competitor, data.synthesisPossiblyStale);
+        // Non-null: a discovered (non-related) competitor always has a real
+        // asin by construction — only Related Products can ever be null.
+        onReplaced?.(c.asin!, data.competitor, data.synthesisPossiblyStale);
       }
       resetAsinEdit();
     } catch (err: any) {
@@ -766,10 +777,20 @@ export function CompetitorCard({ competitor: c, onFeaturesResolved, analysisId, 
               <span>View on Amazon</span>
               <ExternalLink className="w-3 h-3" />
             </a>
+          ) : c.external && c.url ? (
+            // Non-Amazon related product (Related Products field now
+            // accepts any product page URL, not just Amazon) — no ASIN, so
+            // link out to wherever the user actually pasted from instead of
+            // the misleading "ASIN unavailable" (this isn't unavailable,
+            // it just isn't an Amazon listing).
+            <a href={c.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[10px] font-semibold text-accent hover:underline" title={`View ${c.name} on ${c.brand || "the original site"}`}>
+              <span>View original page</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
           ) : (
             <span className="text-[10px] text-text-muted italic">ASIN unavailable</span>
           )}
-          {analysisId && !editingAsin && !removePanelOpen && (
+          {analysisId && !editingAsin && !removePanelOpen && !(isRelated && !c.asin) && (
             <button
               type="button"
               onClick={() => { setEditingAsin(true); setAsinInput(c.asin || ""); }}

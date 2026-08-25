@@ -132,10 +132,16 @@ export const AnalysisFormSchema = z.object({
   // related_products column (supabase_schema.sql Section 51), resolved by
   // lib/analysisEngine.ts's resolveRelatedProducts during Phase 0.
   relatedAsins: z.array(z.object({
-    asin: z.string().regex(/^[A-Z0-9]{10}$/i, "ASIN must be exactly 10 letters/digits"),
+    // Null for a non-Amazon related product (any other product page URL) —
+    // asin.nullable() rather than .optional() so a caller must say so
+    // explicitly, not just omit the field. url is then required (refine
+    // below) since it's the only identifier resolveRelatedProducts has to
+    // go on for one of these.
+    asin: z.string().regex(/^[A-Z0-9]{10}$/i, "ASIN must be exactly 10 letters/digits").nullable(),
     url: z.string().url().optional(),
     addedAt: z.string(),
-  })).max(3, "Up to 3 related products").optional(),
+  }).refine(r => r.asin !== null || !!r.url, "A non-Amazon related product must include its URL"))
+    .max(3, "Up to 3 related products").optional(),
 });
 
 // Same ASIN format check as ProjectSchema/NewProjectSchema's own asin

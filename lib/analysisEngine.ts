@@ -17,7 +17,7 @@ import { assertToolType, buildToolTypePromptGuard, getToolTypeLabel } from "./to
 import type { ToolType } from "./tool-type-taxonomy";
 import { listToolTypes } from "./db/tool-types";
 import type { ToolTypeRow } from "./db/tool-types";
-import { finalizeCitations } from "./citations";
+import { finalizeCitations, fetchPageMeta } from "./citations";
 import { insertProvenance } from "./db/section-provenance";
 import { resolveCacheKey } from "./product-cache-key";
 import { buildPricingProvenanceTier } from "./section-provenance";
@@ -197,7 +197,10 @@ export async function seedKnownGoodCandidates(
 // competitor object (same fields mergeRainforestProductIntoCompetitor
 // already produces) plus a few extra provenance/eligibility fields.
 export interface ResolvedRelatedProduct {
-  asin: string;
+  // null for a non-Amazon related product (any other product/competitor
+  // page URL) — no Rainforest data exists for it, only whatever the page
+  // itself declared (see the `external` branch in resolveRelatedProducts).
+  asin: string | null;
   url?: string | null;
   addedAt: string;
   name: string;
@@ -205,10 +208,16 @@ export interface ResolvedRelatedProduct {
   toolTypeMismatch: boolean;
   toolTypeMismatchLabel: string | null;
   // false for a cross-tool-type paste (e.g. a clipper pasted into a
-  // trimmer analysis) — still resolved/displayed in the Related Products
-  // section, but never pushed into the discovery pool at all.
+  // trimmer analysis) OR a non-Amazon external URL (no structured product
+  // data to score/motor-match against) — still resolved/displayed in the
+  // Related Products section, but never pushed into the discovery pool at all.
   eligibleForPoolSeeding: boolean;
   resolutionFailed?: boolean;
+  // True for a related product resolved from a non-Amazon URL — no asin,
+  // no Rainforest price/rating/image; name/brand come from the page's own
+  // title/hostname instead. Lets the UI/PDF render a "View original page"
+  // link instead of an Amazon listing link.
+  external?: boolean;
 }
 
 // Resolves each related ASIN into a full Rainforest payload + motor/heat-
@@ -221,7 +230,7 @@ export interface ResolvedRelatedProduct {
 // unresolved (resolutionFailed: true), it never blocks Phase 0 from
 // completing, matching this file's fail-open convention throughout.
 export async function resolveRelatedProducts(
-  relatedAsins: { asin: string; url?: string; addedAt: string }[] | undefined,
+  relatedAsins: { asin: string | null; url?: string | null; addedAt: string }[] | undefined,
   card: IdentityCard,
   toolTypes: ToolTypeRow[],
   routeStartTime: number
@@ -237,6 +246,35 @@ export async function resolveRelatedProducts(
   ]);
 
   return mapWithConcurrency(relatedAsins.slice(0, 3), 3, async (entry): Promise<ResolvedRelatedProduct> => {
+    // Non-Amazon related product — no ASIN was ever resolvable for it (see
+    // the analyze form's own preview call), so there's no Rainforest data
+    // and no motor/tool-type extraction possible. Re-fetch its page
+    // title/text fresh here (never trust the client-cached preview for
+    // what actually gets analyzed) purely for discovery-context grounding
+    // and display; never eligible for pool-seeding — there's no structured
+    // product data to score it against real discovered competitors with.
+    if (!entry.asin) {
+      if (!entry.url) {
+        return {
+          asin: null, url: null, addedAt: entry.addedAt, name: "Unresolved related product",
+          toolTypeMismatch: false, toolTypeMismatchLabel: null, eligibleForPoolSeeding: false, resolutionFailed: true,
+        };
+      }
+      const meta = await withDeadline(fetchPageMeta(entry.url), RAINFOREST_CANDIDATE_DEADLINE_MS, null);
+      let hostname: string | null = null;
+      try { hostname = new URL(entry.url).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+      if (!meta || !meta.title) {
+        return {
+          asin: null, url: entry.url, addedAt: entry.addedAt, name: hostname || entry.url,
+          toolTypeMismatch: false, toolTypeMismatchLabel: null, eligibleForPoolSeeding: false, resolutionFailed: true, external: true,
+        };
+      }
+      return {
+        asin: null, url: entry.url, addedAt: entry.addedAt, name: meta.title, brand: hostname,
+        toolTypeMismatch: false, toolTypeMismatchLabel: null, eligibleForPoolSeeding: false, resolutionFailed: false, external: true,
+      };
+    }
+
     const budgetLeft = remainingRainforestBudget(routeStartTime);
     const product = budgetLeft > 0
       ? await withDeadline(getAmazonProduct(entry.asin), Math.min(RAINFOREST_CANDIDATE_DEADLINE_MS, budgetLeft), null)
@@ -314,7 +352,11 @@ export async function searchRelatedProductNeighbors(
   const eligible = relatedProducts.filter(rp => rp.eligibleForPoolSeeding && !rp.resolutionFailed);
   if (!eligible.length) return [];
 
-  const seenAsins = new Set<string>(eligible.map(rp => rp.asin));
+  // Every `eligible` entry has a real asin at runtime — only an
+  // Amazon-resolved related product is ever eligibleForPoolSeeding:true (an
+  // external/no-asin one is always false, see resolveRelatedProducts) —
+  // filter(Boolean) here is just to satisfy the now-nullable asin type.
+  const seenAsins = new Set<string>(eligible.map(rp => rp.asin).filter((a): a is string => !!a));
   const collected: any[] = [];
 
   for (const rp of eligible) {
@@ -444,7 +486,7 @@ export interface AnalysisContext {
   // motor-extraction result (resolveRelatedProducts, below) lives in its
   // own analyses.related_products column, resolved once in Phase 0 and
   // read fresh by every later phase — never re-derived from this raw list.
-  relatedAsins?: { asin: string; url?: string; addedAt: string }[];
+  relatedAsins?: { asin: string | null; url?: string; addedAt: string }[];
 }
 
 // Snapshotted onto the phase1/phase2 result alongside matching_weights
@@ -4178,17 +4220,26 @@ export async function replaceRelatedProduct(analysisId: string, oldAsin: string,
   if (idx < 0) throw new Error(`No related product with ASIN "${oldAsin}" found on this analysis`);
 
   const newAsin = resolveAsinFromInput(newAsinOrUrl);
-  if (!newAsin) throw new Error("Could not resolve an ASIN from that input");
+  const trimmedInput = newAsinOrUrl.trim();
+  // Not Amazon-resolvable — same "any other product page URL is still a
+  // valid related product" allowance as the analyze form's own preview/
+  // resolveRelatedProducts, just reached from the "fix a mispaste" swap
+  // flow instead of the initial form.
+  if (!newAsin && !/^https?:\/\//i.test(trimmedInput)) {
+    throw new Error("Could not resolve an ASIN from that input, and it isn't a URL either — enter an ASIN, Amazon URL, or any other product page URL");
+  }
 
   const toolTypes = await listToolTypes();
   const [resolved] = await resolveRelatedProducts(
-    [{ asin: newAsin, url: /^https?:\/\//i.test(newAsinOrUrl) ? newAsinOrUrl : (existing[idx].url ?? undefined), addedAt: existing[idx].addedAt }],
+    [{ asin: newAsin, url: newAsin ? (/^https?:\/\//i.test(trimmedInput) ? trimmedInput : (existing[idx].url ?? undefined)) : trimmedInput, addedAt: existing[idx].addedAt }],
     identity,
     toolTypes,
     Date.now()
   );
   // Same wording fix as replaceCompetitor above, same reason.
-  if (!resolved || resolved.resolutionFailed) throw new Error(`Could not fetch a real Amazon product for ASIN "${newAsin}" — this could mean the ASIN is wrong, or that Amazon/Rainforest data is temporarily unavailable. Double-check the ASIN and try again in a moment.`);
+  if (!resolved || resolved.resolutionFailed) throw new Error(newAsin
+    ? `Could not fetch a real Amazon product for ASIN "${newAsin}" — this could mean the ASIN is wrong, or that Amazon/Rainforest data is temporarily unavailable. Double-check the ASIN and try again in a moment.`
+    : `Could not load that page — check the URL and try again in a moment.`);
 
   const updated = [...existing];
   updated[idx] = resolved;

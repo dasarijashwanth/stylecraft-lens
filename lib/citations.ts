@@ -46,6 +46,30 @@ export async function fetchPageText(url: string): Promise<string | null> {
   }
 }
 
+// Same fetch as fetchPageText but also grabs a human-readable title (for a
+// non-Amazon "Related Products" URL — lib/analysisEngine.ts's
+// resolveRelatedProducts, and its own preview route — where there's no
+// Rainforest product title available, only whatever the page itself
+// declares). A single request, not a second fetchPageText call, so a
+// caller needing both never pays for the page twice.
+export async function fetchPageMeta(url: string): Promise<{ title: string | null; text: string | null } | null> {
+  try {
+    const res = await safeFetch(url, {
+      headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const title = ($('meta[property="og:title"]').attr("content") || $("title").first().text() || "").trim() || null;
+    $("script, style, noscript, template, svg").remove();
+    const text = $("body").text().replace(/\s+/g, " ").trim() || null;
+    return { title, text };
+  } catch {
+    return null;
+  }
+}
+
 // Fetches every distinct cited URL in parallel (bounded — a runaway claim
 // list citing dozens of unique URLs would blow the request's time budget)
 // so verifyClaims below has real, independently-fetched text to check

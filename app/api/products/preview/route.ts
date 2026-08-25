@@ -5,6 +5,15 @@ import { resolveAsinFromInput } from "@/lib/analysisEngine";
 import { resolveToolType, assertToolType, getToolTypeLabel } from "@/lib/tool-type-taxonomy";
 import { listToolTypes } from "@/lib/db/tool-types";
 import { RelatedProductPreviewSchema } from "@/lib/validations";
+import { fetchPageMeta } from "@/lib/citations";
+
+function safeHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
 
 // Related Products' per-row preview (analyze form's "Related Products"
 // field, next to Positioning Context) — unlike the analysis-scoped
@@ -29,7 +38,29 @@ export async function POST(request: Request) {
 
     const asin = resolveAsinFromInput(validation.data.asinOrUrl);
     if (!asin) {
-      return NextResponse.json({ error: "VALIDATION_FAILED", message: "Enter a valid ASIN (10 letters/digits) or an Amazon product URL" }, { status: 400 });
+      // Not Amazon-resolvable — but any other real product/competitor page
+      // URL is still useful as a "related product" reference (discovery
+      // context for the AI, shown in the results), it just can't carry
+      // Rainforest-sourced price/rating/image data the way an Amazon pick
+      // can. Fetch a lightweight title/text preview instead of rejecting it
+      // outright; only truly non-URL garbage input still errors below.
+      const hostname = safeHostname(validation.data.asinOrUrl.trim());
+      if (!hostname) {
+        return NextResponse.json({ error: "VALIDATION_FAILED", message: "Enter a valid ASIN, Amazon product URL, or any other product page URL" }, { status: 400 });
+      }
+      const meta = await fetchPageMeta(validation.data.asinOrUrl.trim());
+      if (!meta || !meta.title) {
+        return NextResponse.json({ error: "NOT_FOUND", message: `Could not load that page (${hostname}) — check the URL and try again` }, { status: 404 });
+      }
+      return NextResponse.json({
+        asin: null,
+        title: meta.title,
+        brand: hostname,
+        price: null,
+        image: null,
+        external: true,
+        toolTypeMismatchWarning: null,
+      });
     }
 
     const product = await getAmazonProduct(asin);
