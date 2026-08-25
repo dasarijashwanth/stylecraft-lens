@@ -1642,6 +1642,7 @@ const SOURCE_GROUP_LABELS: Record<string, string> = {
   sales_kit: "product data",
   tds: "product data",
   active_report: "product data",
+  competitive_analysis: "product data",
   multiple: "product data",
   amazon: "product data",
   product_snapshot: "product data",
