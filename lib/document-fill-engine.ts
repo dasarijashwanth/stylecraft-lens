@@ -49,6 +49,20 @@ function isBlank(answer: string | null | undefined): boolean {
   return !isRealAnswer(answer) || isAwaitingInternalInput(answer) || isNotDeterminable(answer);
 }
 
+// A field currently sourced from "web" (the AI's own web-search fallback —
+// the least-authoritative tier this pipeline ever writes) is eligible for
+// replacement here too, not just a truly blank one. Uploading a new source
+// doc or reference link should let genuinely source-grounded content win
+// over a web guess made before that source existed — "pull from sources
+// first, web/AI only as a last resort" applies on refill, not just on the
+// very first generation. Manual edits and every other, more-authoritative
+// source tier are left alone; this only ever widens what counts as
+// "wants regeneration," never touches anything already better-grounded.
+function wantsSourceReplacement(current: { answer?: string | null; source?: string | null } | undefined): boolean {
+  if (!current || UNTOUCHABLE_SOURCES.has(current.source || "")) return false;
+  return isBlank(current.answer) || current.source === "web";
+}
+
 async function buildProjectSources(project: any, userId: string): Promise<GtmSources> {
   const [salesKit, tds, reports] = await Promise.all([
     getLatestOutput(project.id, "sales_kit"),
@@ -163,8 +177,8 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
   // ---- Pass 2: WRITTEN/narrative fields (Marketing Direction + Product FAQ) ----
   const marketingSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Marketing Direction" && f.kind === "written");
   const faqSchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Product FAQ" && f.kind === "written");
-  const wantsMarketing = marketingSchema.some(f => isBlank(fieldsById.get(f.id)?.answer));
-  const wantsFaqs = faqSchema.some(f => isBlank(fieldsById.get(f.id)?.answer));
+  const wantsMarketing = marketingSchema.some(f => wantsSourceReplacement(fieldsById.get(f.id)));
+  const wantsFaqs = faqSchema.some(f => wantsSourceReplacement(fieldsById.get(f.id)));
 
   const regeneratedIds: string[] = [];
   const referenceLinksContext = await getReferenceLinksContext(project.referenceUrls);
@@ -185,7 +199,7 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
       const faqFields = await generateProductFaqs(sources, gtmFieldsFlat, voiceBlock, tdsGroundingBlock);
       for (const schemaField of faqSchema) {
         const current = fieldsById.get(schemaField.id);
-        if (!current || !isBlank(current.answer) || UNTOUCHABLE_SOURCES.has(current.source || "")) continue;
+        if (!wantsSourceReplacement(current)) continue;
         const candidate = faqFields[schemaField.id];
         if (!candidate || !isRealAnswer(candidate.answer)) continue;
         await updateDocumentField(document.id, schemaField.id, candidate.answer, actorEmail, {
@@ -208,7 +222,7 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
       );
       for (const schemaField of marketingSchema) {
         const current = fieldsById.get(schemaField.id);
-        if (!current || !isBlank(current.answer) || UNTOUCHABLE_SOURCES.has(current.source || "")) continue;
+        if (!wantsSourceReplacement(current)) continue;
         const candidate = marketingFields[schemaField.id];
         if (!candidate || !isRealAnswer(candidate.answer)) continue;
         await updateDocumentField(document.id, schemaField.id, candidate.answer, actorEmail, {
@@ -221,7 +235,7 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
 
   // ---- Pass 3: Box Only section ----
   const boxOnlySchema = GTM_FIELD_SCHEMA.filter(f => f.section === "Box Only");
-  const wantsBoxOnly = boxOnlySchema.some(f => isBlank(fieldsById.get(f.id)?.answer));
+  const wantsBoxOnly = boxOnlySchema.some(f => wantsSourceReplacement(fieldsById.get(f.id)));
   const overBudgetAfterPass2 = Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS;
   if (overBudgetAfterPass2 && wantsBoxOnly) {
     console.warn(`[document-fill-engine] Skipping Box Only regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget. These fields stay blank until the next fill run.`);
@@ -236,7 +250,7 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
 
     for (const schemaField of boxOnlySchema) {
       const current = fieldsById.get(schemaField.id);
-      if (!current || !isBlank(current.answer) || UNTOUCHABLE_SOURCES.has(current.source || "")) continue;
+      if (!wantsSourceReplacement(current)) continue;
       const candidate = (boxFieldsMap as any)[schemaField.id];
       if (!candidate || candidate.source === "existing" || !isRealAnswer(candidate.answer)) continue;
       await updateDocumentField(document.id, schemaField.id, candidate.answer, actorEmail, {
@@ -279,7 +293,7 @@ export async function refillContentFormFromSources(projectId: string, orgId: str
   const fields = await getDocumentFields(document.id);
   const fieldsById = new Map(fields.map(f => [f.field_id, f]));
 
-  const wantsFill = CONTENT_FORM_SCHEMA.some(f => isBlank(fieldsById.get(f.id)?.answer) && !UNTOUCHABLE_SOURCES.has(fieldsById.get(f.id)?.source || ""));
+  const wantsFill = CONTENT_FORM_SCHEMA.some(f => wantsSourceReplacement(fieldsById.get(f.id)));
   if (!wantsFill) {
     return { filled: 0, regenerated: 0, stillAwaiting: fields.filter(f => isBlank(f.answer)).length, changedFieldIds: [], factsRetried };
   }
@@ -292,9 +306,14 @@ export async function refillContentFormFromSources(projectId: string, orgId: str
   const matchedCatalogProduct = matchCatalogProductByName(project.productName, catalogProducts);
   const brand = await resolveBrandForProduct(project.productName);
   const voiceBlock = buildVoiceBlock(await getActiveVoiceGuide(brand));
-  const isPreLaunch = !project.productUrl && !project.asin;
+  const referenceLinksContext = await getReferenceLinksContext(project.referenceUrls);
+  // Reference Links count as real web presence — same reasoning as
+  // refillGtmFromSources above; this isPreLaunch previously omitted them,
+  // an inconsistency noted but not yet fixed.
+  const isPreLaunch = !project.productUrl && !project.asin && !referenceLinksContext.hasLinks;
   const uploadedTdsContext = await getUploadedTdsContext(projectId);
-  const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch);
+  const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch)
+    + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "");
 
   if (Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS) {
     console.warn(`[document-fill-engine] Skipping Content Form regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget after stale-extraction retries. Fields stay blank until the next fill run.`);
@@ -306,7 +325,7 @@ export async function refillContentFormFromSources(projectId: string, orgId: str
   const regeneratedIds: string[] = [];
   for (const schemaField of CONTENT_FORM_SCHEMA) {
     const current = fieldsById.get(schemaField.id);
-    if (!current || !isBlank(current.answer) || UNTOUCHABLE_SOURCES.has(current.source || "")) continue;
+    if (!wantsSourceReplacement(current)) continue;
     const candidate = generated[schemaField.id];
     if (!candidate || !isRealAnswer(candidate.answer)) continue;
     await updateDocumentField(document.id, schemaField.id, candidate.answer, actorEmail, {
