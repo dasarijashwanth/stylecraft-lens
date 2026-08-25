@@ -195,7 +195,11 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
       }
     }
 
-    if (wantsMarketing) {
+    const overBudgetBeforeMarketing = Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS;
+    if (overBudgetBeforeMarketing && wantsMarketing) {
+      console.warn(`[document-fill-engine] Skipping Marketing Direction regeneration — FAQ generation alone pushed past the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget. These fields stay blank until the next fill run.`);
+    }
+    if (!overBudgetBeforeMarketing && wantsMarketing) {
       const refreshedFlat = wantsFaqs ? flattenDocumentFields(await getDocumentFields(document.id)) : gtmFieldsFlat;
       const matchedCatalogProduct = matchCatalogProductByName(project.productName, catalogProducts);
       const marketingFields = await generateMarketingDirection(

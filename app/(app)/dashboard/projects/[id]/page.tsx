@@ -2059,8 +2059,8 @@ function ProductKnowledgeSection({
 
   return (
     <div className={`border border-border rounded-xl overflow-hidden ${isGlass ? "cinema-glass" : ""}`}>
-      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border flex-wrap gap-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Product Knowledge</span>
           {hasDocument && (
             <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
@@ -2087,17 +2087,17 @@ function ProductKnowledgeSection({
           )}
         </div>
         {hasDocument && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <select
               value={projectGtmTemplateOverride || "auto"}
               onChange={e => handleGtmTemplateOverrideChange(e.target.value)}
               disabled={overrideSaving}
               title="Which workbook template Download XLSX / Save to Drive uses — Auto follows the product's tool type"
-              className="px-2 py-1.5 border border-border hover:border-border-strong bg-surface-2 text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+              className="px-1.5 py-1 border border-border hover:border-border-strong bg-surface-2 text-text-secondary text-[10px] font-bold rounded-lg transition-colors disabled:opacity-50"
             >
-              <option value="auto">Export using: Auto</option>
-              <option value="barber">Export using: Barber</option>
-              <option value="beauty">Export using: Beauty</option>
+              <option value="auto">Export: Auto</option>
+              <option value="barber">Export: Barber</option>
+              <option value="beauty">Export: Beauty</option>
             </select>
             {completedCount < visibleSchema.length && (
               <button
@@ -2105,31 +2105,31 @@ function ProductKnowledgeSection({
                 onClick={handleFillRemaining}
                 disabled={fillingAll}
                 title="Re-run AI web search on every N/A or empty field"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-60"
+                className="flex items-center gap-1 px-2 py-1 bg-accent hover:bg-accent-hover text-white text-[10px] font-bold rounded-lg transition-colors disabled:opacity-60"
               >
-                {fillingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                <span>{fillingAll && fillProgress ? `Filling ${fillProgress.done}/${fillProgress.total}…` : "Fill remaining fields"}</span>
+                {fillingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                <span>{fillingAll && fillProgress ? `Filling ${fillProgress.done}/${fillProgress.total}…` : "Fill remaining"}</span>
               </button>
             )}
             <a
               href={`/api/documents/gtm/${documentId}/export-xlsx`}
               title="Official 12-tab GTM workbook — Product Knowledge, BOX ONLY, Product FAQ, Marketing Direction, and Final Copy filled; every other tab untouched"
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors"
+              className="flex items-center gap-1 px-2 py-1 border border-border hover:border-border-strong text-text-secondary text-[10px] font-bold rounded-lg transition-colors"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Download XLSX</span>
+              <Download className="w-3 h-3" />
+              <span>XLSX</span>
             </a>
-            {documentId && <SaveToDriveButton docType="gtm-xlsx" id={documentId} initialDriveUrl={xlsxDriveUrl} />}
+            {documentId && <SaveToDriveButton docType="gtm-xlsx" id={documentId} initialDriveUrl={xlsxDriveUrl} compact />}
             {documentId && (
               <button
                 type="button"
                 onClick={handleRefillFromSources}
                 disabled={refilling}
                 title="Retries extraction on any uploaded source doc that hasn't successfully produced facts yet, then re-syncs spec fields from all of them — never touches a field you've edited by hand"
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center gap-1 px-2 py-1 border border-border hover:border-border-strong text-text-secondary text-[10px] font-bold rounded-lg transition-colors disabled:opacity-50"
               >
-                {refilling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                <span>Fill blanks from sources</span>
+                {refilling ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                <span>Fill from sources</span>
               </button>
             )}
           </div>
@@ -2661,8 +2661,8 @@ function ContentFormSection({
 
   return (
     <div className={`border border-border rounded-xl overflow-hidden ${isGlass ? "cinema-glass" : ""}`}>
-      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-3/30 border-b border-border flex-wrap gap-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Content Form</span>
           {hasDocument && (
             <span className="text-[10px] font-mono text-text-secondary px-1.5 py-0.5 rounded bg-surface-3 border border-border">
