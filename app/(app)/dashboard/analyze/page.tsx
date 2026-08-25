@@ -171,6 +171,12 @@ export default function AnalyzePage() {
   const [relatedProductRows, setRelatedProductRows] = useState<RelatedProductRow[]>([
     { ...EMPTY_RELATED_ROW }, { ...EMPTY_RELATED_ROW }, { ...EMPTY_RELATED_ROW },
   ]);
+  // Predecessor Product Reference — a name or link to an existing/prior
+  // StyleCraft product this one is a modified version of. Resolved server-
+  // side at GTM generation time (lib/predecessor-product-context.ts) as a
+  // fallback-only grounding source, not previewed here the way Related
+  // Products are — no client round-trip needed for a plain text field.
+  const [predecessorRef, setPredecessorRef] = useState("");
   const [motorFamilies, setMotorFamilies] = useState<MotorFamilyOption[]>([]);
   const [heatTechFamilies, setHeatTechFamilies] = useState<HeatTechFamilyOption[]>([]);
   const [toolTypes, setToolTypes] = useState<ToolTypeRow[]>([]);
@@ -620,6 +626,7 @@ export default function AnalyzePage() {
             // canonical select once motorFamilies has loaded.
             setMotorBrandedName(p.motorFamily ? p.motorBrandedName || "" : p.motorTech || "");
             setKeyDiff(p.keyDiff || "");
+            setPredecessorRef(p.predecessorRef || "");
             if (Array.isArray(p.relatedProducts) && p.relatedProducts.length) {
               const saved = p.relatedProducts as { asin: string | null; url?: string; addedAt?: string }[];
               setRelatedProductRows((rows) => rows.map((row, i) => (saved[i] ? { ...EMPTY_RELATED_ROW, input: saved[i].url || saved[i].asin || "" } : row)));
@@ -862,6 +869,7 @@ export default function AnalyzePage() {
             // columns the pre-fill effect reads directly (p.companyContext,
             // not p.savedDefaults.companyContext).
             relatedProducts: resolvedRelatedAsins(),
+            predecessorRef: predecessorRef.trim() || null,
           })
         }).catch(() => {});
       }
@@ -905,6 +913,7 @@ export default function AnalyzePage() {
           pricePoint: pricePoint.trim() || undefined,
           catalogProductId: catalogProductId || undefined,
           relatedAsins: resolvedRelatedAsins().length ? resolvedRelatedAsins() : undefined,
+          predecessorRef: predecessorRef.trim() || undefined,
           weightOverride: showWeightOverride && weightOverrideSum > 0 ? {
             motor: Number(weightOverrideInputs.motor) || 0,
             price: Number(weightOverrideInputs.price) || 0,
@@ -1411,6 +1420,20 @@ export default function AnalyzePage() {
                   )}
                 </div>
               ))}
+            </div>
+
+            <div className="space-y-1 pt-3 border-t border-border">
+              <label className="font-semibold text-text-primary block">Based on an existing product (optional)</label>
+              <p className="text-[10px] text-text-muted">
+                If this is a modified/refreshed version of a product you already sell, paste its name or a link (Amazon or any other product page). We&apos;ll use it to fill in GTM fields your other sources don&apos;t cover — never to override this product&apos;s own real, different specs.
+              </p>
+              <input
+                type="text"
+                value={predecessorRef}
+                onChange={(e) => setPredecessorRef(e.target.value)}
+                placeholder="e.g. an existing StyleCraft product name, or an Amazon/product URL"
+                className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary outline-none focus:border-accent text-sm"
+              />
             </div>
           </div>
 

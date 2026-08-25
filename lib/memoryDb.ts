@@ -67,6 +67,10 @@ export interface MockProject {
   // brand sites) checked first for GTM/Content Form generation, ahead of the
   // AI's own web search. See lib/gtm-reference-links.ts.
   referenceUrls?: string[];
+  // Predecessor Product Reference — a name or link to an existing/prior
+  // product this one is a modified version of, used as fallback-only GTM
+  // grounding. See lib/predecessor-product-context.ts.
+  predecessorRef?: string | null;
 }
 
 export interface MockAnalysis {

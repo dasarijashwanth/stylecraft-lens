@@ -43,11 +43,15 @@ interface ProjectInput {
   // only, so a re-run from this project can pre-fill the same 3 rows. Never
   // the enriched Rainforest/motor data (see lib/db/analyses.ts's
   // related_products) — that's always refetched fresh per analysis run.
-  relatedProducts?: { asin: string; url?: string; addedAt: string }[];
+  relatedProducts?: { asin: string | null; url?: string; addedAt: string }[];
   // Reference Links — up to 5 URLs (product pages, competitor/brand sites)
   // entered on the Sources tab, checked first for GTM/Content Form
   // generation ahead of the AI's own web search. See lib/gtm-reference-links.ts.
   referenceUrls?: string[];
+  // Predecessor Product Reference (analyze form field, next to Related
+  // Products) — a name or link to an existing/prior product this one is a
+  // modified version of. See lib/predecessor-product-context.ts.
+  predecessorRef?: string | null;
 }
 
 // Supabase columns are snake_case, but the rest of this app (Prisma models,
@@ -76,6 +80,7 @@ function toProjectShape(row: any) {
     sku: row.sku,
     relatedProducts: row.related_products ?? [],
     referenceUrls: row.reference_urls ?? [],
+    predecessorRef: row.predecessor_ref ?? null,
     // GTM Multi-Template work — null (default) auto-routes the workbook
     // export/schema to the tool type's own family; 'barber'/'beauty' pins
     // it for a mixed-collection product. See lib/gtm-field-schema.ts's
@@ -120,6 +125,7 @@ export async function createProject(userId: string, orgId: string, data: Project
         sku: data.sku ?? null,
         related_products: data.relatedProducts ?? [],
         reference_urls: data.referenceUrls ?? [],
+        predecessor_ref: data.predecessorRef ?? null,
         last_used_at: new Date().toISOString(),
       })
       .select()
@@ -171,6 +177,7 @@ export async function createProject(userId: string, orgId: string, data: Project
       sku: data.sku || null,
       relatedProducts: data.relatedProducts ?? [],
       referenceUrls: data.referenceUrls ?? [],
+      predecessorRef: data.predecessorRef ?? null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -284,6 +291,7 @@ const UPDATABLE_FIELDS: Record<string, string> = {
   sku: "sku",
   relatedProducts: "related_products",
   referenceUrls: "reference_urls",
+  predecessorRef: "predecessor_ref",
   gtmTemplateOverride: "gtm_template_override",
   savedDefaults: "saved_defaults",
   latestAnalysisId: "latest_analysis_id",

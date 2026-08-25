@@ -60,6 +60,11 @@ export interface ProjectRecord {
   gtmTemplateOverride?: string | null;
   // Reference Links — see lib/gtm-reference-links.ts.
   referenceUrls?: string[] | null;
+  // Predecessor Product Reference — see lib/predecessor-product-context.ts.
+  predecessorRef?: string | null;
+  // org_id — needed to resolve predecessorRef Tier 1 (an existing project
+  // in this same org with a matching name and a real GTM document).
+  orgId?: string | null;
 }
 
 // Core Consumer's 3 fixed options map 1:1 onto the project's own

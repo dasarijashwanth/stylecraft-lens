@@ -16,6 +16,7 @@ import { GTM_FIELD_SCHEMA } from "@/lib/gtm-field-schema";
 import { deriveFieldsFromSources } from "@/lib/gtm-derive";
 import { getUploadedTdsContext, applyUploadedTdsFacts, buildTdsGroundingBlock } from "@/lib/gtm-uploaded-tds";
 import { getReferenceLinksContext, buildReferenceLinksPromptBlock } from "@/lib/gtm-reference-links";
+import { getPredecessorProductContext } from "@/lib/predecessor-product-context";
 import type { GtmSources } from "@/lib/gtm-generate";
 import { listActiveDocsForProject } from "@/lib/db/uploaded-source-docs";
 import { deriveFactsForDoc } from "@/lib/tds-doc-ingest";
@@ -76,7 +77,7 @@ async function buildProjectSources(project: any, userId: string): Promise<GtmSou
       motorFamily: project.motorFamily, motorBrandedName: project.motorBrandedName, motorTech: project.motorTech,
       keyDiff: project.keyDiff, pricePoint: project.pricePoint, companyContext: project.companyContext,
       targetMarket: project.targetMarket, productUrl: project.productUrl, asin: project.asin,
-      referenceUrls: project.referenceUrls,
+      referenceUrls: project.referenceUrls, predecessorRef: project.predecessorRef, orgId: project.orgId,
     },
     salesKit, tds,
     activeReport: latestReport
@@ -183,8 +184,10 @@ export async function refillGtmFromSources(projectId: string, orgId: string, use
   const regeneratedIds: string[] = [];
   const referenceLinksContext = await getReferenceLinksContext(project.referenceUrls);
   const isPreLaunch = !project.productUrl && !project.asin && !referenceLinksContext.hasLinks;
+  const predecessorContext = await getPredecessorProductContext(project.predecessorRef, project.orgId || orgId);
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch)
-    + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "");
+    + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "")
+    + (predecessorContext.text ? `\n\n${predecessorContext.text}` : "");
   const overBudgetAfterPass1 = Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS;
   if (overBudgetAfterPass1 && (wantsMarketing || wantsFaqs)) {
     console.warn(`[document-fill-engine] Skipping Marketing Direction/FAQ regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget after Pass 1/stale-extraction retries. These fields stay blank until the next fill run.`);
@@ -312,8 +315,10 @@ export async function refillContentFormFromSources(projectId: string, orgId: str
   // an inconsistency noted but not yet fixed.
   const isPreLaunch = !project.productUrl && !project.asin && !referenceLinksContext.hasLinks;
   const uploadedTdsContext = await getUploadedTdsContext(projectId);
+  const predecessorContext = await getPredecessorProductContext(project.predecessorRef, project.orgId || orgId);
   const tdsGroundingBlock = buildTdsGroundingBlock(uploadedTdsContext, isPreLaunch)
-    + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "");
+    + (referenceLinksContext.hasLinks ? `\n\nREFERENCE SOURCES:\n${buildReferenceLinksPromptBlock(referenceLinksContext)}` : "")
+    + (predecessorContext.text ? `\n\n${predecessorContext.text}` : "");
 
   if (Date.now() - routeStartTime > FILL_ENGINE_TIME_BUDGET_MS) {
     console.warn(`[document-fill-engine] Skipping Content Form regeneration — already over the ${FILL_ENGINE_TIME_BUDGET_MS}ms budget after stale-extraction retries. Fields stay blank until the next fill run.`);

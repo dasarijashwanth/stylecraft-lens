@@ -80,6 +80,10 @@ export default function NewProjectPage() {
   // only; this is what actually identifies the product.
   const [productUrl, setProductUrl] = useState("");
   const [asin, setAsin] = useState("");
+  // Predecessor Product Reference — a name or link to an existing/prior
+  // StyleCraft product this one is a modified version of, used as
+  // fallback-only GTM grounding (lib/predecessor-product-context.ts).
+  const [predecessorRef, setPredecessorRef] = useState("");
   // Uploaded TDS Ingestion — optional, uploaded AFTER the project is
   // created (a project id is required first); "Uploading TDS…" state
   // covers that brief extra round-trip before the redirect.
@@ -261,6 +265,7 @@ export default function NewProjectPage() {
           keyDiff: keyDiff.trim() || undefined,
           productUrl: productUrl.trim() || undefined,
           asin: asin.trim() || undefined,
+          predecessorRef: predecessorRef.trim() || undefined,
         })
       });
 
@@ -470,6 +475,20 @@ export default function NewProjectPage() {
                 className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary placeholder-text-muted outline-none focus:border-accent font-mono"
               />
             </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="font-semibold text-text-primary block">Based on an existing product (optional)</label>
+            <p className="text-[10px] text-text-muted">
+              If this is a modified/refreshed version of a product you already sell, paste its name or a link (Amazon or any other product page). We&apos;ll use it to fill in GTM fields your other sources don&apos;t cover — never to override this product&apos;s own real, different specs.
+            </p>
+            <input
+              type="text"
+              value={predecessorRef}
+              onChange={(e) => setPredecessorRef(e.target.value)}
+              placeholder="e.g. an existing StyleCraft product name, or an Amazon/product URL"
+              className="w-full px-3 py-2 border border-border rounded-lg bg-surface-1 text-text-primary placeholder-text-muted outline-none focus:border-accent"
+            />
           </div>
 
           <div className="space-y-1">

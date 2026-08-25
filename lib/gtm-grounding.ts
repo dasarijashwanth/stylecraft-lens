@@ -24,6 +24,10 @@ export interface SourceTexts {
   // substring grounding check below instead of being wrongly discarded as
   // "ungrounded".
   referenceLinks: string;
+  // Predecessor Product Reference — see lib/predecessor-product-context.ts.
+  // Same "include so a legitimately-traced answer still passes grounding"
+  // reasoning as referenceLinks above, for the fallback-only tier.
+  predecessorProduct: string;
 }
 
 export interface GroundableField {

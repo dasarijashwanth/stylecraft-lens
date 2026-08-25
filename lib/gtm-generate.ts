@@ -40,6 +40,7 @@ import { applyDeterministicNotesConventions } from "./gtm-notes-conventions";
 import { applyBoxOnlyDerivation } from "./gtm-box-only";
 import { getUploadedTdsContext, applyUploadedTdsFacts, buildUploadedTdsPromptBlock, buildPreLaunchGroundingRule, buildTdsGroundingBlock } from "./gtm-uploaded-tds";
 import { getReferenceLinksContext, buildReferenceLinksPromptBlock } from "./gtm-reference-links";
+import { getPredecessorProductContext } from "./predecessor-product-context";
 
 // Vercel Hobby's function timeout is a fixed 60s and cannot be raised.
 // Confirmed live that a 45s/45s split here still produced a hard 504 (the
@@ -92,7 +93,7 @@ export interface GtmSources {
   existingFieldAnswers?: Record<string, string> | null;
 }
 
-export function buildSourceTexts(sources: GtmSources, uploadedTdsBlock: string = "", referenceLinksBlock: string = ""): SourceTexts {
+export function buildSourceTexts(sources: GtmSources, uploadedTdsBlock: string = "", referenceLinksBlock: string = "", predecessorProductBlock: string = ""): SourceTexts {
   return {
     projectRecord: JSON.stringify({
       productName: sources.project.productName,
@@ -108,11 +109,12 @@ export function buildSourceTexts(sources: GtmSources, uploadedTdsBlock: string =
     salesKit: JSON.stringify(sources.salesKit || {}),
     uploadedTds: uploadedTdsBlock,
     referenceLinks: referenceLinksBlock,
+    predecessorProduct: predecessorProductBlock,
   };
 }
 
 function sourceTextBlocks(sourceTexts: SourceTexts): string[] {
-  return [sourceTexts.projectRecord, sourceTexts.competitiveAnalysis, sourceTexts.tds, sourceTexts.salesKit, sourceTexts.uploadedTds, sourceTexts.referenceLinks];
+  return [sourceTexts.projectRecord, sourceTexts.competitiveAnalysis, sourceTexts.tds, sourceTexts.salesKit, sourceTexts.uploadedTds, sourceTexts.referenceLinks, sourceTexts.predecessorProduct];
 }
 
 // GTM Schema v3 — "structural N/A, skip scraping": a non-motorized
@@ -278,9 +280,9 @@ function buildSystemInstruction(productName: string, schema: GtmField[], voiceBl
 
 Rules:
 - Answer every field using ONLY the labeled sources provided below. Cite the source per field.
-- HARD-GROUNDED fields (specs: dimensions, weight, RPM, run time, voltage, cord length, blade names, quantities, colors, pricing, warranty, box/pallet data, included-in-box items): copy values exactly as they appear in the sources, units included. If a value is not present in any source, return "N/A". NEVER estimate, infer, or reuse a value from another product.
+- HARD-GROUNDED fields (specs: dimensions, weight, RPM, run time, voltage, cord length, blade names, quantities, colors, pricing, warranty, box/pallet data, included-in-box items): copy values exactly as they appear in the sources, units included. If a value is not present in any source, return "N/A". NEVER estimate, infer, or reuse a value from another product — EXCEPT the PREDECESSOR_PRODUCT block below (if provided), which exists specifically to be inherited from as a last resort; still mark such a field flagged/uncertain rather than stated as confirmed for this exact product.
 - WRITTEN fields (positioning statement, story, reason to buy, expert tip, messaging): write them specifically about THIS product, referencing its actual named features and specs from the sources. Do not produce generic copy that could apply to any similar product — every claim must trace back to a real fact in the sources.
-- Source priority, highest first: the Project Record > the team's own UPLOADED_TDS (if provided — an externally-authored Technical Data Sheet, the most authoritative source for hard specs) > REFERENCE_LINKS (if provided — specific product/competitor/brand pages the team has pointed you to; check these before general web search) > Competitive Analysis / TDS / Sales Kit documents > real web search. If a field's answer is not in the labeled sources below, use web search to find real, verifiable public information about this EXACT product (its official product page, retailer listings, spec sheets) — never general/world knowledge, never a guess, and never a value from a different or similar product. Mark any web-sourced field's "source" as "web" in your JSON response. Only return "N/A" if the answer genuinely cannot be found in the sources OR via a real web search.
+- Source priority, highest first: the Project Record > the team's own UPLOADED_TDS (if provided — an externally-authored Technical Data Sheet, the most authoritative source for hard specs) > REFERENCE_LINKS (if provided — specific product/competitor/brand pages the team has pointed you to; check these before general web search) > Competitive Analysis / TDS / Sales Kit documents > real web search > PREDECESSOR_PRODUCT (if provided — an existing product this one is a modified version of; absolute last resort, only after web search also found nothing). If a field's answer is not in the labeled sources below, use web search to find real, verifiable public information about this EXACT product (its official product page, retailer listings, spec sheets) — never general/world knowledge, never a guess, and never a value from a different or similar product (PREDECESSOR_PRODUCT is the one deliberate exception, per above). Mark any web-sourced field's "source" as "web" in your JSON response, and any PREDECESSOR_PRODUCT-sourced field's "source" as "predecessor_product". Only return "N/A" if the answer genuinely cannot be found anywhere, including PREDECESSOR_PRODUCT.
 - Bias: specs/motor/blades/packaging/included-in-box come from TDS; positioning/pricing tiers/USPs/up-sell/expert tip come from Sales Kit; comps buying guide/competitive context come from Competitive Analysis. Fields still missing after checking all of these are exactly the ones worth a web search.
 
 REQUIRED DEPTH for these specific fields (this describes FORMAT AND DEPTH ONLY — never copy this wording, it is not about the current product):
@@ -324,6 +326,16 @@ function buildUserContent(sourceTexts: SourceTexts) {
     ? `\n\n<REFERENCE_LINKS>\n${sourceTexts.referenceLinks}\n</REFERENCE_LINKS>`
     : "";
 
+  // Predecessor Product (lib/predecessor-product-context.ts) — a modified/
+  // refreshed version of an existing StyleCraft product names or links that
+  // prior product. LAST in source order and its own text is already framed
+  // as fallback-only (see getPredecessorProductContext's wrapFallbackBlock)
+  // — check every source above first, only fall back to this, then web
+  // search/general knowledge if this doesn't cover a field either.
+  const predecessorProductBlock = sourceTexts.predecessorProduct
+    ? `\n\n<PREDECESSOR_PRODUCT>\n${sourceTexts.predecessorProduct}\n</PREDECESSOR_PRODUCT>`
+    : "";
+
   return `<PROJECT_RECORD>
 ${sourceTexts.projectRecord}
 </PROJECT_RECORD>
@@ -338,7 +350,7 @@ ${sourceTexts.tds}
 
 <SALES_KIT>
 ${sourceTexts.salesKit}
-</SALES_KIT>${uploadedTdsBlock}${referenceLinksBlock}`;
+</SALES_KIT>${uploadedTdsBlock}${referenceLinksBlock}${predecessorProductBlock}`;
 }
 
 function callAi(systemInstruction: string, userContent: string, opts?: { timeoutMs?: number; maxToolCalls?: number; projectId?: string }) {
@@ -476,7 +488,12 @@ export async function generateAllFields(productName: string, sources: GtmSources
   const isPreLaunch = !sources.project.productUrl && !sources.project.asin && !referenceLinksContext.hasLinks;
   const preLaunchRule = buildPreLaunchGroundingRule(isPreLaunch && uploadedTdsContext.hasFacts);
 
-  const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText, referenceLinksPromptText);
+  // Predecessor Product Reference — fetched fresh each run, same discipline
+  // as everything else above. orgId is required to resolve Tier 1 (an
+  // existing project of this same org); absent it, resolution still works
+  // via Tier 2/3 (catalog/URL), just skips the project-match tier.
+  const predecessorContext = await getPredecessorProductContext(sources.project.predecessorRef, sources.project.orgId || "");
+  const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText, referenceLinksPromptText, predecessorContext.text || "");
   const userContent = buildUserContent(sourceTexts);
 
   // "internal"-kind fields (dieline, approved pricing, etc.) are never
@@ -663,7 +680,8 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
     return finalized[fieldId];
   }
 
-  const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText, referenceLinksPromptText);
+  const predecessorContext = await getPredecessorProductContext(sources.project.predecessorRef, sources.project.orgId || "");
+  const sourceTexts = buildSourceTexts(sources, uploadedTdsPromptText, referenceLinksPromptText, predecessorContext.text || "");
   const systemInstruction = buildSystemInstruction(productName, [schemaField], voiceBlock, preLaunchRule);
   const userContent = buildUserContent(sourceTexts);
 

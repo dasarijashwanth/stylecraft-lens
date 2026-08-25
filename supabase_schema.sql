@@ -2081,3 +2081,13 @@ ALTER TABLE competitor_corrections ADD COLUMN IF NOT EXISTS correction_type VARC
 -- A plain JSONB array (not a separate table) — a small, fixed-size (5),
 -- user-edited list, not a growing per-file record like source docs.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS reference_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 59. PREDECESSOR PRODUCT REFERENCE — a single optional name or link to an
+-- existing/prior product this project's product is a modified version of,
+-- pasted on the analyze form next to Related Products. Resolved fresh at
+-- GTM generation time (lib/predecessor-product-context.ts, never cached —
+-- same discipline as reference_urls above) into a FALLBACK-ONLY grounding
+-- block: an existing project's own real GTM answers first (richest), then
+-- a StyleCraft catalog match, then an Amazon ASIN/URL or any other product
+-- page. Plain text, not a URL type — it may be a product name, not a link.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS predecessor_ref VARCHAR(500);

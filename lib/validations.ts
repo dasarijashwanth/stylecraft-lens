@@ -142,6 +142,10 @@ export const AnalysisFormSchema = z.object({
     addedAt: z.string(),
   }).refine(r => r.asin !== null || !!r.url, "A non-Amazon related product must include its URL"))
     .max(3, "Up to 3 related products").optional(),
+  // Predecessor Product Reference — see NewProjectSchema's own field for
+  // the full explanation; same shape/limit here so it can be captured at
+  // analysis time even before a project exists.
+  predecessorRef: z.string().max(500).optional(),
 });
 
 // Same ASIN format check as ProjectSchema/NewProjectSchema's own asin
@@ -233,4 +237,9 @@ export const NewProjectSchema = z.object({
   // real-time TDS snapshot + auto-fill pipeline (see lib/snapshot-capture.ts).
   productUrl: z.string().max(500).optional().refine(v => !v || normalizeUrl(v) !== null, "Enter a valid product URL"),
   asin: z.string().max(20).optional().refine(v => !v || /^[A-Z0-9]{10}$/i.test(v), "ASIN must be exactly 10 letters/digits"),
+  // Predecessor Product Reference — a name or link to an existing/prior
+  // product this one is a modified version of. Free text (may be a plain
+  // product name, not necessarily a URL), resolved at GTM generation time
+  // by lib/predecessor-product-context.ts.
+  predecessorRef: z.string().max(500).optional(),
 });

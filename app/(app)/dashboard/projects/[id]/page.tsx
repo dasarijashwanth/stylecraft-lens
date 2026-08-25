@@ -1661,6 +1661,7 @@ const SOURCE_GROUP_LABELS: Record<string, string> = {
   category_default: "category typical",
   gtm_cross_fill: "from GTM",
   uploaded_tds: "uploaded TDS",
+  predecessor_product: "predecessor product",
 };
 
 function formatFillReport(report: FillReport | null): string | null {

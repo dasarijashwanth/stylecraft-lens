@@ -64,6 +64,7 @@ export async function PATCH(
         .map((u: string) => u.trim().slice(0, 500))
         .slice(0, 5);
     }
+    if (body.predecessorRef !== undefined) updateData.predecessorRef = (typeof body.predecessorRef === "string" ? body.predecessorRef.trim().slice(0, 500) : null) || null;
     if (body.gtmTemplateOverride !== undefined) updateData.gtmTemplateOverride = body.gtmTemplateOverride || null;
     if (body.savedDefaults !== undefined) updateData.savedDefaults = body.savedDefaults;
     if (body.latestAnalysisId !== undefined) updateData.latestAnalysisId = body.latestAnalysisId;

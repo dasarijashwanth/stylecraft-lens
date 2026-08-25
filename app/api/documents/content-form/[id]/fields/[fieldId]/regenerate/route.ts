@@ -65,6 +65,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
         productUrl: (project as any).productUrl,
         asin: (project as any).asin,
         referenceUrls: (project as any).referenceUrls,
+        predecessorRef: (project as any).predecessorRef,
+        orgId: session.orgId,
       },
       salesKit,
       tds,
