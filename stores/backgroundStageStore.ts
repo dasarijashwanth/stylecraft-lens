@@ -1,5 +1,6 @@
 "use client";
 
+import { createContext, createElement, useContext, type ReactNode } from "react";
 import { create } from "zustand";
 import { usePathname } from "next/navigation";
 import { resolveRouteBackground, type BackgroundAssetKey } from "@/lib/background-stage-config";
@@ -20,13 +21,38 @@ export const useBackgroundStageStore = create<BackgroundStageState>((set) => ({
   clearOverride: () => set({ overrideAsset: null }),
 }));
 
+// Real bug, confirmed live via screenshot on the project detail page's
+// Pricing tab: useGlassMode() being purely route-based means EVERY
+// MagicBentoCard on a route with a background is told "glass," even ones
+// nested inside an opaque, fully solid bg-surface-2 box (the project
+// page's "Tab Content Canvas" wrapping all 6 tabs' content) that already
+// completely covers the cinema image behind it. .magic-bento-card--glass's
+// text tokens (near-white/light-gray) are calibrated for sitting on a
+// near-black translucent fill directly over that dark image — blended
+// against a LIGHT opaque box instead, the fill renders as a medium gray
+// that's too close to those same gray tokens (--text-muted especially),
+// producing the exact "label text barely visible, only the boldest value
+// text readable" pattern seen in the screenshot. GlassModeOverride lets an
+// opaque ancestor declare "nothing under me is really floating over the
+// image, even though the route has one" — every existing useGlassMode()
+// call site (MagicBentoCard included) picks this up for free, zero
+// changes needed at each call site.
+const GlassModeOverrideContext = createContext<boolean | null>(null);
+
+export function GlassModeOverride({ value, children }: { value: boolean; children: ReactNode }) {
+  return createElement(GlassModeOverrideContext.Provider, { value }, children);
+}
+
 // Every existing MagicBentoCard/MagicBentoSection usage calls this to decide
 // solid vs. glass rendering. Computed directly from the current route (not
 // synchronized state written by BackgroundStage) so there's no one-tick lag
 // or flash between a route changing and its cards knowing whether a
 // background is behind them — admin routes (excluded from
-// resolveRouteBackground) correctly stay solid.
+// resolveRouteBackground) correctly stay solid. A GlassModeOverride
+// ancestor (see above) takes priority over the route default when present.
 export function useGlassMode(): boolean {
+  const override = useContext(GlassModeOverrideContext);
   const pathname = usePathname();
+  if (override !== null) return override;
   return resolveRouteBackground(pathname) !== null;
 }

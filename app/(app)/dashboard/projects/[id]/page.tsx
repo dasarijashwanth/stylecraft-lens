@@ -46,7 +46,7 @@ import { isRealAnswer, isAwaitingInternalInput, isNotDeterminable, type FillRepo
 import { ProjectGenerationProgress } from "@/components/projects/ProjectGenerationProgress";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MagicBentoSection, MagicBentoCard } from "@/components/ui/MagicBento";
-import { useGlassMode } from "@/stores/backgroundStageStore";
+import { useGlassMode, GlassModeOverride } from "@/stores/backgroundStageStore";
 import FaqHelpLink from "@/components/help/FaqHelpLink";
 import { useContactSupport } from "@/components/help/ContactSupportProvider";
 import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTIONS, ROYALTY_PCT_BY_TYPE, TARIFF_EFFECTIVE_NOTE, type Country, type ProductType, type RoyaltyType } from "@/lib/tariff-multipliers";
@@ -438,7 +438,20 @@ export default function ProjectDetailPage() {
               </button>
             </div>
 
-            {/* Tab Content Canvas */}
+            {/* Tab Content Canvas — a fully opaque bg-surface-2 box, so
+                nothing rendered inside it (Sources/Content Form tabs
+                directly, Competitive Analysis/Pricing/Go-To-Market via
+                ReportTabContent) is actually floating over the route's
+                cinema background image the way useGlassMode()'s route-based
+                default assumes. Confirmed live via screenshot: MagicBentoCard's
+                near-white/gray "glass" text tokens, calibrated for a
+                near-black translucent fill directly over that image, went
+                low-contrast when blended against this opaque box's real
+                (light-in-light-theme) color instead. GlassModeOverride forces
+                every useGlassMode() call in this subtree to the correct
+                answer — solid, not glass — with no changes needed in any of
+                the nested tab components themselves. */}
+            <GlassModeOverride value={false}>
             <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
               {activeTab === "sources" ? (
                 <SourceDocsTab projectId={id} onSourceUploaded={() => pollFillState.current()} projectReferenceUrls={project?.referenceUrls} onReferenceUrlsChange={(urls: string[]) => setProject((p: any) => (p ? { ...p, referenceUrls: urls } : p))} />
@@ -478,6 +491,7 @@ export default function ProjectDetailPage() {
                 </div>
               )}
             </div>
+            </GlassModeOverride>
           </div>
 
           {/* TDS + GTM live independently of whether a report is linked —
