@@ -21,10 +21,8 @@ import { GTM_FIELD_SCHEMA } from "./gtm-field-schema";
 import { reconcileTdsFromGtm } from "./tds-gtm-reconcile";
 import { getLatestOutput } from "./project-outputs";
 import { getProjectReports } from "./db/reports";
-import { getActiveDeckTemplate } from "./db/deck-templates";
-import { generateProjectDeck } from "./deck-generate";
 import { logCall } from "./obs";
-import { isTdsEnabled, isDeckGenerationEnabled, isMarketingDirectionGenerationEnabled, isContentFormGenerationEnabled } from "./feature-flags";
+import { isTdsEnabled, isMarketingDirectionGenerationEnabled, isContentFormGenerationEnabled } from "./feature-flags";
 import { listToolTypes } from "./db/tool-types";
 import { generateProductFaqs } from "./gtm-product-faqs";
 import { finalizeFieldAnswers } from "./field-finalize";
@@ -451,40 +449,20 @@ export async function runProjectGenerationStep(projectId: string, orgId: string,
     }
 
     if (state.phase === "deck") {
-      // Deck generation was taking long enough to repeatedly stall/time out
-      // in production (lib/feature-flags.ts's isDeckGenerationEnabled,
-      // defaults to disabled) — same "flag exists, work is skipped" idiom
-      // as the "snapshot" phase's isTdsEnabled() check above. Project setup
-      // completes right after Product FAQs instead of hanging here; the
-      // deck can still be generated manually later from the Project Deck
-      // tab's own generate/retry action once the underlying slowness is fixed.
-      if (!(await isDeckGenerationEnabled())) {
-        logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "deck", outcome: "ok", errorMessage: "Deck generation disabled via feature flag", elapsedMs: Date.now() - stepStart });
-        await updateGenerationState(projectId, { phase: "deck", status: "complete" });
-        return { state: { ...state, phase: "deck", status: "complete" }, phaseCompleted: "deck" };
-      }
-
-      // Deck generation deliberately never fails the overall pipeline — TDS
-      // and GTM are the required artifacts and already succeeded; the deck
-      // is a bonus layer on top. A missing active template, or any real
-      // rendering error, is logged and the project simply ends up with no
-      // deck (or a project_decks row already marked "failed" with its own
-      // real error — generateProjectDeck sets that itself before rethrowing).
-      // The Project Deck tab surfaces this with its own Retry action instead
-      // of blocking the rest of project setup.
-      try {
-        const activeTemplate = await getActiveDeckTemplate();
-        if (activeTemplate) {
-          await generateProjectDeck(projectId, orgId, userId);
-        } else {
-          logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "deck", outcome: "ok", errorMessage: "No active deck template configured", elapsedMs: Date.now() - stepStart });
-        }
-      } catch (err: any) {
-        logCall("generation-pipeline", { op: "phase-failed", projectId, phase: "deck", outcome: "error", errorMessage: err.message || "Deck generation failed", elapsedMs: Date.now() - stepStart });
-      }
-
+      // Project Deck generation has been PERMANENTLY disabled (see
+      // lib/deck-generate.ts's generateProjectDeck, which now always
+      // throws) — this phase slot still exists in the state machine
+      // (skipping it entirely would mean every project ever created before
+      // this change gets stuck re-resolving a phase that no longer exists),
+      // but it's now an immediate, unconditional no-op: no feature-flag
+      // check, no active-template lookup, no call attempt. Those all used
+      // to run every single project generation just to find out the same
+      // answer every time, once the flag was left enabled in production —
+      // confirmed live as user-visible slowdown ("Generating Project Deck"
+      // sitting in the setup progress list for a step that can never do
+      // real work anymore).
+      logCall("generation-pipeline", { op: "phase-skip", projectId, phase: "deck", outcome: "ok", errorMessage: "Project Deck generation permanently disabled", elapsedMs: Date.now() - stepStart });
       await updateGenerationState(projectId, { phase: "deck", status: "complete" });
-      logCall("generation-pipeline", { op: "phase-complete", projectId, phase: "faqs->deck", outcome: "ok", elapsedMs: Date.now() - stepStart });
       return { state: { ...state, phase: "deck", status: "complete" }, phaseCompleted: "deck" };
     }
 

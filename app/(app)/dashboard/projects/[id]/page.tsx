@@ -83,11 +83,6 @@ export default function ProjectDetailPage() {
   // the real flag value is still loading — a false default would incorrectly
   // hide it for that first frame instead.
   const [tdsEnabled, setTdsEnabled] = useState(true);
-  // Deck generation defaults to disabled at the flag layer itself (unlike
-  // tdsEnabled above) — default this to false so the progress stepper
-  // doesn't show a "Generating Project Deck" row that then disappears once
-  // the real (likely-disabled) flag value loads a moment later.
-  const [deckEnabled, setDeckEnabled] = useState(false);
   // Marketing Direction generation defaults to enabled at the flag layer
   // (unlike deckEnabled above) — default this to true so the progress
   // stepper shows its row from the first frame instead of it popping in.
@@ -214,7 +209,6 @@ export default function ProjectDetailPage() {
       .then(r => r.json())
       .then(data => {
         if (typeof data.tds_enabled === "boolean") setTdsEnabled(data.tds_enabled);
-        if (typeof data.deck_generation_enabled === "boolean") setDeckEnabled(data.deck_generation_enabled);
         if (typeof data.marketing_direction_generation_enabled === "boolean") setMarketingDirectionEnabled(data.marketing_direction_generation_enabled);
         if (typeof data.content_form_generation_enabled === "boolean") setContentFormEnabled(data.content_form_generation_enabled);
       })
@@ -501,7 +495,7 @@ export default function ProjectDetailPage() {
               Retry button) on every page load, not just live in the same
               session where it failed. */}
           {pipelineState && pipelineState.status !== "complete" && (
-            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} deckEnabled={deckEnabled} marketingDirectionEnabled={marketingDirectionEnabled} contentFormEnabled={contentFormEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
+            <ProjectGenerationProgress projectId={id} tdsEnabled={tdsEnabled} marketingDirectionEnabled={marketingDirectionEnabled} contentFormEnabled={contentFormEnabled} onDone={() => { fetchProjectDetails(); setPipelineState((s: any) => s ? { ...s, status: "complete" } : s); }} />
           )}
           {tdsEnabled && <TdsKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} />}
           <ProductKnowledgeSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} fillStatus={fillState?.status} projectSku={project?.sku} onSkuChange={(sku: string) => setProject((p: any) => (p ? { ...p, sku } : p))} projectToolType={project?.toolType} projectGtmTemplateOverride={project?.gtmTemplateOverride} onGtmTemplateOverrideChange={(v: string | null) => setProject((p: any) => (p ? { ...p, gtmTemplateOverride: v } : p))} toolTypes={toolTypes} />
@@ -2511,8 +2505,13 @@ function ContentFormSection({
       toast.success("Every field is already filled");
       return;
     }
+    // No setFillProgress here (unlike GTM's version of this handler) — this
+    // is now a single request, not a per-field loop, so there's no real
+    // "done/total" to report partway through; a fillProgress value that
+    // never advances from 0 would just read as a stuck progress bar for
+    // however long the request takes. The button falls back to a plain
+    // "Filling…" label instead (see its own render below).
     setFillingAll(true);
-    setFillProgress({ done: 0, total: pendingIds.length });
     try {
       const res = await fetch(`/api/documents/content-form/${documentId}/refill-from-sources`, { method: "POST" });
       const data = await res.json();
@@ -2524,7 +2523,6 @@ function ContentFormSection({
       toast.error(err.message || "Failed to fill remaining fields");
     } finally {
       setFillingAll(false);
-      setFillProgress(null);
     }
   }
 
@@ -2696,7 +2694,7 @@ function ContentFormSection({
             className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-[11px] font-bold rounded-lg transition-colors disabled:opacity-60"
           >
             {fillingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            <span>{fillingAll && fillProgress ? `Filling ${fillProgress.done}/${fillProgress.total}…` : "Fill remaining fields"}</span>
+            <span>{fillingAll ? "Filling…" : "Fill remaining fields"}</span>
           </button>
         )}
       </div>

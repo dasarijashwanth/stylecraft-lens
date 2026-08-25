@@ -14,12 +14,17 @@ import { useBackgroundStageStore, useGlassMode } from "@/stores/backgroundStageS
 // because pipeline/continue always re-reads the current phase and only
 // ever advances it by one.
 
-// Both TDS and Deck generation are feature-flag-gated (lib/feature-flags.ts)
-// — their phase SLOTS always exist server-side (lib/project-generation-engine.ts
-// skips the actual work but still transitions through phase:"tds"/"deck"),
-// so a disabled step is just collapsed out of what's SHOWN here rather than
-// removed from the underlying state machine.
-function buildPhaseConfig(tdsEnabled: boolean, deckEnabled: boolean, marketingDirectionEnabled: boolean = true, contentFormEnabled: boolean = true): { labels: string[]; index: Record<string, number> } {
+// TDS generation is feature-flag-gated (lib/feature-flags.ts) — its phase
+// SLOT always exists server-side (lib/project-generation-engine.ts skips
+// the actual work but still transitions through phase:"tds"), so a
+// disabled step is just collapsed out of what's SHOWN here rather than
+// removed from the underlying state machine. Project Deck generation is
+// PERMANENTLY disabled (lib/deck-generate.ts's generateProjectDeck always
+// throws now, feature removed) — its phase slot still exists server-side
+// too, but showing a "Generating Project Deck" row for a step that never
+// does real work anymore was just a confusing, misleading wait — dropped
+// unconditionally rather than kept flag-gated.
+function buildPhaseConfig(tdsEnabled: boolean, marketingDirectionEnabled: boolean = true, contentFormEnabled: boolean = true): { labels: string[]; index: Record<string, number> } {
   const labels: string[] = ["Capturing live product data"];
   const index: Record<string, number> = { pending: 0, snapshot: 1 };
 
@@ -50,12 +55,12 @@ function buildPhaseConfig(tdsEnabled: boolean, deckEnabled: boolean, marketingDi
     index.marketing_direction = labels.length - 1; // collapses onto "Generating Product FAQs" — no dedicated row
   }
 
-  if (deckEnabled) {
-    labels.push("Generating Project Deck");
-    index.deck = labels.length - 1;
-  } else {
-    index.deck = labels.length - 1; // collapses onto "Generating Product FAQs" — no dedicated row
-  }
+  // No dedicated row — the server-side state machine still transitions
+  // through phase:"deck" (a fast no-op now), so this just needs to map to
+  // SOME valid index rather than go out of bounds; collapses onto the last
+  // real row, same idiom as every other permanently/currently-disabled step
+  // above.
+  index.deck = labels.length - 1;
 
   return { labels, index };
 }
@@ -69,7 +74,6 @@ interface PhaseState {
 interface Props {
   projectId: string;
   tdsEnabled: boolean;
-  deckEnabled?: boolean;
   marketingDirectionEnabled?: boolean;
   contentFormEnabled?: boolean;
   onDone: () => void;
@@ -109,8 +113,8 @@ async function fetchJsonWithRetry(url: string, init: RequestInit | undefined, on
   throw lastErr;
 }
 
-export function ProjectGenerationProgress({ projectId, tdsEnabled, deckEnabled = true, marketingDirectionEnabled = true, contentFormEnabled = true, onDone }: Props) {
-  const { labels: PHASE_LABELS, index: PHASE_INDEX } = buildPhaseConfig(tdsEnabled, deckEnabled, marketingDirectionEnabled, contentFormEnabled);
+export function ProjectGenerationProgress({ projectId, tdsEnabled, marketingDirectionEnabled = true, contentFormEnabled = true, onDone }: Props) {
+  const { labels: PHASE_LABELS, index: PHASE_INDEX } = buildPhaseConfig(tdsEnabled, marketingDirectionEnabled, contentFormEnabled);
   const [phases, setPhases] = useState<PhaseState[]>(
     PHASE_LABELS.map((label) => ({ status: "waiting", label, message: "Waiting to start…" }))
   );
