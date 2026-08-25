@@ -566,70 +566,92 @@ function getCategoryFallbackCompetitors(identity: IdentityCard, defaultTier: "le
         ]
       : [
           {
-            name: "Shark FlexStyle Air Styling System",
+            // Re-verified live 2026-08-25 (scripts/find-real-asin.ts) after
+            // the original B0B739JCHX ASIN was confirmed DEAD (Rainforest
+            // returned outcome:"empty" — delisted) and surfaced as a real
+            // broken "Amazon Listing" link on a live analysis. HD430 is the
+            // Shark FlexStyle's current base/flagship variant (highest
+            // review count among its live color/kit variants).
+            name: "Shark FlexStyle Air Multi-Styler & Drying System (HD430)",
             brand: "Shark Ninja",
-            asin: "B0B739JCHX",
-            price: "$299.99",
-            rating: "4.5",
-            reviewCount: "6,810",
+            asin: "B0B89P16MC",
+            price: "$249.99",
+            rating: "4.2",
+            reviewCount: "6,686",
             sales: "5,000+ bought in past month",
-            bsr: "#150 in Beauty & Personal Care",
+            bsr: "#4,196 in Beauty & Personal Care",
             initials: "SH",
             top_positive_review_themes: ["Versatile wand conversion", "Lower heat damage risk", "Fast auto-wrap curling"],
             top_negative_review_themes: ["Curls lose hold quickly", "Learning curve for wrap", "Heavy base handle"],
             confirmed_technical_specs: { motor_type: "Brushless Digital", rpm: "110,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Polymer" }
           },
           {
-            name: "Zuvi Halo Infrared Hair Dryer",
-            brand: "Zuvi",
-            asin: "B09MSN69P3",
-            price: "$349.00",
-            rating: "4.4",
-            reviewCount: "420",
-            sales: "200+ bought in past month",
-            bsr: "#18,410 in Beauty & Personal Care",
-            initials: "ZU",
-            top_positive_review_themes: ["Infrared light drying comfort", "Very low power draw", "Leaves hair highly hydrated"],
+            // Replaces the original Zuvi Halo entry (asin B09MSN69P3) —
+            // also confirmed DEAD live (Rainforest outcome:"empty"), and
+            // re-checked with a fresh Amazon search: the Zuvi brand no
+            // longer appears to have ANY current listing (line discontinued/
+            // delisted entirely, not just this one ASIN). SRILabs DryQ is a
+            // real, currently-verified infrared dryer competitor in the
+            // same emerging/infrared niche the original entry represented.
+            name: "SRILabs DryQ Infrared Hair Dryer",
+            brand: "Skin Research Institute",
+            asin: "B0BRM9ZW8H",
+            price: "$299.99",
+            rating: "4.5",
+            reviewCount: "1,364",
+            sales: "1,000+ bought in past month",
+            bsr: "#17,171 in Beauty & Personal Care",
+            initials: "SR",
+            top_positive_review_themes: ["Infrared light drying comfort", "Foldable travel-friendly design", "Low heat damage on fine hair"],
             top_negative_review_themes: ["Slower drying speed", "Premium price barrier", "Limited heat configuration"],
-            confirmed_technical_specs: { motor_type: "High-speed DC", rpm: "105,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Glass Composite" }
+            confirmed_technical_specs: { motor_type: "High-speed DC", rpm: "N/A", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Composite" }
           },
           {
-            name: "Laifen Swift High Speed Ionic Dryer",
+            // Re-verified live 2026-08-25 — original B09T9B69B9 confirmed
+            // dead (same audit as the two entries above).
+            name: "Laifen Swift Professional High-Speed Hair Dryer",
             brand: "Laifen",
-            asin: "B09T9B69B9",
-            price: "$159.99",
-            rating: "4.6",
-            reviewCount: "4,210",
-            sales: "3,000+ bought in past month",
-            bsr: "#1,210 in Beauty & Personal Care",
+            asin: "B0F4KMQQBM",
+            price: "$139.99",
+            rating: "4.4",
+            reviewCount: "663",
+            sales: "1,000+ bought in past month",
+            bsr: "#11,180 in Beauty & Personal Care",
             initials: "LA",
             top_positive_review_themes: ["Near silent operation", "Stunning premium look", "Fractions of Dyson cost"],
             top_negative_review_themes: ["Diffuser sold separately", "Short cord length", "Buttons feel cheap"],
             confirmed_technical_specs: { motor_type: "Brushless Digital", rpm: "110,000 RPM", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "ABS Plastic" }
           },
           {
-            name: "Waverly Pro Ceramic Hair Styler",
-            brand: "Waverly",
-            asin: "B0C1185G9P",
-            price: "$79.99",
+            // Replaces the original "Waverly Pro Ceramic Hair Styler" entry
+            // (asin B0C1185G9P, confirmed dead) — no real "Waverly Pro"
+            // product could be found on a live re-search either, so this is
+            // a genuinely different but comparable real, currently-verified
+            // ceramic multi-styler in the same price/category niche.
+            name: "CHI Multi-Wave Styler",
+            brand: "CHI",
+            asin: "B08TG4HFWP",
+            price: "$104.96",
             rating: "4.3",
-            reviewCount: "890",
-            sales: "600+ bought in past month",
-            bsr: "#9,812 in Beauty & Personal Care",
-            initials: "WA",
-            top_positive_review_themes: ["Deep waving plates", "Quick ceramic heating", "Dual voltage convenience"],
+            reviewCount: "119",
+            sales: "300+ bought in past month",
+            bsr: "#142,783 in Beauty & Personal Care",
+            initials: "CH",
+            top_positive_review_themes: ["Deep waving plates", "Quick ceramic heating", "Adjustable barrel size"],
             top_negative_review_themes: ["Heavy handle lock", "Creases hair easily", "No automatic shutoff"],
             confirmed_technical_specs: { motor_type: "PTC Element", rpm: "N/A", run_time: "Corded", charging_time: "N/A", blade_material: "N/A", body_material: "Ceramic coated" }
           },
           {
-            name: "TYMO Ring Hair Straightener Comb",
+            // Re-verified live 2026-08-25 — original B07S17R2NW confirmed
+            // dead (same audit as the entries above).
+            name: "TYMO Ring Hair Straightener Brush",
             brand: "TYMO",
-            asin: "B07S17R2NW",
-            price: "$49.99",
-            rating: "4.5",
-            reviewCount: "58,410",
+            asin: "B07RLTPSLB",
+            price: "$39.89",
+            rating: "4.4",
+            reviewCount: "13,970",
             sales: "8,000+ bought in past month",
-            bsr: "#85 in Beauty & Personal Care",
+            bsr: "#6,965 in Beauty & Personal Care",
             initials: "TY",
             top_positive_review_themes: ["Saves straightening time", "Safe anti-scald teeth", "Leaves natural volume"],
             top_negative_review_themes: ["Pulls hair if tangled", "Doesn't reach roots well", "Stiff power button"],
@@ -1191,6 +1213,17 @@ export function applyPriceBandGate(
         tier,
         asin: fb.asin,
         amazon_url: `https://www.amazon.com/dp/${fb.asin}`,
+        // This hand-typed static dataset's ASINs are never confirmed live
+        // (no Rainforest call happens for a topup pick) — a real listing
+        // can be delisted/changed since this data was written, so the link
+        // must be marked unverified the same way every other unconfirmed-
+        // ASIN path in this file already does (see e.g.
+        // enrichCompetitorsWithRainforest's own fallback below). Without
+        // this, CompetitorCard's link label wrongly reads "Amazon Listing"
+        // (implying confirmed) instead of "Search Amazon" for a pick that
+        // was never actually checked — confirmed live as a broken-looking
+        // Amazon link on a recent analysis.
+        verified_by_rainforest: false,
         price: fb.price,
         price_raw: fbPrice,
         rating: fb.rating,
@@ -1641,6 +1674,12 @@ export function selectByCompositeScore(
         tier,
         asin: fb.asin,
         amazon_url: `https://www.amazon.com/dp/${fb.asin}`,
+        // Same fix as applyPriceBandGate's own static-fallback topup above —
+        // this ASIN was never confirmed via a live Rainforest call, so the
+        // link must be marked unverified, not implicitly "confirmed" by
+        // omission. The motor/heat-tech fields below already say
+        // "unverified" explicitly; this was the one field that didn't.
+        verified_by_rainforest: false,
         price: fb.price,
         price_raw: fbPrice,
         rating: fb.rating,
