@@ -50,7 +50,14 @@ export async function POST(request: Request) {
       }
       const meta = await fetchPageMeta(validation.data.asinOrUrl.trim());
       if (!meta || !meta.title) {
-        return NextResponse.json({ error: "NOT_FOUND", message: `Could not load that page (${hostname}) — check the URL and try again` }, { status: 404 });
+        // Deliberately honest rather than "check the URL" — the URL is
+        // very often fine; fetchPageMeta returns null just as readily for
+        // a real page that blocked the fetch (bot-protection challenge
+        // page, hard 403, timeout) as for a broken link, and this app has
+        // no reliable way to tell those apart from here. Named explicitly
+        // so the user knows to try pasting a different reference/source
+        // instead of re-checking a URL that was never the problem.
+        return NextResponse.json({ error: "NOT_FOUND", message: `Couldn't fetch info from ${hostname} — it may be blocking automated access, or the page may be unreachable. Try a different URL, or an ASIN/Amazon link instead.` }, { status: 404 });
       }
       return NextResponse.json({
         asin: null,

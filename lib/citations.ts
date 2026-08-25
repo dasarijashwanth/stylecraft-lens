@@ -46,12 +46,53 @@ export async function fetchPageText(url: string): Promise<string | null> {
   }
 }
 
+// Many bot-protection systems (Cloudflare, Akamai, PerimeterX, DataDome, a
+// site's own Amazon-style CAPTCHA) return a real HTTP 200 for a challenge/
+// "prove you're human" page instead of an honest 403 — specifically to
+// defeat a naive scraper that only checks the status code, which is
+// exactly what safeFetch's `!res.ok` check above does. Left uncaught, that
+// page's own title/boilerplate ("Just a moment...", "Access Denied") would
+// silently pass through as if it were real product data — confirmed as a
+// real risk for Related Products' non-Amazon URL preview (the whole reason
+// this exists), where a false "success" means bad data quietly reaches GTM
+// generation instead of the user ever finding out the fetch was blocked.
+// A title match against these well-known challenge-page phrases is a
+// small, high-confidence check — not exhaustive, but catches the large
+// majority of real-world blocks other than a hard 403/timeout (already
+// caught above) — err toward flagging honestly over a false success.
+const BLOCK_PAGE_TITLE_PATTERNS = [
+  /just a moment/i,
+  /attention required/i,
+  /access denied/i,
+  /are you a human/i,
+  /verify you are a human/i,
+  /checking your browser/i,
+  /enable javascript and cookies/i,
+  /robot check/i,
+  /forbidden/i,
+  /request unsuccessful/i,
+  /unusual traffic/i,
+  /captcha/i,
+];
+
+function looksLikeBlockedPage(title: string | null, text: string | null): boolean {
+  if (title && BLOCK_PAGE_TITLE_PATTERNS.some(p => p.test(title))) return true;
+  // A real product/article page almost never renders to under ~150 chars of
+  // visible body text once scripts/styles are stripped — a challenge page
+  // (mostly JS-driven, near-empty static HTML) routinely does. Secondary
+  // signal only, never used alone to flag a page with a normal title.
+  if (title && (!text || text.trim().length < 150)) return true;
+  return false;
+}
+
 // Same fetch as fetchPageText but also grabs a human-readable title (for a
 // non-Amazon "Related Products" URL — lib/analysisEngine.ts's
 // resolveRelatedProducts, and its own preview route — where there's no
 // Rainforest product title available, only whatever the page itself
 // declares). A single request, not a second fetchPageText call, so a
-// caller needing both never pays for the page twice.
+// caller needing both never pays for the page twice. Returns null (same as
+// a hard fetch failure) when the response looks like a bot-block/challenge
+// page rather than real content — see looksLikeBlockedPage above.
 export async function fetchPageMeta(url: string): Promise<{ title: string | null; text: string | null } | null> {
   try {
     const res = await safeFetch(url, {
@@ -64,6 +105,7 @@ export async function fetchPageMeta(url: string): Promise<{ title: string | null
     const title = ($('meta[property="og:title"]').attr("content") || $("title").first().text() || "").trim() || null;
     $("script, style, noscript, template, svg").remove();
     const text = $("body").text().replace(/\s+/g, " ").trim() || null;
+    if (looksLikeBlockedPage(title, text)) return null;
     return { title, text };
   } catch {
     return null;
