@@ -2830,7 +2830,14 @@ function ProjectOutputsBar({ project, report, tdsEnabled }: { project: any; repo
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // Revoking on the very next tick (not synchronously) — some browsers
+      // haven't finished handing the blob off to their download manager by
+      // the time a.click() returns, and revoking immediately can silently
+      // kill the download before it starts. A short delay costs nothing
+      // (the object URL is only ever referenced by this one anchor) and
+      // matches the pattern lib/export-pdf.ts's print-window flow already
+      // uses (a setTimeout before its own revokeObjectURL).
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err: any) {
       toast.error(err.message || "Failed to download PDF");
     } finally {
@@ -2947,6 +2954,7 @@ function ProjectOutputsBar({ project, report, tdsEnabled }: { project: any; repo
               type="button"
               onClick={() => downloadPdf("sales-kit", project.id)}
               disabled={downloadingPdf === "sales-kit"}
+              title="Click Regenerate first if you haven't generated a Sales Kit for this project yet"
               className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
@@ -2972,6 +2980,7 @@ function ProjectOutputsBar({ project, report, tdsEnabled }: { project: any; repo
                 type="button"
                 onClick={() => downloadPdf("tds", project.id)}
                 disabled={!hasTds || downloadingPdf === "tds"}
+                title={hasTds ? undefined : "No TDS snapshot has been captured for this project yet — capture one below first"}
                 className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5" />
@@ -2999,6 +3008,7 @@ function ProjectOutputsBar({ project, report, tdsEnabled }: { project: any; repo
               type="button"
               onClick={() => downloadPdf("gtm", project.id)}
               disabled={!hasGtm || downloadingPdf === "gtm"}
+              title={hasGtm ? undefined : "The Go-To-Market sheet hasn't generated any real field answers yet"}
               className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
@@ -3025,6 +3035,7 @@ function ProjectOutputsBar({ project, report, tdsEnabled }: { project: any; repo
               type="button"
               onClick={() => downloadPdf("active-report", report.id)}
               disabled={!report?.id || downloadingPdf === "active-report"}
+              title={report?.id ? undefined : "No competitive analysis report is linked to this project yet"}
               className="flex items-center gap-1 px-3 py-1.5 border border-border hover:border-border-strong text-text-secondary text-[11px] font-bold rounded-lg transition-colors disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
