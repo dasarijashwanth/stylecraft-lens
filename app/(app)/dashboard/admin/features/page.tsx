@@ -28,11 +28,6 @@ const FLAG_LABELS: Record<string, { title: string; description: string }> = {
     description:
       "Off by default — the News Updates section on competitor cards is hidden and the product-news search is skipped entirely. Turn on to show it again; existing cached news data is preserved and reappears immediately, no regeneration needed.",
   },
-  deck_generation_enabled: {
-    title: "Automatic Project Deck Generation",
-    description:
-      "Off by default — deck generation was repeatedly stalling/timing out as the auto-pipeline's last phase, so project setup now completes right after Product FAQs instead of hanging on it. Turn on to resume auto-generating a deck for every new project; a deck can still be generated manually anytime from a project's Project Deck tab regardless of this setting.",
-  },
   marketing_direction_generation_enabled: {
     title: "Automatic Marketing Direction Generation",
     description:

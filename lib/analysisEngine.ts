@@ -7,7 +7,7 @@ import { isSupabaseConfigured } from "./supabase";
 import { updateAnalysisPhase, completeAnalysis, failAnalysis, getAnalysis, setPendingQuestion, getRecentAnalysesForBoilerplateCheck, updatePhase1BrandProgress, patchAnalysisPhaseResults, resetPhase3ForRegeneration, patchRelatedProducts } from "./db/analyses";
 import { textSimilarity, BOILERPLATE_SIMILARITY_THRESHOLD } from "./text-similarity";
 import { extractAsinFromUrl } from "./snapshot-capture";
-import { createReportFromAnalysis } from "./db/reports";
+import { createReportFromAnalysis, syncReportCompetitorByAsin } from "./db/reports";
 import { buildPhase3Prompt } from "./prompts/phase3";
 import { getMarketData } from "./market-data";
 import { buildOverviewParagraph } from "./build-overview-paragraph";
@@ -3515,6 +3515,18 @@ export async function replaceCompetitor(
     console.warn("Failed to persist pricing provenance for replaced competitor:", e);
   }
 
+  // A report already created from this analysis (project's Competitive
+  // Analysis tab) is a frozen snapshot copied from phase1/phase2 at
+  // creation time — patching the live analysis above doesn't touch it.
+  // Sync just this one competitor entry so the report reflects the real
+  // replaced product instead of the stale one; best-effort, since no
+  // report may exist yet for this analysis.
+  try {
+    await syncReportCompetitorByAsin(analysisId, oldAsin, newCompetitor);
+  } catch (e) {
+    console.warn("Failed to sync replaced competitor into linked report:", e);
+  }
+
   const toolType = identity.toolType || "";
   await recordCorrection({
     analysisId,
@@ -3850,6 +3862,15 @@ export async function removeCompetitorSlot(
 
   await patchAnalysisPhaseResults(analysisId, patch);
 
+  // Same report-staleness fix as replaceCompetitor above — a report already
+  // created from this analysis is a frozen snapshot and won't otherwise see
+  // this slot's placeholder until a later refill.
+  try {
+    await syncReportCompetitorByAsin(analysisId, asin, placeholder);
+  } catch (e) {
+    console.warn("Failed to sync removed competitor into linked report:", e);
+  }
+
   const toolTypes = await listToolTypes();
   const primaryCriterion = resolvePrimaryCriterion(identity, toolTypes);
   const targetPriceRaw = await resolveDiscoveryTargetPrice(context, identity);
@@ -4081,6 +4102,16 @@ export async function refillCompetitorSlot(
     await persistPricingProvenance([newCompetitor], analysisId);
   } catch (e) {
     console.warn("Failed to persist pricing provenance for refilled competitor:", e);
+  }
+
+  // Same report-staleness fix as replaceCompetitor/removeCompetitorSlot
+  // above — the report's copy of this slot is still the empty-slot
+  // placeholder (matched by removed_asin, since the placeholder never had
+  // its own .asin) until synced here.
+  try {
+    await syncReportCompetitorByAsin(analysisId, removedAsin, newCompetitor, "removed_asin");
+  } catch (e) {
+    console.warn("Failed to sync refilled competitor into linked report:", e);
   }
 
   return { ok: true, competitor: newCompetitor, source: result.source, tier, synthesisPossiblyStale };

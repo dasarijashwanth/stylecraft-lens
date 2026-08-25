@@ -36,7 +36,6 @@ import { toast } from "sonner";
 import { downloadTabPDF, downloadReportPDF } from "@/lib/export-pdf";
 import type { ToolTypeRow } from "@/lib/db/tool-types";
 import { SaveToDriveButton } from "@/components/ui/SaveToDriveButton";
-import { ProjectDeckTab } from "@/components/project/ProjectDeckTab";
 import { SourceDocsTab } from "@/components/project/SourceDocsTab";
 import { LinkReportModal } from "@/components/project/LinkReportModal";
 import { GTM_FIELD_SCHEMA, GTM_SECTIONS, GTM_SOURCE_LABELS, visibleGtmSchema, resolveGtmFamily } from "@/lib/gtm-field-schema";
@@ -53,11 +52,11 @@ import { useContactSupport } from "@/components/help/ContactSupportProvider";
 import { getMultiplier, COUNTRY_OPTIONS, PRODUCT_TYPE_OPTIONS, ROYALTY_TYPE_OPTIONS, ROYALTY_PCT_BY_TYPE, TARIFF_EFFECTIVE_NOTE, type Country, type ProductType, type RoyaltyType } from "@/lib/tariff-multipliers";
 import { computePriceStack } from "@/lib/price-stack";
 
-type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "project-deck" | "sources";
+type Tab = "competitive-analysis" | "pricing" | "go-to-market" | "content-form" | "sources";
 // Content Form moved off the flat-JSONB report-driven model onto its own
 // field-granular document (doc_type="content_form", see ContentFormSection)
-// — same "doesn't depend on a linked report" reasoning as project-deck/sources.
-type ReportTab = Exclude<Tab, "project-deck" | "sources" | "content-form">;
+// — same "doesn't depend on a linked report" reasoning as sources.
+type ReportTab = Exclude<Tab, "sources" | "content-form">;
 
 export default function ProjectDetailPage() {
   const router = useRouter();
@@ -408,10 +407,10 @@ export default function ProjectDetailPage() {
           )}
 
           <div className="space-y-4">
-            {/* 5-Tab Navigation — always visible; Project Deck doesn't
-                depend on a linked report */}
+            {/* Tab Navigation — always visible; Sources doesn't depend on a
+                linked report */}
             <div className="flex items-center gap-1 border-b border-border overflow-x-auto cinema-text">
-              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "project-deck", "sources"] as Tab[]).map(tab => (
+              {(["competitive-analysis", "pricing", "go-to-market", "content-form", "sources"] as Tab[]).map(tab => (
                 <button
                   key={tab}
                   className={`px-4 py-2 border-b-2 font-bold text-xs transition-colors whitespace-nowrap ${
@@ -443,8 +442,6 @@ export default function ProjectDetailPage() {
             <div className="bg-surface-2 border border-border rounded-xl p-5 md:p-6 shadow-sm">
               {activeTab === "sources" ? (
                 <SourceDocsTab projectId={id} onSourceUploaded={() => pollFillState.current()} projectReferenceUrls={project?.referenceUrls} onReferenceUrlsChange={(urls: string[]) => setProject((p: any) => (p ? { ...p, referenceUrls: urls } : p))} />
-              ) : activeTab === "project-deck" ? (
-                <ProjectDeckTab projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} />
               ) : activeTab === "content-form" ? (
                 <ContentFormSection projectId={id} pipelineStatus={pipelineState?.status} pipelinePhase={pipelineState?.phase} pipelineErrorMessage={pipelineState?.error_message} fillStatus={fillState?.status} />
               ) : selectedReport ? (
@@ -541,7 +538,6 @@ const TAB_LABELS: Record<Tab, string> = {
   "pricing":              "Pricing",
   "go-to-market":         "Go To Market",
   "content-form":         "Content Form",
-  "project-deck":         "Project Deck",
   "sources":              "Sources",
 };
 
@@ -554,13 +550,11 @@ const TAB_FAQ_CATEGORY: Record<Tab, string> = {
   "pricing":              "Pricing Tab",
   "go-to-market":         "Go To Market Tab",
   "content-form":         "Content Form Tab",
-  "project-deck":         "Project Deck Tab",
   "sources":              "Go To Market Tab",
 };
 
 // ─── Tab Content Container ──────────────────────────────────────────────────
-// Only ever called for the 4 report-driven tabs now — the parent renders
-// Project Deck directly (it doesn't depend on `report`).
+// Only ever called for the 3 report-driven tabs now.
 function ReportTabContent({
   report,
   activeTab,
@@ -2363,8 +2357,8 @@ function ProductKnowledgeSection({
 // ProductKnowledgeSection above (deliberately NOT a report-driven
 // Edit/Save-toggle tab like the old ContentFormTab it replaces — this is a
 // self-contained data-fetch/save component, mounted directly for the
-// "content-form" tab the same way ProjectDeckTab/SourceDocsTab bypass
-// ReportTabContent entirely, since it no longer depends on a linked report).
+// "content-form" tab the same way SourceDocsTab bypasses ReportTabContent
+// entirely, since it no longer depends on a linked report).
 // ────────────────────────────────────────────────────────────────────────────
 const CONTENT_FORM_GROUP_LABELS: Record<string, string> = {
   bullet_top3: "Bullet Points Top 3",
@@ -2484,8 +2478,17 @@ function ContentFormSection({
     }
   }
 
-  const FILL_REMAINING_CONCURRENCY = 3;
-
+  // Content Form's generator only ever runs at full-document granularity
+  // (every field is written together from the same shared prompt, unlike
+  // GTM's per-field grounded specs) — regenerateContentFormField (the old
+  // per-field /regenerate route this used to loop over) re-ran the ENTIRE
+  // 33-field generation and threw away every field's answer except the one
+  // requested. Looping that once per blank field meant N blank fields cost
+  // N full-document OpenAI generations instead of 1 — confirmed as the
+  // single largest avoidable AI-credit waste in the app. refill-from-sources
+  // already does this correctly (one generateContentForm call, writes only
+  // the fields that were actually blank), so reuse it here instead of
+  // reinventing a batched version of the same thing.
   async function handleFillRemaining() {
     if (!documentId || fillingAll) return;
     const pendingIds = CONTENT_FORM_SCHEMA.filter(f => !isFieldComplete(fields[f.id]?.answer)).map(f => f.id);
@@ -2495,31 +2498,19 @@ function ContentFormSection({
     }
     setFillingAll(true);
     setFillProgress({ done: 0, total: pendingIds.length });
-    let filledCount = 0;
-    const queue = [...pendingIds];
-    const worker = async () => {
-      while (queue.length > 0) {
-        const fieldId = queue.shift();
-        if (!fieldId) return;
-        setFieldStatus(prev => ({ ...prev, [fieldId]: "regenerating" }));
-        try {
-          const res = await fetch(`/api/documents/content-form/${documentId}/fields/${fieldId}/regenerate`, { method: "POST" });
-          const data = await res.json();
-          if (res.ok) {
-            setFields(prev => ({ ...prev, [fieldId]: data.field }));
-            if (isFieldComplete(data.field?.answer)) filledCount++;
-          }
-        } catch {
-        } finally {
-          setFieldStatus(prev => ({ ...prev, [fieldId]: "idle" }));
-          setFillProgress(prev => (prev ? { ...prev, done: prev.done + 1 } : prev));
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(FILL_REMAINING_CONCURRENCY, pendingIds.length) }, worker));
-    setFillingAll(false);
-    setFillProgress(null);
-    toast.success(filledCount > 0 ? `Filled ${filledCount} of ${pendingIds.length} remaining field${pendingIds.length === 1 ? "" : "s"}` : "No additional content generated for the remaining fields");
+    try {
+      const res = await fetch(`/api/documents/content-form/${documentId}/refill-from-sources`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to fill remaining fields");
+      await loadDocument();
+      const filledCount = data.regenerated || 0;
+      toast.success(filledCount > 0 ? `Filled ${filledCount} of ${pendingIds.length} remaining field${pendingIds.length === 1 ? "" : "s"}` : "No additional content generated for the remaining fields");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to fill remaining fields");
+    } finally {
+      setFillingAll(false);
+      setFillProgress(null);
+    }
   }
 
   async function handleRevert(fieldId: string) {

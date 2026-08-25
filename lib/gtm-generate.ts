@@ -613,7 +613,7 @@ export async function generateAllFields(productName: string, sources: GtmSources
   // above is never promoted to this terminal state. K=4: AI + web search +
   // Tier 6/6.5 + category default, the 4 tiers every eligible field here
   // actually passed through above.
-  return finalizeFieldAnswers(grounded, pipelineSchema, 4, isPreLaunch ? "pre-launch: no web presence" : undefined);
+  return finalizeFieldAnswers(grounded, pipelineSchema, 4, isPreLaunch ? "pre-launch — add a product URL/ASIN or a Reference Link under Sources to fill this in" : undefined);
 }
 
 // Regenerates exactly one field through the same pipeline.
@@ -667,10 +667,24 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
   const systemInstruction = buildSystemInstruction(productName, [schemaField], voiceBlock, preLaunchRule);
   const userContent = buildUserContent(sourceTexts);
 
-  // A single field needs far less search than the full 77-field sweep —
-  // this route's own maxDuration is 45s, and the web-fallback/quality-guard
-  // passes below still need their share of it.
-  const aiRaw = await callAi(systemInstruction, userContent, { timeoutMs: 30_000, projectId });
+  // Skip the AI call entirely when a grounded (spec) field's deterministic
+  // derivation floor (project record/TDS/sales kit/competitive analysis —
+  // see gtm-derive.ts) already has a real, complete answer. "Fill remaining
+  // fields" loops this once per blank field, and burning a full OpenAI call
+  // just to reconfirm a value already known from the project's own records
+  // was confirmed as needless spend — mergeField (below) already falls back
+  // to `derived` whenever aiRaw has nothing usable, so passing null here
+  // reuses that exact path with zero behavior change for the final answer.
+  // Written (narrative) fields always still need real generation, and a
+  // grounded field with no derived value still gets its normal AI call.
+  //
+  // A single field also needs far less search than the full 77-field sweep
+  // when a real call IS made — this route's own maxDuration is 45s, and the
+  // web-fallback/quality-guard passes below still need their share of it.
+  const skipAiForKnownGroundedValue = schemaField.kind === "grounded" && isRealAnswer(derived[fieldId]?.answer);
+  const aiRaw = skipAiForKnownGroundedValue
+    ? null
+    : await callAi(systemInstruction, userContent, { timeoutMs: 30_000, projectId });
   const { field: mergedField, fromAi } = mergeField(schemaField, aiRaw, derived);
 
   let grounded = fromAi && mergedField.source !== "web"
@@ -723,7 +737,7 @@ export async function generateSingleField(fieldId: string, sources: GtmSources, 
 
   // AI + web search + Tier 6/6.5 + category default — the 4 tiers this
   // single-field regenerate actually ran above.
-  const finalized = finalizeFieldAnswers(guarded, [schemaField], 4, isPreLaunch ? "pre-launch: no web presence" : undefined);
+  const finalized = finalizeFieldAnswers(guarded, [schemaField], 4, isPreLaunch ? "pre-launch — add a product URL/ASIN or a Reference Link under Sources to fill this in" : undefined);
   return finalized[fieldId];
 }
 

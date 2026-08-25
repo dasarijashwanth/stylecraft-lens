@@ -843,3 +843,81 @@ async function saveAnalysisCompetitors(
 
   if (error) console.error("Failed to save analysis competitors:", error);
 }
+
+// Surgically replaces one competitor entry inside every report's
+// competitive_analysis.{large_brand_competitors, indie_emerging_competitors}
+// for a given analysis — called right after lib/analysisEngine.ts's
+// replaceCompetitor()/removeCompetitorSlot()/refillCompetitorSlot() patch
+// the LIVE analyses.phase1_result/phase2_result. Without this, a report
+// created from this analysis (competitive_analysis is a literal copy of
+// phase1/phase2's competitors array at creation time — see
+// buildReportSections above) kept showing the OLD, since-replaced/removed
+// competitor forever, since nothing ever re-synced it — confirmed live user
+// report. Deliberately narrow: only the one matching array entry is
+// swapped, so a user's own free-text edits elsewhere in the report
+// (competitive_analysis is otherwise a frozen, human-editable snapshot by
+// design) are never touched. Returns how many report rows were updated.
+//
+// matchField is "asin" for a replace/remove (the report's existing entry
+// still has a real .asin to match against) and "removed_asin" for a refill
+// (the entry being replaced is an empty-slot placeholder, which never had
+// its own .asin — only the removed_asin it records — see
+// removeCompetitorSlot's placeholder shape).
+export async function syncReportCompetitorByAsin(
+  analysisId: string,
+  matchValue: string,
+  newCompetitor: any,
+  matchField: "asin" | "removed_asin" = "asin"
+): Promise<number> {
+  function patchCompetitiveAnalysis(ca: any): { next: any; changed: boolean } {
+    const source = ca && typeof ca === "object" ? ca : {};
+    let changed = false;
+    const patchArray = (arr: any) => {
+      if (!Array.isArray(arr)) return arr;
+      return arr.map((c: any) => {
+        if (c?.[matchField] === matchValue) { changed = true; return newCompetitor; }
+        return c;
+      });
+    };
+    const next = {
+      ...source,
+      large_brand_competitors: patchArray(source.large_brand_competitors),
+      indie_emerging_competitors: patchArray(source.indie_emerging_competitors),
+    };
+    return { next, changed };
+  }
+
+  if (isSupabaseConfigured) {
+    const { data: reports, error } = await supabaseAdmin
+      .from("reports")
+      .select("id, competitive_analysis")
+      .eq("analysis_id", analysisId);
+    if (error) throw error;
+    if (!reports || reports.length === 0) return 0;
+
+    let updatedCount = 0;
+    for (const report of reports) {
+      const { next, changed } = patchCompetitiveAnalysis(report.competitive_analysis);
+      if (!changed) continue;
+      const { error: updateError } = await supabaseAdmin
+        .from("reports")
+        .update({ competitive_analysis: next })
+        .eq("id", report.id);
+      if (updateError) throw updateError;
+      updatedCount++;
+    }
+    return updatedCount;
+  }
+
+  // memoryDb fallback (local dev without Supabase credentials configured).
+  let updatedCount = 0;
+  for (const report of memoryDb.reports) {
+    if (report.analysisId !== analysisId) continue;
+    const { next, changed } = patchCompetitiveAnalysis(report.competitive_analysis);
+    if (!changed) continue;
+    report.competitive_analysis = next;
+    report.updatedAt = new Date();
+    updatedCount++;
+  }
+  return updatedCount;
+}
