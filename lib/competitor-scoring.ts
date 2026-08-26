@@ -195,6 +195,32 @@ export function computeCompositeScore(motorScore: number, priceScore: number, fe
   return w.motor * motorScore + w.price * priceScore + w.feature * featureScore;
 }
 
+// A "none"-primary-criterion tool type (lib/tool-type-taxonomy.ts's
+// resolvePrimaryCriterion — a category with no motor or heat/plate
+// technology to speak of) structurally never produces a real motor/
+// heat-tech score: motor_score/heat_tech_score are never computed for its
+// candidates, so criterionScore is always 0 no matter how good a match one
+// actually is. Applying ANY nonzero motor weight to such a tool type isn't
+// just an unlucky config choice — it silently caps every candidate's
+// maximum possible composite score at whatever share price+feature hold,
+// which can crush a genuinely well-matched real candidate below whatever
+// minimum-score gate exists elsewhere in the selection pipeline. Confirmed
+// live: an 83-query search that found real candidates for a brand-new
+// "none"-criterion tool type still selected ZERO of them, because the
+// tool-type-less global default scoring profile happened to be heavily
+// motor-weighted (90%) — a profile that's perfectly reasonable for a
+// motor-based type, but silently fatal for a 'none'-criterion one.
+// Call this right after resolving weights (admin-configured or a
+// per-analysis override) at every scoring call site, so a misconfigured
+// profile — past, present, or future — can never structurally break a
+// 'none'-criterion tool type's discovery. normalizeWeights (inside
+// computeCompositeScore) already re-normalizes proportionally once motor
+// is zeroed here, so price/feature don't need manual redistribution.
+export function resolveEffectiveWeights(weights: MatchingWeights, primaryCriterion: "motor" | "heat_technology" | "none"): MatchingWeights {
+  if (primaryCriterion !== "none" || weights.motor === 0) return weights;
+  return { ...weights, motor: 0 };
+}
+
 // "Fill in priority order, max 1 product per brand until every listed
 // brand has had a chance" (legacy only) — assumes `candidates` is already
 // sorted by descending composite score. Keeps the highest-scoring

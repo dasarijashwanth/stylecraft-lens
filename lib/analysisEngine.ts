@@ -41,7 +41,7 @@ import { computeHeatTechMatchTier } from "./heat-tech-taxonomy";
 import { extractCompetitorHeatTech, resolveOurHeatTech, type OurHeatTechResolution } from "./heat-tech-extraction";
 import {
   computeMotorScore, computePriceScoreAbsolute, computePriceScoreRelative, computeFeatureScore,
-  computeCompositeScore, dedupeToOnePerBrand, computeRelatedProductSimilarity, type MatchingWeights, type RelatedProductProfile,
+  computeCompositeScore, dedupeToOnePerBrand, computeRelatedProductSimilarity, resolveEffectiveWeights, type MatchingWeights, type RelatedProductProfile,
 } from "./competitor-scoring";
 import { buildIndieBrandLineups, computePercentileInLineup, type LineupProduct } from "./indie-brand-lineup";
 import { discoverBrandSiteCandidatesForEmerging } from "./brand-site-discovery";
@@ -2236,7 +2236,9 @@ async function resolvePhase2Context(context: AnalysisContext, identityCard: Iden
   // A per-analysis override (set on the analyze/new-project forms' "Adjust
   // weights for this analysis" expander) always wins over the resolved
   // per-tool-type profile — never module-level state, resolved fresh here.
-  const weights = context.weightOverride ?? await getScoringProfileForToolType(identityCard.toolType);
+  // resolveEffectiveWeights zeroes the motor share for a 'none'-criterion
+  // tool type regardless of what's configured — see its own header comment.
+  const weights = resolveEffectiveWeights(context.weightOverride ?? await getScoringProfileForToolType(identityCard.toolType), primaryCriterion);
   const ourSpecs = context.projectId
     ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
     : extractOurSpecsFromTds(null);
@@ -2565,7 +2567,9 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       const ourMotorLabel = primaryCriterion === "heat_technology" ? (ourHeatTech?.label ?? null) : formatMotorLabel(ourMotor);
       // A per-analysis override always wins over the resolved per-tool-type
       // profile — never module-level state, resolved fresh here.
-      const weights = context.weightOverride ?? await getScoringProfileForToolType(identityCard.toolType);
+      // resolveEffectiveWeights zeroes the motor share for a 'none'-criterion
+      // tool type regardless of what's configured — see its own header comment.
+      const weights = resolveEffectiveWeights(context.weightOverride ?? await getScoringProfileForToolType(identityCard.toolType), primaryCriterion);
       const ourSpecs = context.projectId
         ? extractOurSpecsFromTds(await getTdsFieldsForProject(context.projectId))
         : extractOurSpecsFromTds(null);
@@ -3545,7 +3549,7 @@ export async function replaceCompetitor(
   const candidateText = [newCompetitor.name, ...(Array.isArray(newCompetitor.feature_bullets) ? newCompetitor.feature_bullets : []), newCompetitor.description || ""].filter(Boolean).join(" ");
   const differentiatorMatch = context.keyDiff ? matchesDifferentiator(context.keyDiff, candidateText) : null;
   const featureScore = computeFeatureScore(ourSpecs, theirSpecs, differentiatorMatch);
-  const weights = context.weightOverride ?? await getScoringProfileForToolType(identity.toolType);
+  const weights = resolveEffectiveWeights(context.weightOverride ?? await getScoringProfileForToolType(identity.toolType), primaryCriterion);
   const criterionScore = newCompetitor.motor_score ?? newCompetitor.heat_tech_score ?? 0;
 
   // Recomputed honestly rather than assumed false — a human-corrected pick
