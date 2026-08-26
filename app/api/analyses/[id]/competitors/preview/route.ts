@@ -57,7 +57,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       const toolTypes = await listToolTypes();
       if (!assertToolType(product.title, requiredToolType, toolTypes).ok) {
         const resolved = resolveToolType(product.title, toolTypes);
-        const guessedLabel = resolved?.type ? (toolTypes.find(t => t.type_key === resolved.type)?.label || resolved.type) : "a different tool type";
+        const guessedLabel = resolved?.type ? (toolTypes.find(t => t.type_key === resolved.type)?.label || resolved.type) : "different tool type";
         const requiredLabel = toolTypes.find(t => t.type_key === requiredToolType)?.label || requiredToolType;
         toolTypeMismatchWarning = `This looks like a ${guessedLabel} — your analysis is for ${requiredLabel}s. Replace anyway?`;
       }

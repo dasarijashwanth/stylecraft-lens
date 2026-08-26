@@ -82,7 +82,7 @@ export async function POST(request: Request) {
       const toolTypes = await listToolTypes();
       if (!assertToolType(product.title, validation.data.requiredToolType, toolTypes).ok) {
         const resolved = resolveToolType(product.title, toolTypes);
-        const guessedLabel = resolved?.type ? (toolTypes.find(t => t.type_key === resolved.type)?.label || resolved.type) : "a different tool type";
+        const guessedLabel = resolved?.type ? (toolTypes.find(t => t.type_key === resolved.type)?.label || resolved.type) : "different tool type";
         const requiredLabel = getToolTypeLabel(validation.data.requiredToolType, toolTypes);
         toolTypeMismatchWarning = `This looks like a ${guessedLabel} — your analysis is for ${requiredLabel}s. It'll still be shown in the Related Products section, but won't be eligible to become one of the discovered competitors.`;
       }
