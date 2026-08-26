@@ -2442,7 +2442,7 @@ export async function runAnalysisStep(analysisId: string): Promise<AnalysisStepR
       // ----------------------------------------------------
       // PHASE 0: PRODUCT IDENTIFICATION (mandatory, runs before any competitor search)
       // ----------------------------------------------------
-      const card = await identifyProduct(context);
+      const card = await identifyProduct(context, startTime);
 
       if (needsUserInput(card, context)) {
         await updateAnalysisPhase(analysisId, 0, "phase0_result", card, 0);

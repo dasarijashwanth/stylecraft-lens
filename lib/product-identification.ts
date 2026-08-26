@@ -15,6 +15,33 @@ import { ToolType, resolveToolType } from "./tool-type-taxonomy";
 import { listToolTypes } from "./db/tool-types";
 import type { ToolTypeRow } from "./db/tool-types";
 
+// Real bug, confirmed live: this file's only AI call chain (identifyProduct
+// below) had NO shared time-budget protection — unlike every other phase in
+// lib/analysisEngine.ts (its own ROUTE_TIME_BUDGET_MS/withAiFallback), which
+// already had this exact class of bug found and fixed. Worst case here: the
+// OpenAI leg's own internal retry-on-timeout logic (lib/openai.ts's
+// createResponseWithRetry) can itself take ~30s (initial timeout) + 2s
+// (retry delay) + 10s (short retry) ≈ 42s before returning null, and the
+// Gemini fallback that runs AFTER that had no timeout of its own at all —
+// a grounded (googleSearch) Gemini call commonly takes 15-40s+ on its own.
+// Summed, that's 57-82s — past Vercel's 60s hard kill, which terminates the
+// function with NO response ever sent (not a catchable JS error), and
+// because product identification for a given input is deterministic, this
+// failed on every single attempt/retry rather than intermittently — exactly
+// the "connection dropped, every time" symptom this was root-caused from.
+//
+// withDeadline/ROUTE_TIME_BUDGET_MS/MIN_VIABLE_GEMINI_ATTEMPT_MS are
+// deliberately duplicated here (not imported from lib/analysisEngine.ts,
+// which already has the real versions) rather than shared, since
+// analysisEngine.ts imports FROM this file (identifyProduct itself,
+// directly above) — importing back would be a circular module dependency.
+async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  const timeout = new Promise<T>(resolve => setTimeout(() => resolve(fallback), Math.max(0, ms)));
+  return Promise.race([promise, timeout]);
+}
+const ROUTE_TIME_BUDGET_MS = 50_000;
+const MIN_VIABLE_GEMINI_ATTEMPT_MS = 10_000;
+
 export type IdentityStatus = "verified" | "custom_unreleased" | "ambiguous";
 
 export interface IdentityCard {
@@ -168,7 +195,7 @@ function fallbackIdentity(context: AnalysisContext, toolTypes: ToolTypeRow[]): I
   };
 }
 
-export async function identifyProduct(context: AnalysisContext): Promise<IdentityCard> {
+export async function identifyProduct(context: AnalysisContext, routeStartTime: number = Date.now()): Promise<IdentityCard> {
   // Fetched once here (identifyProduct's own natural async boundary) and
   // threaded down to every resolveIdentityToolType call site below — never
   // module-level state (see lib/tool-type-taxonomy.ts's header for why).
@@ -205,17 +232,34 @@ export async function identifyProduct(context: AnalysisContext): Promise<Identit
   }
 
   if (hasGeminiKey) {
-    try {
-      const response = await genAI.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: userPrompt,
-        config: { systemInstruction: SYSTEM_PROMPT, tools: [{ googleSearch: {} }], maxOutputTokens: 2048 },
-      });
-      if (!response.text) throw new Error(`Empty identification response (finishReason: ${response.candidates?.[0]?.finishReason})`);
-      const card = JSON.parse(cleanJsonString(response.text));
-      return normalizeIdentityCard(card, context, toolTypes);
-    } catch (err) {
-      console.warn("Gemini product identification failed, falling back to context-derived identity:", err);
+    const remainingMs = ROUTE_TIME_BUDGET_MS - (Date.now() - routeStartTime);
+    if (remainingMs < MIN_VIABLE_GEMINI_ATTEMPT_MS) {
+      console.warn(`Skipping Gemini identification fallback — only ${Math.round(remainingMs / 1000)}s left in the route's time budget, falling back to context-derived identity instead.`);
+    } else {
+      try {
+        // Hard-capped to whatever's actually left of the budget (never the
+        // call's own unbounded natural duration) — see this file's own
+        // header comment above for why an unbounded call here is exactly
+        // what caused the deterministic "connection dropped, every time" bug.
+        const response = await withDeadline(
+          genAI.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: userPrompt,
+            config: { systemInstruction: SYSTEM_PROMPT, tools: [{ googleSearch: {} }], maxOutputTokens: 2048 },
+          }),
+          remainingMs,
+          null
+        );
+        if (!response) {
+          console.warn("Gemini product identification timed out against the route's remaining time budget.");
+        } else {
+          if (!response.text) throw new Error(`Empty identification response (finishReason: ${response.candidates?.[0]?.finishReason})`);
+          const card = JSON.parse(cleanJsonString(response.text));
+          return normalizeIdentityCard(card, context, toolTypes);
+        }
+      } catch (err) {
+        console.warn("Gemini product identification failed, falling back to context-derived identity:", err);
+      }
     }
   }
 
